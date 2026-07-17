@@ -4,7 +4,7 @@
 // deliberate departure from the app's strict monochrome (see home/home.css).
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import {
-  ArrowLeftRight, ArrowRight, BookOpen, Factory, FolderKanban, Globe, KeyRound, Layers3, Link2, Plus, Rocket,
+  ArrowLeftRight, ArrowRight, Factory, FolderKanban, Globe, KeyRound, Layers3, Link2, Plus, Rocket,
   TerminalSquare, WandSparkles,
 } from 'lucide-react';
 import './factory/theme.css';
@@ -134,8 +134,8 @@ function IntroOverlay({ onDone }: { onDone: () => void }) {
 
 /* ————————————————————————— Main column ————————————————————————— */
 
-function HomeTopBar({ onNavigate, workspaceName, onSwitchWorkspace }: {
-  onNavigate: (view: HomeTarget) => void; workspaceName: string | null; onSwitchWorkspace: () => void;
+function HomeTopBar({ workspaceName, onSwitchWorkspace }: {
+  workspaceName: string | null; onSwitchWorkspace: () => void;
 }) {
   // Theme toggle lives once in the app shell topbar (consistent across every page) — not here.
   return (
@@ -155,13 +155,9 @@ function HomeTopBar({ onNavigate, workspaceName, onSwitchWorkspace }: {
             <ArrowLeftRight className="size-3 shrink-0 text-muted-foreground" aria-hidden />
           </button>
         )}
-        <button
-          type="button" onClick={() => onNavigate('settings')}
-          className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3.5 py-1.5 text-[12px] font-bold text-foreground shadow-sm transition-colors hover:border-brand-blue/50"
-          title="API & MCP access"
-        >
-          <BookOpen className="size-3.5" /> Docs
-        </button>
+        {/* The old "Docs" button here silently opened Connections — dishonest labeling.
+            Removed rather than relabeled: Connections is already reachable from the
+            feature grid card and Quick actions, and there is no docs surface to open. */}
         <span className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-success shadow-sm">
           Live <span className="pulse-dot relative inline-flex size-1.5 rounded-full bg-success" aria-hidden />
         </span>
@@ -776,7 +772,6 @@ export default function HomeScreen({ onNavigate, workspaceName, onSwitchWorkspac
             {/* MAIN COLUMN */}
             <div className="flex min-w-0 flex-col gap-6">
               <HomeTopBar
-                onNavigate={onNavigate}
                 workspaceName={workspace.name ?? workspaceName ?? null}
                 // The real switch-workspace flow when the shell wired it up; Connections otherwise.
                 onSwitchWorkspace={onSwitchWorkspace ?? (() => onNavigate('settings'))}

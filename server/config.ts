@@ -58,6 +58,10 @@ function encryptionKey(): Buffer {
 export const config = {
   production,
   port: Number(value('PORT', '8787')),
+  // Bind address. Defaults to loopback so the API (incl. factory/terminal/browser operator
+  // routes) is never exposed to the LAN by accident. Set HOST=0.0.0.0 (or a specific
+  // interface) only when you deliberately want network access, e.g. behind a reverse proxy.
+  host: value('HOST', '127.0.0.1'),
   appUrl: value('APP_URL', 'http://localhost:8787').replace(/\/$/, ''),
   databaseUrl: value('DATABASE_URL'),
   shopify: {

@@ -9,7 +9,7 @@ import path from 'node:path';
 import {
   loadPlaywright, settle, gotoRoute, dismissOverlays, segmentSections,
   alignSections, diceSimilarity, textDiffSamples, sectionTitle,
-  discoverRoutes, computeShopifyPath, loadHandles, shopifyState, withPreview,
+  discoverRoutes, computeShopifyPath, isCatalogPath, loadHandles, shopifyState, withPreview,
   writeJsonReport, writeMdReport, screenshotDir, handlePassword,
 } from './qa-shared.mjs';
 
@@ -59,10 +59,19 @@ for (const route of routes) {
     const shopifyNav = await shopifyPage.goto(shopifyUrl, { waitUntil: 'domcontentloaded', timeout: 45_000 }).catch(() => null);
     await handlePassword(shopifyPage);
     if (!shopifyNav || shopifyNav.status() === 404) {
-      // Missing page: every React section on it counts as missing (penalizes presence).
-      pageResult.status = 'missing_page';
-      pageResult.missing = reactSections.length;
-      issues.push({ id: issueId(), kind: 'missing_page', page: route, title: `Shopify page ${shopifyPath} does not exist (HTTP ${shopifyNav?.status() ?? 'n/a'})`, detail: `React route ${route} (${reactSections.length} sections) has no working Shopify counterpart at ${shopifyPath}.` });
+      if (isCatalogPath(shopifyPath)) {
+        // Catalog route with no backing product/collection: the theme can't fix this — the
+        // catalog was never seeded. Classified separately and EXCLUDED from the presence
+        // denominator (like 'unreachable') so it's reported loudly instead of poisoning the score.
+        pageResult.status = 'catalog_unseeded';
+        pageResult.reason = `HTTP ${shopifyNav?.status() ?? 'n/a'} — product/collection not seeded`;
+        issues.push({ id: issueId(), kind: 'catalog_unseeded', page: route, title: `Catalog route ${shopifyPath} does not exist on the store (HTTP ${shopifyNav?.status() ?? 'n/a'})`, detail: `The product/collection behind React route ${route} does not exist on the store — seed the catalog (productCreate/collectionCreate + publish to the Online Store channel) and record the mapping in qa/state/handles.json. This route is excluded from the presence score until seeded.` });
+      } else {
+        // Missing page: every React section on it counts as missing (penalizes presence).
+        pageResult.status = 'missing_page';
+        pageResult.missing = reactSections.length;
+        issues.push({ id: issueId(), kind: 'missing_page', page: route, title: `Shopify page ${shopifyPath} does not exist (HTTP ${shopifyNav?.status() ?? 'n/a'})`, detail: `React route ${route} (${reactSections.length} sections) has no working Shopify counterpart at ${shopifyPath}.` });
+      }
       pages.push(pageResult); await context.close(); continue;
     }
     await dismissOverlays(shopifyPage);
@@ -91,8 +100,11 @@ for (const route of routes) {
       const reactSection = reactSections[pair.a];
       const shopifySection = shopifySections[pair.b];
       const textScore = diceSimilarity(reactSection.text, shopifySection.text);
-      pairTextScores.push(textScore);
-      const entry = { react: sectionTitle(reactSection), order: [pair.a, pair.b], textScore: Number(textScore.toFixed(3)), structureMatch: reactSection.shapeHash === shopifySection.shapeHash };
+      const structureMatch = reactSection.shapeHash === shopifySection.shapeHash;
+      // Per-pair score folds in a modest structure component: 0.8*text + 0.2*(structure ? 1 : 0).
+      // A perfect text match with divergent DOM shape scores 0.96 — near-perfect clones still pass.
+      pairTextScores.push(0.8 * textScore + 0.2 * (structureMatch ? 1 : 0));
+      const entry = { react: sectionTitle(reactSection), order: [pair.a, pair.b], textScore: Number(textScore.toFixed(3)), structureMatch };
       perSection.push(entry);
       if (textScore < TEXT_DRIFT_THRESHOLD) {
         const samples = textDiffSamples(reactSection, shopifySection);
@@ -131,20 +143,29 @@ for (const route of routes) {
 await browser.close();
 
 // Score only over reachable routes (ok = compared, missing_page = counts as all-missing).
-// 'unreachable'/'skipped' routes are excluded from the denominator so a flaky React load
-// doesn't tank the score while the report separately lists them as excluded.
+// 'unreachable'/'skipped'/'catalog_unseeded' routes are excluded from the denominator so a flaky
+// React load or an unseeded catalog doesn't tank the score while the report lists them loudly.
 const scored = pages.filter((page) => page.status === 'ok' || page.status === 'missing_page');
+const unseeded = pages.filter((page) => page.status === 'catalog_unseeded');
 const totalReactSections = scored.reduce((sum, page) => sum + (page.reactSections || 0), 0);
 const totalMatched = scored.reduce((sum, page) => sum + (page.matched || 0), 0);
 const presence = totalReactSections ? totalMatched / totalReactSections : 0;
 const text = pairTextScores.length ? pairTextScores.reduce((sum, score) => sum + score, 0) / pairTextScores.length : 0;
 
-writeJsonReport(`sections-${ITER}.json`, { presence: Number(presence.toFixed(4)), text: Number(text.toFixed(4)), pages, issues });
+writeJsonReport(`sections-${ITER}.json`, { presence: Number(presence.toFixed(4)), text: Number(text.toFixed(4)), catalogUnseeded: unseeded.map((page) => page.route), pages, issues });
 
 const md = [
   `# Section comparison — iteration ${ITER}`,
   '',
   `React (truth): ${REACT_BASE}`, `Shopify (clone): ${SHOPIFY_BASE}`, '',
+  `> Scoring note: the text subscore blends per-section text similarity with DOM structure:`,
+  `> pairScore = 0.8 x textScore + 0.2 x (structureMatch ? 1 : 0). The per-section \`textScore\``,
+  `> column below stays pure text similarity; \`structureMatch\` shows the structure signal.`, '',
+  ...(unseeded.length ? [
+    `> **WARNING — CATALOG NOT SEEDED:** ${unseeded.length} catalog route(s) 404 on Shopify and are`,
+    `> EXCLUDED from the presence score: ${unseeded.map((page) => page.route).join(', ')}.`,
+    `> Seed the products/collections (productCreate/collectionCreate + publish) and re-run QA.`, '',
+  ] : []),
   `**Section presence: ${(presence * 100).toFixed(1)}%** (${totalMatched}/${totalReactSections}) · **Text match: ${(text * 100).toFixed(1)}%**`, '',
   '| Route | Status | Sections (R) | Matched | Missing | Extra | Text |',
   '|---|---|---|---|---|---|---|',

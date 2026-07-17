@@ -231,6 +231,13 @@ export async function scaffoldWorkspace(input: ScaffoldInput) {
     if (!(await exists(destination))) await cp(path.join(TEMPLATES_ROOT, source), destination);
   }
 
+  // qa/snapshot.mjs — keep-BEST save/restore contract used by convergence.ts
+  // (`node qa/snapshot.mjs save|restore <iter>`). Factory-owned, so ALWAYS refreshed
+  // (unlike the six use-as-is scaffold files above); tolerated as missing so scaffolding
+  // keeps working until the workspace template ships it.
+  const snapshotTemplate = path.join(TEMPLATES_ROOT, 'workspace/qa/snapshot.mjs');
+  if (await exists(snapshotTemplate)) await cp(snapshotTemplate, path.join(root, 'qa/snapshot.mjs'));
+
   const conventions = (await readFile(path.join(TEMPLATES_ROOT, 'workspace/seed/CONVENTIONS.md'), 'utf8'))
     .replaceAll('{{NAME}}', job.name).replaceAll('{{PREFIX}}', job.prefix);
   const conventionsPath = path.join(root, 'seed/CONVENTIONS.md');

@@ -1,11 +1,12 @@
-import { access, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { access, appendFile, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from '../config';
 import { db, type FactoryJobRecord } from '../db';
 import { decrypt } from '../security';
 import { runQa } from './qa';
-import { clearSignalFiles, cloneBlockerSignals, spawnClone, spawnFix, type RunHandle } from './runner';
+import { buildSpawnEnv, clearSignalFiles, cloneBlockerSignals, spawnClone, spawnFix, type RunHandle } from './runner';
 import { trustWorkspace } from './scaffolder';
 import { getFactorySettings } from './settings';
 import type { FactorySettings } from './types';
@@ -61,10 +62,71 @@ async function publishDevThemeToLive(job: FactoryJobRecord): Promise<{ ok: boole
 /** Runs the guarded live swap when autoswap is on; returns a suffix for the converged status_detail. */
 async function autoswapSuffix(job: FactoryJobRecord): Promise<string> {
   if (!job.autoswap) return '';
+  // HARD GUARD: never publish an unverified clone. Intake (routes POST /jobs) rejects
+  // autoswap without auto-QA, but a legacy or hand-edited job row could still carry the
+  // combination — refuse here too so no code path can swap an un-QA'd clone to live.
+  if (!job.auto_qa) return ' · autoswap SKIPPED: auto-QA is off, so this clone is unverified and will not be published live.';
   const result = await publishDevThemeToLive(job);
   return result.ok
     ? ` · Published to live (${result.detail}).`
     : ` · WARNING: autoswap to live FAILED — clone left on the dev theme (${result.detail}).`;
+}
+
+// --- Keep-BEST iteration (snapshot/restore of the dev theme across the QA<->fix loop) ---
+
+const SNAPSHOT_TIMEOUT_MS = 10 * 60_000;
+/** Restore the best iteration only when the final score fell below it by MORE than this. */
+const BEST_RESTORE_EPSILON = 0.005;
+
+/** Kill a snapshot node process and any children (plain kill orphans them on Windows). */
+function killSnapshotTree(child: ReturnType<typeof spawn>) {
+  if (child.pid == null || child.exitCode !== null) return;
+  if (process.platform === 'win32') spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { shell: false, windowsHide: true, env: buildSpawnEnv() });
+  else child.kill('SIGKILL');
+}
+
+/**
+ * Run `node qa/snapshot.mjs <save|restore> <iter>` in the workspace (contract:
+ * templates/factory/workspace/qa/snapshot.mjs — save captures the dev theme's installable
+ * files to qa/state/theme-snapshots/iter-<n>/, restore pushes that snapshot back to the dev
+ * theme). Bounded, output appended to the iteration log; failure is NON-FATAL — a missed
+ * snapshot must never break the convergence loop — but always logged.
+ */
+async function runSnapshot(job: FactoryJobRecord, action: 'save' | 'restore', iteration: number, logPath: string): Promise<{ ok: boolean; detail: string }> {
+  const log = (text: string) => appendFile(logPath, text).catch(() => {});
+  const script = path.join(job.workspace_path, 'qa', 'snapshot.mjs');
+  if (!(await fileExists(script))) {
+    const detail = 'qa/snapshot.mjs not found in workspace';
+    await log(`[factory ${new Date().toISOString()}] snapshot ${action} ${iteration} skipped: ${detail}\n`);
+    return { ok: false, detail };
+  }
+  await log(`[factory ${new Date().toISOString()}] snapshot ${action} ${iteration}\n`);
+  return new Promise((resolve) => {
+    const finish = (ok: boolean, detail: string) => { void log(`[factory ${new Date().toISOString()}] snapshot ${action} ${iteration}: ${ok ? 'ok' : `FAILED — ${detail}`}\n`); resolve({ ok, detail }); };
+    let child: ReturnType<typeof spawn>;
+    try { child = spawn(process.execPath, [script, action, String(iteration)], { cwd: job.workspace_path, shell: false, windowsHide: true, env: buildSpawnEnv() }); }
+    catch (error) { finish(false, error instanceof Error ? error.message : 'spawn failed'); return; }
+    let settled = false;
+    const once = (ok: boolean, detail: string) => { if (!settled) { settled = true; clearTimeout(timer); finish(ok, detail); } };
+    const timer = setTimeout(() => { killSnapshotTree(child); once(false, `timed out after ${SNAPSHOT_TIMEOUT_MS / 60_000}m`); }, SNAPSHOT_TIMEOUT_MS);
+    child.stdout?.on('data', (chunk: Buffer) => void log(chunk.toString('utf8')));
+    child.stderr?.on('data', (chunk: Buffer) => void log(chunk.toString('utf8')));
+    child.on('error', (error) => once(false, error.message));
+    child.on('exit', (code) => once(code === 0, `exited ${code ?? 'n/a'}`));
+  });
+}
+
+/**
+ * When a loop stops without converging and an earlier iteration scored meaningfully better
+ * than the final one, push that iteration's theme snapshot back to the dev theme so the job
+ * ends on its BEST state, not its last. Returns a status_detail suffix describing what happened.
+ */
+async function maybeRestoreBest(job: FactoryJobRecord, best: { iteration: number; score: number } | null, finalScore: number, finalIteration: number, logPath: string): Promise<string> {
+  if (!best || best.iteration === finalIteration || best.score - finalScore <= BEST_RESTORE_EPSILON) return '';
+  const result = await runSnapshot(job, 'restore', best.iteration, logPath);
+  return result.ok
+    ? ` · restored best iteration ${best.iteration} (score ${(best.score * 100).toFixed(1)}%) over final (score ${(finalScore * 100).toFixed(1)}%)`
+    : ` · WARNING: best iteration ${best.iteration} scored ${(best.score * 100).toFixed(1)}% but its snapshot could not be restored (${result.detail}) — dev theme left on the final state`;
 }
 
 /**
@@ -74,7 +136,7 @@ async function autoswapSuffix(job: FactoryJobRecord): Promise<string> {
  * keep window. The floor of 2 guarantees the previous iteration survives — runQa reads iter-1 for
  * its "fixed since last iteration" delta.
  */
-async function pruneIterationArtifacts(job: FactoryJobRecord, keep: number, currentIteration: number) {
+async function pruneIterationArtifacts(job: FactoryJobRecord, keep: number, currentIteration: number, preserveSnapshotIteration: number | null = null) {
   const cutoff = currentIteration - Math.max(2, keep);
   if (cutoff < 1) return;
   const root = job.workspace_path;
@@ -82,6 +144,9 @@ async function pruneIterationArtifacts(job: FactoryJobRecord, keep: number, curr
   const logs = path.join(root, 'factory', 'logs');
   const targets: string[] = [];
   for (let n = 1; n <= cutoff; n++) {
+    // Theme snapshots ride the same window, EXCEPT the best iteration's — it must survive
+    // until the loop ends so keep-BEST restore can push it back to the dev theme.
+    if (n !== preserveSnapshotIteration) targets.push(path.join(root, 'qa', 'state', 'theme-snapshots', `iter-${n}`));
     targets.push(
       path.join(root, 'qa', 'screenshots', 'factory', String(n)),
       path.join(factoryReports, `qa-summary-${n}.md`),
@@ -233,6 +298,10 @@ export async function driveJob(jobId: string, control: DriveControl) {
 async function runConvergenceLoop(job: FactoryJobRecord, settings: FactorySettings, control: DriveControl) {
   const history = [...job.score_history];
   let regressionStreak = 0;
+  // Keep-BEST: track the best-scoring iteration across the loop (seeded from persisted
+  // history so resumed jobs keep their earlier best) — restored on a non-converged stop.
+  let best: { iteration: number; score: number } | null = null;
+  for (const entry of history) if (!best || entry.score > best.score) best = { iteration: entry.iter, score: entry.score };
 
   const startIteration = (await lastCompletedQaIteration(job)) + 1;
   // Retrying an already-exhausted job (all iterations used) would skip the loop entirely
@@ -271,9 +340,20 @@ async function runConvergenceLoop(job: FactoryJobRecord, settings: FactorySettin
     const scored = await db.updateFactoryJob(job.id, { last_score: qa.score, score_history: history });
     if (scored) await db.syncCloneProjectFromJob(scored).catch(() => {}); // mirror the fresh score immediately
 
+    const qaLogPath = path.join(job.workspace_path, 'factory', 'logs', `qa-${iteration}.log`);
 
-    // Bound disk growth: drop artifacts for iterations older than the keep window.
-    await pruneIterationArtifacts(job, settings.keepIterations, iteration);
+    // Keep-BEST bookkeeping: record every improvement. best_iteration/best_score are
+    // nullable columns added alongside this feature — a missing column (older DB) must
+    // never break the loop, hence the try/catch.
+    if (!best || qa.score > best.score) {
+      best = { iteration, score: qa.score };
+      // Cast via unknown so this compiles whether or not the record type has the new fields yet.
+      try { await db.updateFactoryJob(job.id, { best_iteration: iteration, best_score: qa.score } as unknown as Partial<FactoryJobRecord>); } catch { /* column may not exist yet */ }
+    }
+
+    // Bound disk growth: drop artifacts for iterations older than the keep window
+    // (preserving the best iteration's theme snapshot for a potential restore).
+    await pruneIterationArtifacts(job, settings.keepIterations, iteration, best?.iteration ?? null);
 
     // b) Exit conditions
     if (qa.score >= job.score_threshold) {
@@ -282,20 +362,27 @@ async function runConvergenceLoop(job: FactoryJobRecord, settings: FactorySettin
       return;
     }
     if (regressionStreak >= 2) {
-      await transition(job.id, 'exhausted', `Stopped: two consecutive score regressions (now ${(qa.score * 100).toFixed(1)}%) — manual review needed. Report: ${qa.summaryPath}`, { finished_at: new Date().toISOString() });
+      const restoreNote = await maybeRestoreBest(job, best, qa.score, iteration, qaLogPath);
+      await transition(job.id, 'exhausted', `Stopped: two consecutive score regressions (now ${(qa.score * 100).toFixed(1)}%) — manual review needed. Report: ${qa.summaryPath}${restoreNote}`, { finished_at: new Date().toISOString() });
       return;
     }
     if (settings.earlyStopOnNoProgress && history.length >= 3) {
       const [a, b, c] = history.slice(-3).map((entry) => entry.score);
       if (Math.abs(c - b) < settings.noProgressEpsilon && Math.abs(b - a) < settings.noProgressEpsilon) {
-        await transition(job.id, 'exhausted', `Stopped: score stalled at ${(qa.score * 100).toFixed(1)}% for two iterations. Report: ${qa.summaryPath}`, { finished_at: new Date().toISOString() });
+        const restoreNote = await maybeRestoreBest(job, best, qa.score, iteration, qaLogPath);
+        await transition(job.id, 'exhausted', `Stopped: score stalled at ${(qa.score * 100).toFixed(1)}% for two iterations. Report: ${qa.summaryPath}${restoreNote}`, { finished_at: new Date().toISOString() });
         return;
       }
     }
     if (iteration === job.max_iterations) {
-      await transition(job.id, 'exhausted', `Iterations exhausted at ${(qa.score * 100).toFixed(1)}% (< ${(job.score_threshold * 100).toFixed(0)}%). Report: ${qa.summaryPath}`, { finished_at: new Date().toISOString() });
+      const restoreNote = await maybeRestoreBest(job, best, qa.score, iteration, qaLogPath);
+      await transition(job.id, 'exhausted', `Iterations exhausted at ${(qa.score * 100).toFixed(1)}% (< ${(job.score_threshold * 100).toFixed(0)}%). Report: ${qa.summaryPath}${restoreNote}`, { finished_at: new Date().toISOString() });
       return;
     }
+
+    // Snapshot the scored dev-theme state BEFORE the fix session mutates it, so a later
+    // keep-BEST restore can bring this exact state back. Non-fatal on failure (logged).
+    await runSnapshot(job, 'save', iteration, qaLogPath);
 
     // c) Fix session
     await transition(job.id, 'fixing', `Iteration ${iteration}/${job.max_iterations} — fixing ${qa.issueCount} issue(s)`);

@@ -1,8 +1,8 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { CheckCircle2, Cpu, FolderCog, RefreshCw, Save, ScanSearch, ShieldCheck, TimerReset, TriangleAlert, XCircle } from 'lucide-react';
+import { CheckCircle2, ChevronDown, Cpu, FlaskConical, FolderCog, RefreshCw, Save, ScanSearch, ShieldCheck, TimerReset, TriangleAlert, XCircle } from 'lucide-react';
 import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle, ConfirmDialog, Field, Separator, Slider, Spinner, Switch, useToast } from './ui';
 import { api } from './api';
-import type { FactorySettings, Job, SettingsResponse } from './types';
+import type { FactorySettings, Job, QaSelftestResult, SettingsResponse } from './types';
 
 function SectionHeader({ icon, title, description, danger }: { icon: ReactNode; title: string; description?: string; danger?: boolean }) {
   return (
@@ -54,6 +54,71 @@ function BrowserStatus() {
       {status && !status.ready
         ? <Button size="sm" variant="outline" disabled={status.installing} onClick={async () => { await api.installBrowser(); setStatus({ ...status, installing: true }); toast.push({ title: 'Installing QA browser…', variant: 'default' }); }}>{status.installing ? <Spinner /> : <RefreshCw />} {status.installing ? 'Installing…' : 'Install'}</Button>
         : <Button size="sm" variant="outline" onClick={refresh}><RefreshCw /> Re-check</Button>}
+    </div>
+  );
+}
+
+/** Runs the QA scoring pipeline against its known-good calibration fixture (POST /api/factory/qa-selftest). */
+function QaSelfTest() {
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<QaSelftestResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [showLog, setShowLog] = useState(false);
+
+  const run = async () => {
+    setRunning(true); setResult(null); setError(null); setShowLog(false);
+    try { setResult(await api.qaSelftest()); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : 'Self-test request failed.'); }
+    finally { setRunning(false); }
+  };
+
+  const pct = (value: number | null | undefined) => value == null ? '—' : `${Math.round(value * 100)}%`;
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-[13.5px] font-bold">QA scoring self-test</p>
+          <p className="text-[13px] font-medium leading-relaxed text-muted-foreground">
+            Scores a known-good fixture through the full pipeline (Playwright, segmentation, alignment, scoring). Takes up to 5 minutes.
+          </p>
+        </div>
+        <Button size="sm" variant="outline" onClick={run} disabled={running}>
+          {running ? <Spinner /> : <FlaskConical />} {running ? 'Running…' : 'Run QA self-test'}
+        </Button>
+      </div>
+      {running && <p className="text-[13px] font-semibold text-muted-foreground">The self-test drives a real browser — leave this page open; results appear here when it finishes.</p>}
+      {error && <p className="text-[13px] font-semibold text-destructive">{error}</p>}
+      {result && (
+        <div className={`rounded-xl border p-4 ${result.ok ? 'border-success/25 bg-success/5' : 'border-destructive/25 bg-destructive/5'}`}>
+          <p className={`flex items-center gap-2 text-[14px] font-bold ${result.ok ? 'text-success' : 'text-destructive'}`}>
+            {result.ok ? <CheckCircle2 className="size-4.5" /> : <XCircle className="size-4.5" />}
+            {result.ok ? 'QA pipeline is trustworthy on this machine' : 'QA self-test failed'}
+            {result.score != null && <span className="tabular-nums">· score {pct(result.score)}</span>}
+          </p>
+          {!result.ok && result.error && <p className="mt-1.5 text-[13px] font-semibold leading-relaxed text-destructive">{result.error}</p>}
+          {result.subscores && (
+            <p className="mt-2 flex flex-wrap gap-1.5">
+              {(['presence', 'text', 'interaction'] as const).map((key) => (
+                <span key={key} className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2 py-0.5 text-[11px] font-bold text-muted-foreground">
+                  {key} <span className="tabular-nums text-foreground">{pct(result.subscores?.[key])}</span>
+                </span>
+              ))}
+            </p>
+          )}
+          {result.log && (
+            <>
+              <button type="button" onClick={() => setShowLog((value) => !value)} aria-expanded={showLog}
+                className="mt-3 inline-flex items-center gap-1 text-[13px] font-bold text-foreground transition-opacity hover:opacity-70">
+                <ChevronDown className={`size-4 transition-transform ${showLog ? 'rotate-180' : ''}`} /> {showLog ? 'Hide log' : 'Show log'}
+              </button>
+              {showLog && (
+                <pre className="mt-2 max-h-72 overflow-auto rounded-lg bg-terminal p-3.5 font-mono text-[12px] leading-5 text-zinc-100">{result.log}</pre>
+              )}
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -173,6 +238,8 @@ export function SettingsPanel({ jobs, refreshFleet }: { jobs: Job[]; refreshFlee
           <PathCheck label="Claude CLI" value={response.paths?.claudePath ?? ''} kind="claude" />
           <PathCheck label="Playwright root" value={response.paths?.playwrightRoot ?? ''} kind="playwright" />
           <BrowserStatus />
+          <Separator />
+          <QaSelfTest />
         </CardContent>
       </Card>
 

@@ -104,7 +104,19 @@ export function computeShopifyPath(route, handles = {}) {
   if (handles[route]) return handles[route];
   if (route === '/') return '/';
   if (route === '/blog' || route === '/journal') return null; // blog base needs the blog handle — supplied via handles.json
+  // Catalog + blog routes share the same path space on Shopify — map them 1:1, never to /pages/.
+  // /products/<h> -> /products/<h>, /collections/<h> -> /collections/<h>, /blogs/<b>/<a> -> same.
+  if (/^\/(products|collections|blogs)(\/|$)/.test(route)) return route;
   return `/pages/${route.replace(/^\//, '').replace(/\//g, '-')}`;
+}
+
+/**
+ * True when a Shopify path lives in the catalog space (needs a seeded product/collection to
+ * resolve). A 404 here means "catalog not seeded", not "clone forgot the page" — comparators
+ * classify it as `catalog_unseeded` and exclude it from the presence denominator.
+ */
+export function isCatalogPath(shopifyPath) {
+  return /^\/(products|collections)\//.test(shopifyPath || '');
 }
 
 /** Tolerant parser for qa/state/handles.json — accepts several shapes the clone run may write. */
@@ -278,10 +290,29 @@ export function effectSummary(effect) {
   return 'no visible effect';
 }
 
-/** Two click effects are equivalent when they produce the same class of outcome. */
-export function effectsEquivalent(reactEffect, shopifyEffect) {
+/**
+ * Commerce/destructive controls that QA must NEVER actually click (real carts, real checkouts,
+ * real newsletter signups). They are verified by presence/match only (`verified_static`).
+ */
+export const COMMERCE_CLICK_DENYLIST = /add.?to.?cart|add.?to.?(bag|basket)|buy.?now|\bbuy\b|checkout|subscribe|sign.?up|newsletter|\bsubmit\b|place.?order|pay.?now|pre.?order/i;
+
+/** Denylist check over an inventory item: accessible name, id/class, or a form submit control. */
+export function isDenylistedClick(item) {
+  if (!item) return false;
+  if (item.isSubmit) return true; // input[type=submit] / submit button inside a form
+  return COMMERCE_CLICK_DENYLIST.test(item.name || '') || COMMERCE_CLICK_DENYLIST.test(item.idClass || '');
+}
+
+/**
+ * Two click effects are equivalent when they produce the same class of outcome.
+ * When BOTH navigate, the destinations must also match (route-mapped via handles, same
+ * tolerance as linkTargetMatches) — "both went somewhere" is not equivalence.
+ */
+export function effectsEquivalent(reactEffect, shopifyEffect, handles = {}) {
   if (!reactEffect || !shopifyEffect || reactEffect.error || shopifyEffect.error) return false;
-  if (reactEffect.navigatedTo && shopifyEffect.navigatedTo) return true; // both navigate — targets checked at link level
+  if (reactEffect.navigatedTo && shopifyEffect.navigatedTo) {
+    return linkTargetMatches(reactEffect.navigatedTo, shopifyEffect.navigatedTo, handles);
+  }
   if (reactEffect.overlayAppeared && shopifyEffect.overlayAppeared) return true;
   if (reactEffect.ariaFlipped && shopifyEffect.ariaFlipped) return true;
   if (!reactEffect.noop && !shopifyEffect.noop) return true;

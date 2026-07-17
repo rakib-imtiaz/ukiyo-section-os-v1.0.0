@@ -30,6 +30,8 @@ export interface FactoryJobRecord {
   prefix: string; dev_theme_name: string; autoswap: boolean; auto_qa: boolean; qa_mode: string; qa_engine: string;
   status: string; status_detail: string | null; iteration: number; max_iterations: number; score_threshold: number;
   last_score: number | null; score_history: Array<{ iter: number; score: number; at: string }>; error: string | null;
+  // Best QA iteration so far (005): written by the convergence loop; null until the first scored iteration.
+  best_iteration: number | null; best_score: number | null;
   created_at: string; updated_at: string; started_at: string | null; finished_at: string | null;
 }
 export interface FactoryIterationRecord { id: string; job_id: string; iteration: number; kind: string; status: string; score: number | null; breakdown: Record<string, unknown> | null; report_path: string | null; log_path: string | null; started_at: string; finished_at: string | null; }
@@ -42,7 +44,7 @@ const memory = {
   factoryJobs: new Map<string, FactoryJobRecord>(), factoryIterations: new Map<string, FactoryIterationRecord>(), settings: new Map<string, AppSettingRecord>(),
 };
 
-const FACTORY_JOB_COLUMNS = new Set(['status','status_detail','iteration','max_iterations','score_threshold','last_score','score_history','error','started_at','finished_at','autoswap','auto_qa','qa_mode','qa_engine','dev_theme_name','prefix','workspace_path']);
+const FACTORY_JOB_COLUMNS = new Set(['status','status_detail','iteration','max_iterations','score_threshold','last_score','score_history','error','started_at','finished_at','autoswap','auto_qa','qa_mode','qa_engine','dev_theme_name','prefix','workspace_path','best_iteration','best_score']);
 
 // Factory state survives dev-server restarts even without Postgres: memory-mode factory
 // tables are mirrored to a JSON file (long-running clone jobs must not vanish on reload).
@@ -54,7 +56,8 @@ function hydrateFactoryMemory() {
   if (!factoryStatePersistence) return;
   try {
     const state = JSON.parse(readFileSync(factoryStatePath, 'utf8')) as { jobs?: FactoryJobRecord[]; iterations?: FactoryIterationRecord[]; settings?: AppSettingRecord[]; cloneProjects?: ProjectRecord[] };
-    for (const job of state.jobs ?? []) memory.factoryJobs.set(job.id, job);
+    // Coalesce the 005 best-iteration fields so records persisted before 005 hydrate as null.
+    for (const job of state.jobs ?? []) memory.factoryJobs.set(job.id, { ...job, best_iteration: job.best_iteration ?? null, best_score: job.best_score ?? null });
     for (const iteration of state.iterations ?? []) memory.factoryIterations.set(iteration.id, iteration);
     for (const setting of state.settings ?? []) memory.settings.set(setting.key, setting);
     // Clone-projects mirror factory jobs, so they ride the same persistence file (section
@@ -294,8 +297,8 @@ class Repository {
   async revokeApiKey(id:string,shopId:string){ if(this.pool)return Boolean((await this.pool.query('UPDATE api_keys SET revoked_at=NOW() WHERE id=$1 AND shop_id=$2',[id,shopId])).rowCount); const item=memory.apiKeys.get(id);if(item?.shop_id!==shopId)return false;memory.apiKeys.set(id,{...item,revoked_at:now()});return true; }
   async audit(shopId:string|null,eventType:string,actor:string,metadata:Record<string,unknown>={}){ if(this.pool)await this.pool.query('INSERT INTO audit_events (id,shop_id,event_type,actor,metadata) VALUES ($1,$2,$3,$4,$5)',[randomUUID(),shopId,eventType,actor,metadata]); }
 
-  async createFactoryJob(input: Omit<FactoryJobRecord,'id'|'status'|'status_detail'|'iteration'|'last_score'|'score_history'|'error'|'created_at'|'updated_at'|'started_at'|'finished_at'>, initialStatus = 'queued') {
-    const record: FactoryJobRecord = { id: randomUUID(), ...input, status: initialStatus, status_detail: null, iteration: 0, last_score: null, score_history: [], error: null, created_at: now(), updated_at: now(), started_at: null, finished_at: null };
+  async createFactoryJob(input: Omit<FactoryJobRecord,'id'|'status'|'status_detail'|'iteration'|'last_score'|'score_history'|'error'|'best_iteration'|'best_score'|'created_at'|'updated_at'|'started_at'|'finished_at'>, initialStatus = 'queued') {
+    const record: FactoryJobRecord = { id: randomUUID(), ...input, status: initialStatus, status_detail: null, iteration: 0, last_score: null, score_history: [], error: null, best_iteration: null, best_score: null, created_at: now(), updated_at: now(), started_at: null, finished_at: null };
     if (this.pool) return (await this.pool.query<FactoryJobRecord>(`INSERT INTO factory_jobs (id,name,slug,workspace_path,react_url,store_url,client_id_cipher,client_secret_cipher,storefront_password_cipher,prefix,dev_theme_name,autoswap,auto_qa,qa_mode,qa_engine,max_iterations,score_threshold,status,score_history)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,'[]') RETURNING *`,
       [record.id,input.name,input.slug,input.workspace_path,input.react_url,input.store_url,input.client_id_cipher,input.client_secret_cipher,input.storefront_password_cipher,input.prefix,input.dev_theme_name,input.autoswap,input.auto_qa,input.qa_mode,input.qa_engine,input.max_iterations,input.score_threshold,initialStatus])).rows[0];

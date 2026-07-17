@@ -4,6 +4,7 @@ import path from 'node:path';
 import { config } from '../config';
 import { decrypt } from '../security';
 import type { FactoryJobRecord } from '../db';
+import { buildSpawnEnv } from './runner';
 import { DEFAULT_SCORE_WEIGHTS, type FactorySettings, type QaResult, type QaSubscores } from './types';
 
 // Global semaphore: at most 2 Playwright QA processes machine-wide regardless of job concurrency.
@@ -23,7 +24,7 @@ interface InteractionsReport { interaction: number; issues: QaIssue[]; }
 /** Kill a QA node process AND its Playwright/Chromium children (child.kill leaves them orphaned on Windows). */
 function killQaTree(child: ReturnType<typeof spawn>) {
   if (child.pid == null || child.exitCode !== null) return;
-  if (process.platform === 'win32') spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { shell: false, windowsHide: true });
+  if (process.platform === 'win32') spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { shell: false, windowsHide: true, env: buildSpawnEnv() });
   else child.kill('SIGKILL');
 }
 
@@ -32,16 +33,19 @@ function runScript(job: FactoryJobRecord, script: string, iteration: number, sto
     if (signal?.aborted) { reject(new Error('aborted')); return; }
     const child = spawn(process.execPath, [path.join('qa', 'factory', script), String(iteration)], {
       cwd: job.workspace_path, shell: false, windowsHide: true,
-      env: {
-        ...process.env,
+      // SECURITY: explicit env, no process.env spread — the QA scripts get exactly the
+      // variables they read (see templates/factory/qa/*.mjs) plus the OS basics from the
+      // allowlist. App secrets (encryption key, DB URL, Shopify secrets) never leak in.
+      env: buildSpawnEnv({
         REACT_BASE: job.react_url,
         SHOPIFY_BASE: `https://${new URL(job.store_url).host}`,
         STORE_PASSWORD: storefrontPassword ?? '',
         ITER: String(iteration),
         PW_ROOT: config.factory.playwrightRoot,
+        FACTORY_PW_ROOT: config.factory.playwrightRoot,
         // 'headed' engine launches a visible Chrome window so you can watch the QA click through.
         QA_HEADED: job.qa_engine === 'headed' ? '1' : '',
-      },
+      }),
     });
     const onAbort = () => { killQaTree(child); reject(new Error('aborted')); };
     signal?.addEventListener('abort', onAbort, { once: true });

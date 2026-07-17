@@ -15,6 +15,42 @@ export function scrubSecrets(text: string) {
   return SECRET_PATTERNS.reduce((value, pattern) => value.replace(pattern, (match) => `${match.slice(0, 6)}***`), text);
 }
 
+// SECURITY: never spread process.env into spawned child processes. The Claude CLI is an
+// LLM-driven process running semi-trusted instructions; inheriting the app's environment
+// hands it (and anything it spawns) APP_ENCRYPTION_KEY, SESSION_SECRET, API_KEY_PEPPER,
+// DATABASE_URL, and Shopify secrets. Build a minimal allowlisted env instead: the OS/tooling
+// basics a Windows/node CLI needs, plus CLAUDE_*/ANTHROPIC_* so CLI auth/config still works.
+const SPAWN_ENV_EXACT = new Set([
+  'PATH', 'PATHEXT', 'SYSTEMROOT', 'SYSTEMDRIVE', 'COMSPEC', 'WINDIR',
+  'TEMP', 'TMP', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'HOME',
+  'APPDATA', 'LOCALAPPDATA', 'PROGRAMFILES', 'PROGRAMFILES(X86)', 'PROGRAMDATA',
+  'NUMBER_OF_PROCESSORS', 'OS', 'USERNAME', 'USERDOMAIN',
+  'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY',
+  'PLAYWRIGHT_BROWSERS_PATH', // non-secret; QA breaks on machines that relocate the browser cache without it
+]);
+const SPAWN_ENV_PREFIXES = ['PROCESSOR_', 'CLAUDE_', 'ANTHROPIC_'];
+// Defense in depth: even if an allow rule ever matches one of these (e.g. a future
+// CLAUDE_-prefixed secret), they must NEVER reach a child process.
+const SPAWN_ENV_NEVER = new Set([
+  'APP_ENCRYPTION_KEY', 'SESSION_SECRET', 'API_KEY_PEPPER', 'DATABASE_URL',
+  'SHOPIFY_API_SECRET', 'SHOPIFY_ADMIN_ACCESS_TOKEN',
+]);
+
+/** Minimal allowlisted environment for factory child processes (+ per-spawn extras). */
+export function buildSpawnEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value == null) continue;
+    const upper = key.toUpperCase();
+    if (SPAWN_ENV_NEVER.has(upper)) continue;
+    if (SPAWN_ENV_EXACT.has(upper) || SPAWN_ENV_PREFIXES.some((prefix) => upper.startsWith(prefix))) env[key] = value;
+  }
+  for (const [key, value] of Object.entries(extra)) {
+    if (!SPAWN_ENV_NEVER.has(key.toUpperCase())) env[key] = value;
+  }
+  return env;
+}
+
 async function fileExists(target: string) { return access(target).then(() => true, () => false); }
 
 /** Delete stale completion signal files so a re-run isn't instantly re-settled by a prior run's file. */
@@ -39,7 +75,7 @@ interface RunSpec {
 
 function killTree(child: ChildProcess) {
   if (child.pid == null || child.exitCode !== null) return;
-  if (process.platform === 'win32') spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { shell: false, windowsHide: true });
+  if (process.platform === 'win32') spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { shell: false, windowsHide: true, env: buildSpawnEnv() });
   else child.kill('SIGKILL');
 }
 
@@ -61,7 +97,7 @@ function run(spec: RunSpec): RunHandle {
     writeLog(`\n[factory ${new Date().toISOString()}] spawn ${config.factory.claudePath} ${spec.args.join(' ')}\n`);
 
     try {
-      child = spawn(config.factory.claudePath, spec.args, { cwd: spec.cwd, shell: false, windowsHide: true, env: { ...process.env, CLAUDE_FACTORY_JOB: '1' } });
+      child = spawn(config.factory.claudePath, spec.args, { cwd: spec.cwd, shell: false, windowsHide: true, env: buildSpawnEnv({ CLAUDE_FACTORY_JOB: '1' }) });
     } catch (error) {
       logClosed = true; log.end();
       return { outcome: 'spawn_error', exitCode: null, detail: error instanceof Error ? error.message : 'spawn failed' };

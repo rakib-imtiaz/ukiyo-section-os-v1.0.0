@@ -28,6 +28,7 @@ function job(workspace: string): FactoryJobRecord {
     prefix: 'ws', dev_theme_name: 'Wild & Sacred Clone (dev)', autoswap: false, auto_qa: true, qa_mode: 'both', qa_engine: 'playwright',
     status: 'queued', status_detail: null, iteration: 0, max_iterations: 5, score_threshold: 0.92,
     last_score: null, score_history: [], error: null, created_at: '', updated_at: '', started_at: null, finished_at: null,
+    best_iteration: null, best_score: null,
   };
 }
 

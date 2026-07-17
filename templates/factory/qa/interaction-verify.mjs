@@ -8,9 +8,9 @@
 // Writes: qa/reports/factory/interactions-<iter>.{json,md}
 import {
   loadPlaywright, settle, gotoRoute, dismissOverlays, handlePassword,
-  discoverRoutes, computeShopifyPath, loadHandles, shopifyState, withPreview,
+  discoverRoutes, computeShopifyPath, isCatalogPath, loadHandles, shopifyState, withPreview,
   diceSimilarity, writeJsonReport, writeMdReport,
-  effectSummary, effectsEquivalent, linkTargetMatches as linkTargetMatchesShared,
+  effectSummary, effectsEquivalent, isDenylistedClick, linkTargetMatches as linkTargetMatchesShared,
 } from './qa-shared.mjs';
 
 const REACT_BASE = process.env.REACT_BASE;
@@ -48,6 +48,11 @@ async function inventory(page) {
       const baseKey = `${tag}|${accessibleName.toLowerCase()}`;
       const ordinal = (seen.get(baseKey) ?? 0) + 1;
       seen.set(baseKey, ordinal);
+      const type = (el.getAttribute('type') || '').toLowerCase();
+      const inForm = Boolean(el.closest('form'));
+      // Submit controls inside forms: input[type=submit], button[type=submit], or a typeless
+      // <button> in a form (defaults to submit). These are never clicked by QA.
+      const isSubmit = inForm && ((tag === 'input' && type === 'submit') || (tag === 'button' && (type === 'submit' || type === '')));
       items.push({
         key: `${baseKey}|${ordinal}`,
         tag, name: accessibleName, ordinal,
@@ -56,6 +61,8 @@ async function inventory(page) {
         visible: rect.width > 0 && rect.height > 0,
         region: inHeader ? 'header' : inFooter ? 'footer' : 'main',
         ariaExpanded: el.getAttribute('aria-expanded'),
+        idClass: `${el.id || ''} ${typeof el.className === 'string' ? el.className : ''}`.trim().slice(0, 200),
+        isSubmit,
       });
     }
     return items;
@@ -131,7 +138,8 @@ async function recordClickEffect(page, base, route, item, opts) {
   return effect;
 }
 
-const equivalent = effectsEquivalent;
+// Navigation destinations are compared with the same route-mapping tolerance as links.
+const equivalent = (reactEffect, shopifyEffect) => effectsEquivalent(reactEffect, shopifyEffect, handles);
 const linkTargetMatches = (reactHref, shopifyHref) => linkTargetMatchesShared(reactHref, shopifyHref, handles);
 
 // ---------- main ----------
@@ -145,8 +153,9 @@ const issues = [];
 let issueSeq = 0;
 const issueId = () => `i${ITER}-${++issueSeq}`;
 const pages = [];
-let totalReact = 0;
+let totalTested = 0;
 let totalSame = 0;
+let totalUntested = 0;
 
 const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
 const reactPage = await context.newPage();
@@ -156,7 +165,7 @@ const shopifyOpts = { password: process.env.STORE_PASSWORD };
 for (const route of routes) {
   const shopifyPath = computeShopifyPath(route, handles);
   if (!shopifyPath) continue;
-  const pageResult = { route, elements: 0, same: 0, different: 0, missing: 0, clicked: 0, skippedClicks: 0 };
+  const pageResult = { route, elements: 0, tested: 0, same: 0, different: 0, missing: 0, clicked: 0, verifiedStatic: 0, untested: 0, skippedClicks: 0 };
 
   try {
     const reactNav = await gotoRoute(reactPage, REACT_BASE, route, {});
@@ -166,14 +175,13 @@ for (const route of routes) {
     const shopifyUrl = withPreview(SHOPIFY_BASE, shopifyPath, previewSuffix);
     const nav = await shopifyPage.goto(shopifyUrl, { waitUntil: 'domcontentloaded', timeout: 45_000 }).catch(() => null);
     await handlePassword(shopifyPage, shopifyOpts.password);
-    if (!nav || nav.status() === 404) { pageResult.status = 'missing_page'; pages.push(pageResult); continue; } // section-compare already reports missing pages
+    if (!nav || nav.status() === 404) { pageResult.status = isCatalogPath(shopifyPath) ? 'catalog_unseeded' : 'missing_page'; pages.push(pageResult); continue; } // section-compare already reports missing pages / unseeded catalog
     await dismissOverlays(shopifyPage);
     await settle(shopifyPage, { quietMs: 600 });
 
     const reactItems = (await inventory(reactPage)).filter((item) => item.visible);
     const shopifyItems = (await inventory(shopifyPage)).filter((item) => item.visible);
     pageResult.elements = reactItems.length;
-    totalReact += reactItems.length;
     const shopifyByKey = new Map(shopifyItems.map((item) => [item.key, item]));
     const fuzzyFind = (reactItem) => {
       let best = null; let bestScore = 0;
@@ -185,22 +193,29 @@ for (const route of routes) {
       return bestScore >= 0.8 ? best : null;
     };
 
-    // Links: static target verification. Actions: real clicks (header/main first, capped).
+    // Links: static target verification. Commerce/destructive actions (add-to-cart, buy, checkout,
+    // subscribe, form submits): NEVER clicked — presence/match verified statically. Remaining
+    // actions: real clicks (capped). Overflow beyond the cap is NOT scored (coverage_gap only).
     const actionItems = reactItems.filter((item) => item.kind === 'action');
-    const clickBudget = actionItems.slice(0, MAX_CLICKS_PER_ROUTE);
-    pageResult.skippedClicks = actionItems.length - clickBudget.length;
+    const denied = new Set(actionItems.filter((item) => isDenylistedClick(item)));
+    const clickable = actionItems.filter((item) => !denied.has(item));
+    const clickBudget = new Set(clickable.slice(0, MAX_CLICKS_PER_ROUTE));
+    pageResult.skippedClicks = clickable.length - clickBudget.size;
     if (pageResult.skippedClicks > 0) {
-      issues.push({ id: issueId(), kind: 'coverage_gap', page: route, title: `${pageResult.skippedClicks} interactive element(s) beyond the ${MAX_CLICKS_PER_ROUTE}-click budget were not exercised`, detail: 'Raise MAX_CLICKS_PER_ROUTE or verify manually.' });
+      issues.push({ id: issueId(), kind: 'coverage_gap', page: route, title: `${pageResult.skippedClicks} interactive element(s) beyond the ${MAX_CLICKS_PER_ROUTE}-click budget were not exercised`, detail: 'These elements are EXCLUDED from the interaction score (untested is not passed). Raise MAX_CLICKS_PER_ROUTE or verify manually.' });
     }
 
     for (const item of reactItems) {
       const match = shopifyByKey.get(item.key) ?? fuzzyFind(item);
       if (!match) {
+        // Presence check is itself a static verification — a missing element is tested-and-failed.
+        pageResult.tested++; totalTested++;
         pageResult.missing++;
         issues.push({ id: issueId(), kind: 'missing_interaction', page: route, title: `Missing on Shopify: ${item.tag} "${item.name || item.href}" (${item.region})`, detail: item.kind === 'link' ? `React link -> ${item.href}` : 'Interactive element absent from the clone.' });
         continue;
       }
       if (item.kind === 'link') {
+        pageResult.tested++; totalTested++;
         if (linkTargetMatches(item.href, match.href)) { pageResult.same++; totalSame++; }
         else {
           pageResult.different++;
@@ -208,7 +223,15 @@ for (const route of routes) {
         }
         continue;
       }
-      if (!clickBudget.includes(item)) { pageResult.same++; totalSame++; continue; } // beyond budget: counted present, flagged via coverage_gap
+      if (denied.has(item)) {
+        // verified_static: present + name-matched, deliberately not clicked (real commerce action).
+        pageResult.tested++; totalTested++;
+        pageResult.verifiedStatic++;
+        pageResult.same++; totalSame++;
+        continue;
+      }
+      if (!clickBudget.has(item)) { pageResult.untested++; totalUntested++; continue; } // beyond budget: NOT scored, flagged via coverage_gap
+      pageResult.tested++; totalTested++;
       pageResult.clicked++;
       const reactEffect = await recordClickEffect(reactPage, REACT_BASE, route, item, {});
       const shopifyEffect = await recordClickEffect(shopifyPage, SHOPIFY_BASE, shopifyPath, match, shopifyOpts);
@@ -225,7 +248,7 @@ for (const route of routes) {
       }
     }
     pages.push(pageResult);
-    console.log(`  ${route}: ${pageResult.same}/${pageResult.elements} same, ${pageResult.missing} missing, ${pageResult.different} different (${pageResult.clicked} clicked)`);
+    console.log(`  ${route}: ${pageResult.same}/${pageResult.tested} tested-same, ${pageResult.missing} missing, ${pageResult.different} different (${pageResult.clicked} clicked, ${pageResult.verifiedStatic} static, ${pageResult.untested} untested)`);
   } catch (error) {
     pageResult.status = 'error';
     pageResult.reason = error.message?.slice(0, 200);
@@ -236,18 +259,25 @@ for (const route of routes) {
 
 await browser.close();
 
-const interaction = totalReact ? totalSame / totalReact : 0;
+// Score = tested-equivalent / tested-total. "Tested" means clicked or statically verified
+// (links, commerce-denylisted controls, presence checks). Untested overflow beyond the click
+// budget is EXCLUDED from the score — untested is never counted as passed.
+const interaction = totalTested ? totalSame / totalTested : 0;
 // extra_interaction and coverage_gap are informational: excluded from the fixer's FIX-THESE scoring issues
 const scoringIssues = issues.filter((issue) => issue.kind !== 'extra_interaction' && issue.kind !== 'coverage_gap');
-writeJsonReport(`interactions-${ITER}.json`, { interaction: Number(interaction.toFixed(4)), issues: scoringIssues, informational: issues.filter((issue) => !scoringIssues.includes(issue)), pages });
+writeJsonReport(`interactions-${ITER}.json`, { interaction: Number(interaction.toFixed(4)), tested: totalTested, same: totalSame, untested: totalUntested, issues: scoringIssues, informational: issues.filter((issue) => !scoringIssues.includes(issue)), pages });
 
 const md = [
   `# Interaction verification — iteration ${ITER}`, '',
   `React (truth): ${REACT_BASE}`, `Shopify (clone): ${SHOPIFY_BASE}`, '',
-  `**Interaction parity: ${(interaction * 100).toFixed(1)}%** (${totalSame}/${totalReact} elements behave the same)`, '',
-  '| Route | Elements (R) | Same | Missing | Different | Clicked |',
-  '|---|---|---|---|---|---|',
-  ...pages.map((page) => `| ${page.route} | ${page.elements} | ${page.same} | ${page.missing} | ${page.different} | ${page.clicked}${page.skippedClicks ? ` (+${page.skippedClicks} skipped)` : ''} |`),
+  `> Scoring note: parity = tested-equivalent / tested-total. Commerce/destructive controls`,
+  `> (add-to-cart, buy, checkout, subscribe, form submits) are never clicked — they are verified`,
+  `> statically ("Static" column) and count as tested. Elements beyond the click budget are`,
+  `> untested and EXCLUDED from the score (reported as coverage_gap).`, '',
+  `**Interaction parity: ${(interaction * 100).toFixed(1)}%** (${totalSame}/${totalTested} tested elements behave the same${totalUntested ? `; ${totalUntested} untested, excluded` : ''})`, '',
+  '| Route | Elements (R) | Tested | Same | Static | Missing | Different | Clicked | Untested |',
+  '|---|---|---|---|---|---|---|---|---|',
+  ...pages.map((page) => `| ${page.route} | ${page.elements} | ${page.tested} | ${page.same} | ${page.verifiedStatic} | ${page.missing} | ${page.different} | ${page.clicked} | ${page.untested} |`),
   '',
   `## Behavioral differences (${scoringIssues.length})`, '',
   ...scoringIssues.map((issue) => `- **[${issue.kind}]** \`${issue.page}\` ${issue.title}${issue.detail ? `\n  ${issue.detail.replace(/\n/g, '\n  ')}` : ''}`),

@@ -63,7 +63,7 @@ Available tiers (pass the alias, not the full id):
 | Preflight | 0 | `haiku` | Mechanical HTTP / token mint / identity scrape |
 | Inventory (Explore) | 1 | `sonnet` | Reads React tree → structured JSON |
 | Bootstrap scaffold | 2 | `sonnet` | Mostly reused scripts, light judgment |
-| Store setup A / B / C | 3 | `haiku` | Pure REST + GraphQL calls |
+| Store setup A / B / C / D | 3 | `haiku` | Pure REST + GraphQL calls |
 | Page Rewrite — **simple** (≤4 sections, no modal/quiz) | 4 | `sonnet` | Straightforward React→Liquid |
 | Page Rewrite — **complex** (>4 sections, modals, quizzes, tabs, calendars) | 4 | `opus` | Quality-critical conversion |
 | Specialists 1, 2, 2b, 6 (Link, Content, Completeness, Editability) | 5 | `haiku` | Deterministic text/schema diff |
@@ -313,15 +313,17 @@ Requires the `write_online_store_navigation` scope.
 
 ---
 
-## Phase 3 — Parallel store setup (3 agents in parallel, ~3 min)
+## Phase 3 — Parallel store setup (4 agents in parallel, ~3 min)
 
-All three run concurrently in background.
+All four run concurrently in background.
 
 **Agent A — Pages:** For each entry in inventory `pages`, `POST /admin/api/2025-01/pages.json` with `handle` + `template_suffix`. Verify each returns 201 and the page resolves at `/pages/<handle>`. Save the `template → handle` map to `qa/state/handles.json` so page agents in Phase 4 can wire `shopify://pages/<handle>` links correctly.
 
 **Agent B — Blog + articles:** `POST /admin/api/2025-01/blogs.json` for the field-notes blog. For each article in the React data file, `POST /admin/api/2025-01/articles.json` with title, body_html, tags, published_at, image.
 
 **Agent C — Files + metafields + policies:** For each entry in inventory `images`, run `stagedUploadsCreate` + `fileCreate` (GraphQL). Build a `react_path → cdn_url` map at `qa/state/images.json`. Define metafield definitions for any custom fields React uses on products/articles. Create boilerplate privacy / ToS / refund policies if footer references them.
+
+**Agent D — Catalog (products + collections):** If the inventory contains product or collection pages (React routes under `/products/*`, `/collections/*`, or PDP/PLP-style pages), seed matching catalog objects — QA maps `/products/<handle>` and `/collections/<handle>` straight through, so an unseeded catalog 404s every one of those routes. For each React product page: Admin GraphQL `productCreate` (or `productSet`) with the React title, description as body HTML, `handle` equal to the React slug, the visible price as the variant price, and images wired from the `qa/state/images.json` CDN map; then publish it to the Online Store channel (`publishablePublish` with the publication ID from `publications(first: 10)`). For each React collection page: `collectionCreate` with matching title/handle/description/image, add the products it visibly contains, and publish it the same way. Idempotent: look up by handle first (`productByHandle` / `collectionByHandle`) and update instead of duplicating. Append every created route to `qa/state/handles.json` (`"/products/<slug>": "/products/<handle>"`, same for collections) so QA maps them. Requires `write_products` + `write_publications` scopes — on 403, apply the same pause-and-ask rule as menus; do not silently skip, since every catalog page would then score as missing.
 
 **Menu work (Agent A continued):** Run `seed/create-menus.mjs` to upsert the nav menus via the GraphQL `menuCreate` / `menuUpdate` mutations (REST `menus.json` does not exist). Mirror the React Navbar + Footer exactly, including nested children. Use **dedicated handles** (`<prefix>-main-menu`, `<prefix>-footer`) — do NOT overwrite the store-wide `main-menu` / `footer` unless the user explicitly asks, since the published theme renders those. Verify afterwards that the rendered header/footer come from `linklists` (count the links in the DOM), not from the fallback branch.
 
@@ -420,7 +422,7 @@ Specialists run **in parallel** within each page's verification cycle. Pages run
 **New per project (created once at Phase 2):**
 - `push.mjs` — REST Assets API push script. Mints fresh token each run, auto-discovers `sections/<prefix>-*.liquid` + `snippets/<prefix>-*.liquid` + `templates/page.<prefix>_*.json`. `THEME_ID` env override.
 - `qa/state/theme.json` — dev theme ID
-- `qa/state/handles.json` — page handle map
+- `qa/state/handles.json` — page + catalog (product/collection) handle map
 - `qa/state/images.json` — image CDN URL map
 - `qa/state/progress.json` — per-page verification status
 

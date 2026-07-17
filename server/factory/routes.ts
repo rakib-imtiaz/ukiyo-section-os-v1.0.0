@@ -9,7 +9,7 @@ import { decrypt, encrypt, normalizeShop, rateLimit, secureEqual } from '../secu
 import { TEMPLATES_ROOT, containsPackageJson, derivePrefix, isZipPath, mintKeyFor, resolveWorkspacePath, scaffoldWorkspace, slugify } from './scaffolder';
 import { factoryScheduler } from './scheduler';
 import { getFactorySettings, lockedFields, updateFactorySettings } from './settings';
-import { scrubSecrets } from './runner';
+import { buildSpawnEnv, scrubSecrets } from './runner';
 import { TERMINAL_STATUSES, type JobIntake } from './types';
 
 type AsyncHandler = (request: Request, response: Response, next: NextFunction) => Promise<unknown>;
@@ -27,10 +27,17 @@ function publicJob(job: FactoryJobRecord) {
 
 async function fileExists(target: string) { return access(target).then(() => true, () => false); }
 
-/** Loopback-only guard for the token-mint endpoint (it hands out live Shopify tokens). */
+/** Loopback-only guard. Applied router-wide: the factory API mints live Shopify tokens,
+ * spawns local CLI/browser processes, and can recursively delete workspaces — none of which
+ * has any business being reachable from the LAN. */
 function isLoopback(request: Request) {
   const address = request.socket.remoteAddress ?? '';
   return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+}
+
+function requireLoopback(request: Request, response: Response, next: NextFunction) {
+  if (!isLoopback(request)) { response.status(403).json({ error: 'The factory API is available on localhost only.' }); return; }
+  next();
 }
 
 /** Resolve a workspace-relative file while refusing traversal outside the allowed prefix. */
@@ -77,7 +84,7 @@ interface CalibrationOutcome {
 /** Kill the calibration node process and its Chromium children (plain kill orphans them on Windows). */
 function killSelftestTree(child: ReturnType<typeof spawn>) {
   if (child.pid == null || child.exitCode !== null) return;
-  if (process.platform === 'win32') spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { shell: false, windowsHide: true });
+  if (process.platform === 'win32') spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { shell: false, windowsHide: true, env: buildSpawnEnv() });
   else child.kill('SIGKILL');
 }
 
@@ -86,7 +93,8 @@ function runCalibration(script: string): Promise<CalibrationOutcome> {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [script], {
       shell: false, windowsHide: true, cwd: path.dirname(script),
-      env: { ...process.env, PW_ROOT: config.factory.playwrightRoot },
+      // Allowlisted env (no process.env spread) — app secrets never reach the QA pipeline.
+      env: buildSpawnEnv({ PW_ROOT: config.factory.playwrightRoot, FACTORY_PW_ROOT: config.factory.playwrightRoot }),
     });
     let output = '';
     const append = (chunk: Buffer) => { if (output.length < 64 * 1024) output += chunk.toString('utf8'); };
@@ -114,7 +122,7 @@ function runCalibration(script: string): Promise<CalibrationOutcome> {
 
 export function createFactoryRouter() {
   const router = Router();
-  router.use(requireFactoryEnabled, rateLimit(300));
+  router.use(requireFactoryEnabled, requireLoopback, rateLimit(300));
 
   // --- Jobs ---
   router.post('/jobs', handle(async (request, response) => {
@@ -131,6 +139,11 @@ export function createFactoryRouter() {
     if (!/^shpss_/.test(clientSecret)) { response.status(422).json({ error: 'The Client Secret must start with shpss_.' }); return; }
     const prefix = String(body.prefix ?? '').trim().toLowerCase() || derivePrefix(name);
     if (!/^[a-z][a-z0-9]{1,2}$/.test(prefix)) { response.status(422).json({ error: 'The prefix must be 2-3 characters (letters/digits, starting with a letter).' }); return; }
+    const autoswap = Boolean(body.autoswap);
+    const autoQa = body.autoQa !== false;
+    // An unverified clone must never be published live: autoswap publishes the dev theme to
+    // the LIVE theme after convergence, and without auto-QA there is no convergence signal.
+    if (autoswap && !autoQa) { response.status(400).json({ error: 'autoswap requires auto-QA — an unverified clone must never be published live. Enable auto-QA or turn autoswap off.' }); return; }
     const storeUrl = `https://${shop}`;
     const duplicate = await db.findActiveFactoryJobByStore(storeUrl);
     if (duplicate) { response.status(409).json({ error: `Another active job ("${duplicate.name}") already targets ${shop}. Two clones writing one store would corrupt it.` }); return; }
@@ -153,7 +166,7 @@ export function createFactoryRouter() {
       client_id_cipher: encrypt(clientId), client_secret_cipher: encrypt(clientSecret),
       storefront_password_cipher: body.storefrontPassword ? encrypt(String(body.storefrontPassword)) : null,
       prefix, dev_theme_name: String(body.devThemeName ?? '').trim() || `${name} Clone (dev)`,
-      autoswap: Boolean(body.autoswap), auto_qa: body.autoQa !== false,
+      autoswap, auto_qa: autoQa,
       qa_mode: ['sections', 'interactions', 'both'].includes(String(body.qaMode)) ? String(body.qaMode) : 'both',
       qa_engine: ['playwright', 'headed'].includes(String((body as { qaEngine?: string }).qaEngine)) ? String((body as { qaEngine?: string }).qaEngine) : 'playwright',
       max_iterations: Math.min(10, Math.max(1, Number(body.maxIterations) || settings.defaultMaxIterations)),
@@ -239,6 +252,16 @@ export function createFactoryRouter() {
   router.post('/jobs/:id/retry', handle(async (request, response) => {
     await factoryScheduler.retry(String(request.params.id));
     response.json({ job: publicJob((await db.getFactoryJob(String(request.params.id)))!) });
+  }));
+
+  // Queue a job that has never run (draft) — the JobDetail Start button's target.
+  router.post('/jobs/:id/start', handle(async (request, response) => {
+    const job = await db.getFactoryJob(String(request.params.id));
+    if (!job) { response.status(404).json({ error: 'Job not found.' }); return; }
+    if (job.status !== 'draft' && job.status !== 'paused') { response.status(409).json({ error: 'Only draft or paused jobs can be started — use Retry for blocked/failed jobs.' }); return; }
+    await db.updateFactoryJob(job.id, { status: 'queued', status_detail: null });
+    void factoryScheduler.tick();
+    response.json({ job: publicJob((await db.getFactoryJob(job.id))!) });
   }));
 
   router.post('/jobs/:id/pause', handle(async (request, response) => {
@@ -351,7 +374,7 @@ export function createFactoryRouter() {
     const cli = path.join(config.factory.playwrightRoot, 'playwright', 'cli.js');
     if (!(await fileExists(cli))) { response.status(422).json({ error: `Playwright CLI not found at ${cli}. Set FACTORY_PW_ROOT to a folder containing a playwright install.` }); return; }
     browserInstalling = true;
-    const child = spawn(process.execPath, [cli, 'install', 'chromium'], { shell: false, windowsHide: true, detached: false });
+    const child = spawn(process.execPath, [cli, 'install', 'chromium'], { shell: false, windowsHide: true, detached: false, env: buildSpawnEnv() });
     child.on('exit', () => { browserInstalling = false; });
     child.on('error', () => { browserInstalling = false; });
     response.json({ installing: true, detail: 'Downloading Chromium for QA — this can take a minute. Re-check status shortly.' });

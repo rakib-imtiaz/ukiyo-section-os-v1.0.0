@@ -89,7 +89,7 @@ app.use((error:unknown,_request:express.Request,response:express.Response,_next:
 
 if(config.factory.enabled){await ensureWorkspaceRoot();await factoryScheduler.boot();}
 
-const server=app.listen(config.port,()=>console.log(`ThemeBot listening on ${config.appUrl}`));
+const server=app.listen(config.port,config.host,()=>console.log(`ThemeBot listening on ${config.appUrl} (bound to ${config.host}:${config.port})`));
 attachTerminal();
 attachBrowser();
 installWsHub(server);

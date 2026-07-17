@@ -19,6 +19,37 @@ export interface Iteration {
   started_at: string; finished_at: string | null;
 }
 
+/** Per-iteration QA subscores — ride inside Iteration.breakdown.subscores since wave 3. */
+export interface QaSubscores { presence: number | null; text: number | null; interaction: number | null }
+
+/** One defect from the deterministic QA reports (sections-<iter>.json / interactions-<iter>.json). */
+export interface QaIssue { id: string; kind: string; page: string; title: string; detail?: string }
+
+/** Shape of qa/reports/factory/sections-<iter>.json (issues are all scoring). */
+export interface SectionsReport { presence?: number; text?: number; issues?: QaIssue[]; pages?: unknown[] }
+/** Shape of qa/reports/factory/interactions-<iter>.json (issues scoring, informational separate). */
+export interface InteractionsReport { interaction?: number; issues?: QaIssue[]; informational?: QaIssue[]; pages?: unknown[] }
+
+export interface QaSelftestResult { ok: boolean; score: number | null; subscores: QaSubscores | null; log: string; error?: string }
+
+const ISSUE_KIND_META: Record<string, { label: string; tone: 'destructive' | 'warning' | 'secondary' | 'info' }> = {
+  missing_page: { label: 'Missing page', tone: 'destructive' },
+  missing_section: { label: 'Missing section', tone: 'destructive' },
+  text_drift: { label: 'Text drift', tone: 'warning' },
+  extra_section: { label: 'Extra section', tone: 'secondary' },
+  missing_interaction: { label: 'Missing interaction', tone: 'destructive' },
+  interaction_target: { label: 'Wrong target', tone: 'warning' },
+  interaction_noop: { label: 'Dead control', tone: 'warning' },
+  extra_interaction: { label: 'Extra interaction', tone: 'secondary' },
+  coverage_gap: { label: 'Coverage gap', tone: 'secondary' },
+  catalog_unseeded: { label: 'Catalog unseeded', tone: 'warning' },
+};
+
+/** Badge label/tone for a QA issue kind; unknown kinds degrade to a readable info badge. */
+export function issueKindMeta(kind: string): { label: string; tone: 'destructive' | 'warning' | 'secondary' | 'info' } {
+  return ISSUE_KIND_META[kind] ?? { label: kind.replace(/_/g, ' '), tone: 'info' };
+}
+
 export interface FactorySettings {
   concurrency: number; launchStaggerSec: number; inactivityTimeoutMin: number; cloneTimeoutMin: number;
   fixTimeoutMin: number; qaTimeoutMin: number; defaultMaxIterations: number; defaultScoreThreshold: number;
