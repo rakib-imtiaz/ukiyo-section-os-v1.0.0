@@ -1,0 +1,112 @@
+openapi: 3.1.0
+info:
+  title: Ukiyo Section OS API
+  version: 1.0.0
+  description: Compile platform-neutral design contracts into modular Shopify sections.
+servers:
+  - url: http://localhost:8787
+paths:
+  /api/health:
+    get:
+      operationId: getSectionOsStatus
+      responses:
+        '200': { description: Compiler status }
+  /api/presets/cinematic-hero:
+    get:
+      operationId: getCinematicHeroContract
+      responses:
+        '200': { description: Starter state and complete design contract }
+  /api/compile:
+    post:
+      operationId: compileShopifySection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [manifest]
+              properties:
+                manifest: { $ref: '#/components/schemas/SectionManifest' }
+      responses:
+        '200': { description: Valid generated section files }
+        '422': { description: Contract validation errors }
+  /api/export:
+    post:
+      operationId: exportShopifySection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [manifest]
+              properties:
+                manifest: { $ref: '#/components/schemas/SectionManifest' }
+      responses:
+        '200':
+          description: Shopify-ready ZIP package
+          content:
+            application/zip: {}
+  /v1/compile:
+    post:
+      operationId: compileShopifySectionAuthenticated
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [manifest]
+              properties:
+                manifest: { $ref: '#/components/schemas/SectionManifest' }
+      responses:
+        '200': { description: Valid generated section files }
+        '401': { description: Missing or invalid API key }
+        '422': { description: Contract validation errors }
+  /v1/projects:
+    get:
+      operationId: listSectionProjects
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Saved projects for the connected store }
+    post:
+      operationId: saveSectionProject
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [manifest]
+              properties:
+                manifest: { $ref: '#/components/schemas/SectionManifest' }
+      responses:
+        '201': { description: Project and first immutable version }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Section OS API key
+  schemas:
+    SectionManifest:
+      type: object
+      required: [contractVersion, name, handle, description, settings, blocks, presets, source]
+      properties:
+        contractVersion: { const: 1 }
+        name: { type: string, maxLength: 50 }
+        handle: { type: string, pattern: '^[a-z0-9][a-z0-9-]*$' }
+        description: { type: string }
+        settings: { type: array, items: { type: object } }
+        blocks: { type: array, items: { type: object } }
+        presets: { type: array, minItems: 1, items: { type: object } }
+        source:
+          type: object
+          required: [liquid, css]
+          properties:
+            liquid: { type: string }
+            css: { type: string }
+            javascript: { type: string }

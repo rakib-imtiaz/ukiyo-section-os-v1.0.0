@@ -1,0 +1,27 @@
+# Replace the placeholders after creating the app in Shopify's Dev Dashboard.
+client_id = "REPLACE_WITH_SHOPIFY_CLIENT_ID"
+name = "Ukiyo Section OS"
+application_url = "https://REPLACE_WITH_APP_DOMAIN"
+embedded = false
+
+[build]
+automatically_update_urls_on_dev = true
+
+[access_scopes]
+scopes = "read_themes,write_themes"
+
+[auth]
+redirect_urls = [
+  "https://REPLACE_WITH_APP_DOMAIN/auth/shopify/callback"
+]
+
+[webhooks]
+api_version = "2026-07"
+
+[[webhooks.subscriptions]]
+topics = ["app/uninstalled"]
+uri = "/webhooks/app-uninstalled"
+
+[[webhooks.subscriptions]]
+compliance_topics = ["customers/data_request", "customers/redact", "shop/redact"]
+uri = "/webhooks/compliance"

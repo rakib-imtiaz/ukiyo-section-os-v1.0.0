@@ -1,0 +1,271 @@
+/* Tailwind v4 WITHOUT preflight — the global reset would restyle the existing
+   Ukiyo surfaces. Utilities + theme only; the factory surface carries its own
+   scoped mini-reset in the `base` layer so utilities always win over it. */
+@layer theme, base, utilities;
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/utilities.css' layer(utilities);
+
+/* ————————————————————————————————————————————————————————————————
+   MONOCHROME token set — light (default). Near-black on white.
+   Only semantic status colors (success / warning / destructive)
+   are allowed to be chromatic, and they stay minimal.
+   ———————————————————————————————————————————————————————————————— */
+.factory-root {
+  --background: #fafafa;
+  --foreground: #09090b;
+  --card: #ffffff;
+  --card-foreground: #09090b;
+  --muted: #f1f1f3;
+  --muted-foreground: #52525b;
+  --border: #e4e4e7;
+  --input: #d4d4d8;
+  --primary: #18181b;
+  --primary-foreground: #ffffff;
+  --secondary: #f1f1f3;
+  --secondary-foreground: #18181b;
+  --accent: #ececee;
+  --accent-foreground: #09090b;
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+  --ring: #18181b;
+  --success: #16a34a;
+  --warning: #b45309;
+  /* "info" tone renders NEUTRAL — no blue anywhere on this surface */
+  --info: #18181b;
+  --terminal: #0b0b0e;
+  --radius: 0.75rem;
+  /* Home-dashboard blue accent (deliberate departure from strict monochrome) */
+  --brand-blue: #3b82f6;
+  --brand-blue-strong: #4f7cff;
+
+  color-scheme: light;
+  font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  /* Bold, medium-large, high-contrast base typography */
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.5;
+  background: var(--background);
+  color: var(--foreground);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: 'ss01' 1, 'cv05' 1;
+}
+.factory-root h1, .factory-root h2, .factory-root h3 { font-weight: 700; letter-spacing: -0.015em; }
+.factory-root strong, .factory-root b { font-weight: 700; }
+.factory-root code { font-family: ui-monospace, 'Cascadia Code', 'JetBrains Mono', Consolas, monospace; }
+
+/* Dark theme — near-white on near-black; blends with the app shell */
+.factory-root[data-theme='dark'] {
+  --background: #09090b;
+  --foreground: #fafafa;
+  --card: #121214;
+  --card-foreground: #fafafa;
+  --muted: #1b1b1f;
+  --muted-foreground: #b3b3bc;
+  --border: #26262b;
+  --input: #34343b;
+  --primary: #fafafa;
+  --primary-foreground: #131316;
+  --secondary: #1e1e23;
+  --secondary-foreground: #fafafa;
+  --accent: #26262b;
+  --accent-foreground: #fafafa;
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  --ring: #d4d4d8;
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --info: #fafafa;
+  color-scheme: dark;
+}
+
+/* Scoped mini-reset (replaces Tailwind preflight inside the factory surface only).
+   Lives in the `base` layer — declared before `utilities` above — so every
+   Tailwind utility class overrides it regardless of selector specificity. */
+@layer base {
+  .factory-root *, .factory-root *::before, .factory-root *::after { border-width: 0; border-style: solid; border-color: var(--border); }
+  .factory-root button { background: none; cursor: pointer; text-align: inherit; }
+  .factory-root input, .factory-root select, .factory-root textarea, .factory-root button { font: inherit; color: inherit; }
+  .factory-root h1, .factory-root h2, .factory-root h3, .factory-root h4, .factory-root p { margin: 0; }
+  .factory-root table { border-collapse: collapse; }
+  .factory-root a { color: inherit; text-decoration: none; }
+  .factory-root ::placeholder { color: var(--muted-foreground); opacity: 0.75; }
+  .factory-root :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: 2px; }
+  .factory-root [hidden] { display: none !important; }
+  .factory-root svg { display: inline-block; vertical-align: middle; }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-ring: var(--ring);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
+  --color-terminal: var(--terminal);
+  --color-brand-blue: var(--brand-blue);
+  --color-brand-blue-strong: var(--brand-blue-strong);
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+}
+
+/* Slim, theme-aware scrollbars inside the surface */
+.factory-root * { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--foreground) 22%, transparent) transparent; }
+.factory-root ::-webkit-scrollbar { width: 10px; height: 10px; }
+.factory-root ::-webkit-scrollbar-thumb { border: 3px solid transparent; border-radius: 8px; background-color: color-mix(in srgb, var(--foreground) 22%, transparent); background-clip: content-box; }
+.factory-root ::-webkit-scrollbar-track { background: transparent; }
+
+/* ————————————————————————————————————————————————————————————————
+   Motion system (hand-rolled react-bits-style effects, monochrome)
+   ———————————————————————————————————————————————————————————————— */
+
+/* Entrances */
+.factory-root .fade-in { animation: factory-fade-in 0.25s ease both; }
+@keyframes factory-fade-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+.factory-root .rise-in { animation: factory-rise 0.5s cubic-bezier(0.165, 0.84, 0.44, 1) both; }
+.factory-root .stagger > * { animation: factory-rise 0.5s cubic-bezier(0.165, 0.84, 0.44, 1) both; }
+.factory-root .stagger > *:nth-child(1) { animation-delay: 0.03s; }
+.factory-root .stagger > *:nth-child(2) { animation-delay: 0.08s; }
+.factory-root .stagger > *:nth-child(3) { animation-delay: 0.13s; }
+.factory-root .stagger > *:nth-child(4) { animation-delay: 0.18s; }
+.factory-root .stagger > *:nth-child(5) { animation-delay: 0.23s; }
+.factory-root .stagger > *:nth-child(6) { animation-delay: 0.28s; }
+.factory-root .stagger > *:nth-child(7) { animation-delay: 0.33s; }
+.factory-root .stagger > *:nth-child(8) { animation-delay: 0.38s; }
+.factory-root .stagger > *:nth-child(9) { animation-delay: 0.43s; }
+.factory-root .stagger > *:nth-child(10) { animation-delay: 0.48s; }
+.factory-root .stagger > *:nth-child(11) { animation-delay: 0.53s; }
+.factory-root .stagger > *:nth-child(n+12) { animation-delay: 0.58s; }
+@keyframes factory-rise { from { opacity: 0; transform: translateY(14px) scale(0.99); } to { opacity: 1; transform: none; } }
+
+/* Tab-panel cross-fade (re-runs whenever the panel is re-keyed) */
+.factory-root .tab-panel { animation: factory-rise 0.35s cubic-bezier(0.165, 0.84, 0.44, 1) both; }
+
+/* Spotlight card — radial monochrome highlight follows the cursor */
+.factory-root .spotlight-card { position: relative; overflow: hidden; transition: transform 0.25s cubic-bezier(0.165, 0.84, 0.44, 1), box-shadow 0.25s ease, border-color 0.25s ease; }
+.factory-root .spotlight-card::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.4s ease; z-index: 0;
+  background: radial-gradient(420px circle at var(--spot-x, 50%) var(--spot-y, 50%), color-mix(in srgb, var(--foreground) 6%, transparent), transparent 65%);
+}
+.factory-root .spotlight-card:hover::before { opacity: 1; }
+.factory-root .spotlight-card:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--foreground) 24%, var(--border)); box-shadow: 0 12px 34px -14px color-mix(in srgb, var(--foreground) 28%, transparent); }
+.factory-root .spotlight-card > * { position: relative; z-index: 1; }
+
+/* Animated running border (StarBorder style, monochrome) for in-progress jobs */
+@property --border-angle { syntax: '<angle>'; initial-value: 0deg; inherits: false; }
+.factory-root .live-border { position: relative; }
+.factory-root .live-border::after {
+  content: ''; position: absolute; inset: -1px; border-radius: inherit; padding: 1.5px; pointer-events: none; z-index: 2;
+  background: conic-gradient(from var(--border-angle, 0deg),
+    transparent 0deg 120deg, color-mix(in srgb, var(--foreground) 85%, transparent) 158deg, transparent 196deg,
+    transparent 300deg, color-mix(in srgb, var(--foreground) 45%, transparent) 338deg, transparent 360deg);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
+  animation: factory-border-spin 3.4s linear infinite;
+}
+@keyframes factory-border-spin { to { --border-angle: 360deg; } }
+
+/* Spinning logo mark */
+.factory-root .spin-slow { animation: factory-spin 8s linear infinite; }
+.factory-root .spin-on-hover:hover .spin-slow { animation-duration: 1.1s; }
+@keyframes factory-spin { to { transform: rotate(360deg); } }
+
+/* Pulsing live dot (radar ping) */
+.factory-root .pulse-dot { position: relative; }
+.factory-root .pulse-dot::after { content: ''; position: absolute; inset: 0; border-radius: inherit; background: currentColor; animation: factory-ping 1.7s cubic-bezier(0, 0, 0.2, 1) infinite; }
+@keyframes factory-ping { 0% { transform: scale(1); opacity: 0.65; } 80%, 100% { transform: scale(2.6); opacity: 0; } }
+
+/* Shiny text sweep (react-bits ShinyText, monochrome) */
+.factory-root .shiny-text {
+  background: linear-gradient(115deg, var(--foreground) 42%, color-mix(in srgb, var(--foreground) 30%, var(--background)) 50%, var(--foreground) 58%);
+  background-size: 220% 100%; -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: factory-shine 4s linear infinite;
+}
+@keyframes factory-shine { from { background-position: 200% 0; } to { background-position: -20% 0; } }
+
+/* Progress bar activity shine (only while a job is running) */
+.factory-root .progress-shine {
+  background-image: linear-gradient(110deg, transparent 25%, color-mix(in srgb, var(--primary-foreground) 35%, transparent) 50%, transparent 75%);
+  background-size: 220% 100%;
+  animation: factory-progress-shine 1.9s linear infinite;
+}
+@keyframes factory-progress-shine { from { background-position: 180% 0; } to { background-position: -80% 0; } }
+
+/* Skeleton shimmer sweep */
+.factory-root .skeleton { position: relative; overflow: hidden; background: var(--muted); }
+.factory-root .skeleton::after {
+  content: ''; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--foreground) 6%, transparent), transparent);
+  animation: factory-shimmer 1.6s ease infinite;
+}
+@keyframes factory-shimmer { to { transform: translateX(100%); } }
+
+/* Sparkline draw-on (pair with pathLength={1} on the SVG shape) */
+.factory-root .spark-draw { stroke-dasharray: 1; stroke-dashoffset: 1; animation: factory-draw 0.9s ease-out 0.15s forwards; }
+@keyframes factory-draw { to { stroke-dashoffset: 0; } }
+.factory-root .spark-fill { animation: factory-fade-in 0.6s ease 0.5s both; }
+
+/* Popovers / menus */
+.factory-root .pop-in { animation: factory-pop 0.18s cubic-bezier(0.165, 0.84, 0.44, 1) both; transform-origin: top right; }
+@keyframes factory-pop { from { opacity: 0; transform: scale(0.96) translateY(-4px); } to { opacity: 1; transform: none; } }
+
+/* Toasts */
+.factory-root .toast-in { animation: factory-toast 0.32s cubic-bezier(0.165, 0.84, 0.44, 1) both; }
+@keyframes factory-toast { from { opacity: 0; transform: translateX(26px) scale(0.98); } to { opacity: 1; transform: none; } }
+
+/* Sheet (slide-over) — mount/unmount presence transitions */
+.factory-root .sheet-overlay { opacity: 1; transition: opacity 0.3s ease; }
+.factory-root .sheet-overlay[data-state='closed'] { opacity: 0; }
+.factory-root .sheet-panel { transform: translateX(0); opacity: 1; transition: transform 0.34s cubic-bezier(0.32, 0.72, 0, 1), opacity 0.3s ease; }
+.factory-root .sheet-panel[data-state='closed'] { transform: translateX(56px); opacity: 0; }
+
+/* Dialog — pop presence transitions */
+.factory-root .dialog-overlay { opacity: 1; transition: opacity 0.22s ease; }
+.factory-root .dialog-overlay[data-state='closed'] { opacity: 0; }
+.factory-root .dialog-panel { opacity: 1; transform: none; transition: opacity 0.22s ease, transform 0.22s cubic-bezier(0.165, 0.84, 0.44, 1); }
+.factory-root .dialog-panel[data-state='closed'] { opacity: 0; transform: translateY(12px) scale(0.97); }
+
+/* Decorative dot grid (empty states) */
+.factory-root .dot-grid {
+  background-image: radial-gradient(color-mix(in srgb, var(--foreground) 12%, transparent) 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+
+/* ————————————————————————————————————————————————————————————————
+   Intro sequence (once per session, skippable)
+   ———————————————————————————————————————————————————————————————— */
+.factory-root .intro-overlay { opacity: 1; transition: opacity 0.5s ease; }
+.factory-root .intro-overlay[data-state='closed'] { opacity: 0; pointer-events: none; }
+.factory-root .intro-mark { animation: factory-intro-mark 0.7s cubic-bezier(0.165, 0.84, 0.44, 1) both; }
+@keyframes factory-intro-mark { from { opacity: 0; transform: scale(0.5) rotate(-120deg); } to { opacity: 1; transform: none; } }
+.factory-root .intro-letter { display: inline-block; animation: factory-intro-letter 0.55s cubic-bezier(0.165, 0.84, 0.44, 1) both; animation-delay: calc(0.28s + var(--letter-i, 0) * 0.045s); }
+@keyframes factory-intro-letter { from { opacity: 0; transform: translateY(16px); filter: blur(8px); } to { opacity: 1; transform: none; filter: blur(0); } }
+.factory-root .intro-tagline { animation: factory-fade-in 0.6s ease 0.95s both; }
+.factory-root .intro-skip { animation: factory-fade-in 0.5s ease 1.1s both; }
+
+/* Respect reduced motion — kill every animation & transition on the surface */
+@media (prefers-reduced-motion: reduce) {
+  .factory-root *, .factory-root *::before, .factory-root *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+  .factory-root .stagger > *, .factory-root .rise-in, .factory-root .tab-panel, .factory-root .fade-in { opacity: 1; transform: none; }
+  .factory-root .spark-draw { stroke-dashoffset: 0; }
+  .factory-root .shiny-text { background: none; color: var(--foreground); animation: none !important; }
+}

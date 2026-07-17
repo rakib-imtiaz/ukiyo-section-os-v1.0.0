@@ -1,0 +1,111 @@
+/* HOME dashboard skin — blue-accent overlay on the factory token set.
+   Scoped to .home-root (a .factory-root variant) so both themes keep working:
+   light = airy #f3f5f9 page + white cards, dark = #141417 cards, same blue. */
+
+.factory-root.home-root { --background: #f3f5f9; background: var(--background); }
+.factory-root.home-root[data-theme='dark'] { --background: #0b0b0e; --card: #141417; }
+
+/* Serif italic hero word (Newsreader is loaded globally in styles.css) */
+.factory-root .home-serif {
+  font-family: Newsreader, Georgia, serif;
+  font-style: italic;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  color: var(--brand-blue);
+}
+
+/* Soft premium card shadow (light only; dark stays flat) */
+.factory-root .home-card { min-width: 0; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 10px 30px -22px rgba(15, 23, 42, 0.35); }
+/* No card content may ever bleed past its bounds (decorative PNGs opt out via .home-card--bleed). */
+.factory-root .home-card:not(.home-card--bleed) { overflow: hidden; }
+.factory-root[data-theme='dark'] .home-card { box-shadow: none; }
+
+/* Blue gradient fill for active/primary elements */
+.factory-root .home-blue-fill {
+  background: linear-gradient(135deg, var(--brand-blue-strong), var(--brand-blue));
+  color: #ffffff;
+  box-shadow: 0 8px 18px -8px rgba(59, 130, 246, 0.65);
+}
+
+/* ————— Terminal card ————— */
+.factory-root .home-terminal {
+  background: var(--terminal);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  color: #e4e4e7;
+}
+/* Dark mode: flip the terminal to a light card with dark text (it otherwise vanishes on the dark page). */
+.factory-root[data-theme='dark'] .home-terminal {
+  background: #ffffff;
+  border-color: rgba(0, 0, 0, 0.08);
+  color: #18181b;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.28);
+}
+.factory-root[data-theme='dark'] .home-terminal .text-zinc-200 { color: #18181b; }
+.factory-root[data-theme='dark'] .home-terminal .text-zinc-400 { color: #52525b; }
+.factory-root[data-theme='dark'] .home-terminal .text-zinc-500 { color: #71717a; }
+.factory-root[data-theme='dark'] .home-terminal .text-success { color: #15803d; }
+.factory-root[data-theme='dark'] .home-terminal .text-red-400 { color: #dc2626; }
+.factory-root[data-theme='dark'] .home-terminal .bg-success { background-color: #15803d; }
+.factory-root[data-theme='dark'] .home-terminal .home-caret { background: #18181b; }
+.factory-root .home-log-line {
+  display: grid;
+  grid-template-columns: 58px 14px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  animation: home-log-in 0.45s cubic-bezier(0.165, 0.84, 0.44, 1) both;
+}
+@keyframes home-log-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+/* Live (real job) lines carry no timestamp column — glyph + text only. */
+.factory-root .home-log-line--live { grid-template-columns: 14px minmax(0, 1fr); }
+.factory-root .home-caret { display: inline-block; width: 7px; height: 13px; background: #d4d4d8; animation: home-caret-blink 1.1s steps(1) infinite; }
+@keyframes home-caret-blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+
+/* ————— Pipeline progress track (inside terminal) ————— */
+.factory-root .home-pipe { display: flex; align-items: flex-start; margin-top: 18px; padding-top: 16px; border-top: 1px solid rgba(255, 255, 255, 0.08); }
+.factory-root .home-pipe__node { display: flex; flex-direction: column; align-items: center; gap: 7px; }
+.factory-root .home-pipe__dot { width: 10px; height: 10px; border-radius: 50%; background: #3f3f46; transition: background 0.3s ease, box-shadow 0.3s ease; }
+.factory-root .home-pipe__node.is-done .home-pipe__dot { background: var(--brand-blue); }
+.factory-root .home-pipe__node.is-active .home-pipe__dot {
+  background: var(--brand-blue);
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.22), 0 0 16px rgba(59, 130, 246, 0.85);
+  animation: home-node-pulse 1.9s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+@keyframes home-node-pulse {
+  0%, 100% { box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.22), 0 0 16px rgba(59, 130, 246, 0.85); }
+  50% { box-shadow: 0 0 0 7px rgba(59, 130, 246, 0.12), 0 0 24px rgba(59, 130, 246, 0.55); }
+}
+.factory-root .home-pipe__label { font-size: 8.5px; font-weight: 700; letter-spacing: 0.14em; color: #71717a; }
+.factory-root .home-pipe__node.is-active .home-pipe__label { color: #ffffff; }
+.factory-root .home-pipe__node.is-done .home-pipe__label { color: #a1a1aa; }
+.factory-root .home-pipe__seg { flex: 1 1 0; height: 2px; margin: 4px 6px 0; border-radius: 2px; background: #3f3f46; }
+.factory-root .home-pipe__seg.is-filled { background: linear-gradient(90deg, var(--brand-blue-strong), var(--brand-blue)); box-shadow: 0 0 8px rgba(59, 130, 246, 0.5); }
+
+/* ————— Decorative floating PNGs ————— */
+.factory-root .home-float { animation: home-float 5.5s ease-in-out infinite; }
+.factory-root .home-float-slow { animation: home-float 7s ease-in-out infinite; }
+@keyframes home-float { 0%, 100% { transform: translateY(0) rotate(0deg); } 50% { transform: translateY(-7px) rotate(-2deg); } }
+
+/* ————— Right-rail operations log tabs ————— */
+.factory-root .home-tab { position: relative; padding: 6px 2px 9px; font-size: 11.5px; font-weight: 700; color: var(--muted-foreground); transition: color 0.2s ease; }
+.factory-root .home-tab:hover { color: var(--foreground); }
+.factory-root .home-tab.is-active { color: var(--foreground); }
+.factory-root .home-tab.is-active::after {
+  content: ''; position: absolute; right: 0; bottom: -1px; left: 0; height: 2px; border-radius: 2px;
+  background: linear-gradient(90deg, var(--brand-blue-strong), var(--brand-blue));
+}
+
+/* Green progress bar (pipeline status card) */
+.factory-root .home-progress-green {
+  height: 8px; border-radius: 999px; overflow: hidden; background: var(--muted);
+}
+.factory-root .home-progress-green > i {
+  display: block; height: 100%; border-radius: 999px;
+  background: linear-gradient(90deg, #34d399, #16a34a);
+  transition: width 1s cubic-bezier(0.165, 0.84, 0.44, 1);
+}
+
+/* Reduced motion: theme.css already kills all animation inside .factory-root;
+   make sure the staggered log lines still end up visible. */
+@media (prefers-reduced-motion: reduce) {
+  .factory-root .home-log-line { opacity: 1; transform: none; }
+}
