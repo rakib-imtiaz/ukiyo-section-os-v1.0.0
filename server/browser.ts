@@ -286,7 +286,20 @@ class BrowserManager {
   /** Wrap a Playwright page as a tracked tab (idempotent — a page is only ever tracked once). */
   private async trackPage(page: Page, opts: { url?: string; activate?: boolean } = {}): Promise<Tab> {
     const existing = this.tabForPage(page);
-    if (existing) return existing;
+    if (existing) {
+      // RACE: context.on('page') adopts every new page (with no url) and usually claims it before
+      // createTab's own trackPage call runs — which used to silently drop createTab's target URL,
+      // leaving the tab on the branded new-tab page. If we hold a URL for an adopted-but-blank
+      // page, navigate it now (setContent leaves page.url() at about:blank, so this check covers
+      // both the raw-blank and branded-new-tab states).
+      if (opts.url && page.url() === 'about:blank') {
+        try { await page.goto(opts.url, { waitUntil: 'domcontentloaded', timeout: 20000 }); } catch { /* ignore */ }
+        await this.refreshNav(existing);
+        await this.pushFrame(existing);
+      }
+      if (opts.activate) { this.activeId = existing.id; this.broadcastTabs(); }
+      return existing;
+    }
     const tab: Tab = { id: this.nextTabId++, page, cdp: null, console: [], network: [], nav: { url: 'about:blank', title: 'New tab', canGoBack: false, canGoForward: false, loading: false }, lastFrame: null };
     this.tabs.set(tab.id, tab);
     this.order.push(tab.id);
