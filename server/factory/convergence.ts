@@ -1,7 +1,9 @@
-import { access, readFile, readdir, writeFile } from 'node:fs/promises';
+import { access, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { config } from '../config';
 import { db, type FactoryJobRecord } from '../db';
+import { decrypt } from '../security';
 import { runQa } from './qa';
 import { clearSignalFiles, cloneBlockerSignals, spawnClone, spawnFix, type RunHandle } from './runner';
 import { trustWorkspace } from './scaffolder';
@@ -13,6 +15,88 @@ const min = (minutes: number) => minutes * 60_000;
 const PROMPT_TEMPLATE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../templates/factory/prompts/fix-session.md');
 
 async function fileExists(target: string) { return access(target).then(() => true, () => false); }
+
+/**
+ * Post-convergence live swap (Task 2). The bundled /clone-theme command no longer publishes to
+ * the live theme during the initial clone (that shipped an un-converged clone to customers and
+ * the fix loop only ever pushed to the dev theme). Instead the swap happens HERE, exactly once,
+ * after the QA↔fix loop converges — and only when the job opted into autoswap. Publishing the dev
+ * theme (role=main) atomically makes the converged clone the live theme.
+ */
+async function publishDevThemeToLive(job: FactoryJobRecord): Promise<{ ok: boolean; detail: string }> {
+  try {
+    const clientId = decrypt(job.client_id_cipher);
+    const clientSecret = decrypt(job.client_secret_cipher);
+    const shop = new URL(job.store_url).host;
+    const mintResponse = await fetch(`https://${shop}/admin/oauth/access_token`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_id: clientId, client_secret: clientSecret, grant_type: 'client_credentials' }),
+    });
+    if (!mintResponse.ok) return { ok: false, detail: `token mint HTTP ${mintResponse.status}` };
+    const token = ((await mintResponse.json()) as { access_token: string }).access_token;
+    const api = `https://${shop}/admin/api/${config.shopify.apiVersion}`;
+    const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+
+    let devThemeId: number | undefined;
+    try {
+      const state = JSON.parse(await readFile(path.join(job.workspace_path, 'qa', 'state', 'theme.json'), 'utf8')) as { dev_theme_id?: number };
+      devThemeId = state.dev_theme_id;
+    } catch { /* fall through to name lookup */ }
+    if (!devThemeId) {
+      const list = (await (await fetch(`${api}/themes.json`, { headers })).json()) as { themes?: Array<{ id: number; name: string }> };
+      devThemeId = list.themes?.find((theme) => theme.name === job.dev_theme_name)?.id;
+    }
+    if (!devThemeId) return { ok: false, detail: 'dev theme id not found (qa/state/theme.json missing and no name match)' };
+
+    const publish = await fetch(`${api}/themes/${devThemeId}.json`, {
+      method: 'PUT', headers, body: JSON.stringify({ theme: { id: devThemeId, role: 'main' } }),
+    });
+    if (!publish.ok) return { ok: false, detail: `publish HTTP ${publish.status}: ${(await publish.text()).slice(0, 150)}` };
+    return { ok: true, detail: `dev theme ${devThemeId} published to live` };
+  } catch (error) {
+    return { ok: false, detail: error instanceof Error ? error.message : 'unknown publish error' };
+  }
+}
+
+/** Runs the guarded live swap when autoswap is on; returns a suffix for the converged status_detail. */
+async function autoswapSuffix(job: FactoryJobRecord): Promise<string> {
+  if (!job.autoswap) return '';
+  const result = await publishDevThemeToLive(job);
+  return result.ok
+    ? ` · Published to live (${result.detail}).`
+    : ` · WARNING: autoswap to live FAILED — clone left on the dev theme (${result.detail}).`;
+}
+
+/**
+ * keepIterations pruning (Task 3). Iteration artifacts (screenshots, QA/section/interaction
+ * reports, per-iteration logs, fix prompts/sentinels) grew unbounded because keepIterations was
+ * persisted but never consumed. After each iteration, drop artifacts for iterations older than the
+ * keep window. The floor of 2 guarantees the previous iteration survives — runQa reads iter-1 for
+ * its "fixed since last iteration" delta.
+ */
+async function pruneIterationArtifacts(job: FactoryJobRecord, keep: number, currentIteration: number) {
+  const cutoff = currentIteration - Math.max(2, keep);
+  if (cutoff < 1) return;
+  const root = job.workspace_path;
+  const factoryReports = path.join(root, 'qa', 'reports', 'factory');
+  const logs = path.join(root, 'factory', 'logs');
+  const targets: string[] = [];
+  for (let n = 1; n <= cutoff; n++) {
+    targets.push(
+      path.join(root, 'qa', 'screenshots', 'factory', String(n)),
+      path.join(factoryReports, `qa-summary-${n}.md`),
+      path.join(factoryReports, `sections-${n}.md`),
+      path.join(factoryReports, `sections-${n}.json`),
+      path.join(factoryReports, `interactions-${n}.md`),
+      path.join(factoryReports, `interactions-${n}.json`),
+      path.join(root, 'qa', 'reports', `fix-complete-${n}.md`),
+      path.join(logs, `qa-${n}.log`),
+      path.join(logs, `fix-${n}.log`),
+      path.join(root, 'factory', `fix-prompt-${n}.md`),
+    );
+  }
+  await Promise.all(targets.map((target) => rm(target, { recursive: true, force: true }).catch(() => {})));
+}
 
 async function firstLines(target: string, count = 6) {
   try { return (await readFile(target, 'utf8')).split(/\r?\n/).filter(Boolean).slice(0, count).join(' | ').slice(0, 500); } catch { return ''; }
@@ -128,7 +212,8 @@ export async function driveJob(jobId: string, control: DriveControl) {
 
     job = (await db.getFactoryJob(jobId))!;
     if (!job.auto_qa) {
-      await transition(job.id, 'converged', 'Clone complete — QA skipped (auto-QA off)', { finished_at: new Date().toISOString() });
+      const swap = await autoswapSuffix(job);
+      await transition(job.id, 'converged', `Clone complete — QA skipped (auto-QA off)${swap}`, { finished_at: new Date().toISOString() });
       return;
     }
 
@@ -180,9 +265,13 @@ async function runConvergenceLoop(job: FactoryJobRecord, settings: FactorySettin
     await db.finishFactoryIteration(qaRow.id, regressed ? 'regressed' : 'succeeded', { score: qa.score, breakdown: qa.breakdown, report_path: qa.summaryPath });
     await db.updateFactoryJob(job.id, { last_score: qa.score, score_history: history });
 
+    // Bound disk growth: drop artifacts for iterations older than the keep window.
+    await pruneIterationArtifacts(job, settings.keepIterations, iteration);
+
     // b) Exit conditions
     if (qa.score >= job.score_threshold) {
-      await transition(job.id, 'converged', `Converged at ${(qa.score * 100).toFixed(1)}% after ${iteration} iteration(s)`, { finished_at: new Date().toISOString() });
+      const swap = await autoswapSuffix(job);
+      await transition(job.id, 'converged', `Converged at ${(qa.score * 100).toFixed(1)}% after ${iteration} iteration(s)${swap}`, { finished_at: new Date().toISOString() });
       return;
     }
     if (regressionStreak >= 2) {

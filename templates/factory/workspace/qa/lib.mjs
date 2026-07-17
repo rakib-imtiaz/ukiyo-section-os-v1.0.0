@@ -19,32 +19,56 @@ export function project() {
   return { root: ROOT, reactUrl, storeUrl, ...job };
 }
 
-/** Client ID + Secret from API.txt, login host from TARGET_SITE_INFO.txt. */
+/** Resolve the *.myshopify.com login host from TARGET_SITE_INFO.txt. */
+export function loginHost() {
+  const { storeUrl } = project();
+  const match = (storeUrl || '').match(/([a-z0-9-]+\.myshopify\.com)/i);
+  if (!match) throw new Error('TARGET_SITE_INFO.txt: no *.myshopify.com URL found');
+  return match[1];
+}
+
+/**
+ * Fallback ONLY: Client ID + Secret straight from API.txt, for fully-manual/standalone use with
+ * no factory app running. In factory mode the Secret is NOT on disk — `mint()` uses the app's
+ * localhost-only mint endpoint instead, so this is never reached.
+ */
 export function creds() {
   const lines = readFileSync(path.join(ROOT, 'API.txt'), 'utf8').split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
   const id = lines.map((l) => l.replace(/^client\s*id\s*:?\s*/i, '')).find((l) => /^[0-9a-f]{32}$/i.test(l));
   const secret = lines.map((l) => l.replace(/^client\s*secret\s*:?\s*/i, '')).find((l) => /^shpss_/.test(l));
   if (!id) throw new Error('API.txt: no 32-char hex Client ID found');
-  if (!secret) throw new Error('API.txt: no shpss_* Client Secret found');
-  const { storeUrl } = project();
-  const match = (storeUrl || '').match(/([a-z0-9-]+\.myshopify\.com)/i);
-  if (!match) throw new Error('TARGET_SITE_INFO.txt: no *.myshopify.com URL found');
-  return { id, secret, loginHost: match[1] };
+  if (!secret) throw new Error('API.txt: no shpss_* Client Secret found (factory mode mints via the app endpoint instead)');
+  return { id, secret, loginHost: loginHost() };
 }
 
-/** Mint a fresh 24h shpat_ token via client_credentials; resolve the canonical shop host. */
+/**
+ * Mint a fresh 24h shpat_ token and resolve the canonical shop host.
+ * Preferred path (factory mode): POST the app's localhost-only mint endpoint, which decrypts the
+ * job credentials in memory — no Shopify Client Secret ever touches the workspace disk.
+ * Fallback (no job.json mint wiring): OAuth client_credentials straight from API.txt.
+ */
 export async function mint() {
-  const { id, secret, loginHost } = creds();
-  const r = await fetch(`https://${loginHost}/admin/oauth/access_token`, {
+  const proj = project();
+  if (proj.mint_url && proj.mint_key) {
+    const r = await fetch(proj.mint_url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-factory-mint-key': proj.mint_key },
+    });
+    if (!r.ok) throw new Error(`mint endpoint HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
+    const tok = JSON.parse(await r.text());
+    return { token: tok.access_token, scope: tok.scope || '', host: tok.host || loginHost() };
+  }
+  const { id, secret, loginHost: host0 } = creds();
+  const r = await fetch(`https://${host0}/admin/oauth/access_token`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ client_id: id, client_secret: secret, grant_type: 'client_credentials' }),
   });
   if (!r.ok) throw new Error(`token mint HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
   const tok = JSON.parse(await r.text());
-  const sr = await fetch(`https://${loginHost}/admin/api/${API_VER}/shop.json`, {
+  const sr = await fetch(`https://${host0}/admin/api/${API_VER}/shop.json`, {
     headers: { 'X-Shopify-Access-Token': tok.access_token },
   });
-  const host = sr.ok ? (await sr.json()).shop.myshopify_domain : loginHost;
+  const host = sr.ok ? (await sr.json()).shop.myshopify_domain : host0;
   return { token: tok.access_token, scope: tok.scope, host };
 }
 

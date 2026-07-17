@@ -1,20 +1,27 @@
-export type SettingType =
-  | 'text'
-  | 'textarea'
-  | 'richtext'
-  | 'inline_richtext'
-  | 'url'
-  | 'image_picker'
-  | 'video'
-  | 'video_url'
-  | 'color'
-  | 'color_background'
-  | 'range'
-  | 'checkbox'
-  | 'select'
-  | 'text_alignment'
-  | 'product'
-  | 'collection';
+// Single source of truth for the setting types the contract accepts. Every entry
+// here is a valid native Shopify section setting `type`, so the compiler can trust
+// that a type passing validation is also Shopify-valid. Keep SettingType derived
+// from this array so the zod schema (validation.ts) and the TS type never drift.
+export const SETTING_TYPES = [
+  'text',
+  'textarea',
+  'richtext',
+  'inline_richtext',
+  'url',
+  'image_picker',
+  'video',
+  'video_url',
+  'color',
+  'color_background',
+  'range',
+  'checkbox',
+  'select',
+  'text_alignment',
+  'product',
+  'collection',
+] as const;
+
+export type SettingType = (typeof SETTING_TYPES)[number];
 
 export interface SettingOption {
   value: string;

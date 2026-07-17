@@ -57,10 +57,17 @@ describe('scaffoldWorkspace', () => {
     expect(target).toContain('https://wild-sacred.myshopify.com');
     expect(target).toContain('pw123');
     const api = await readFile(path.join(workspace, 'API.txt'), 'utf8');
-    expect(api).toContain('a'.repeat(32));
-    expect(api).toContain('shpss_test_secret');
+    expect(api).toContain('a'.repeat(32)); // Client ID (a public app identifier) is kept for reference
+    expect(api).not.toContain('shpss_test_secret'); // SECURITY: the Client Secret must never be written to disk
     const jobJson = JSON.parse(await readFile(path.join(workspace, 'job.json'), 'utf8'));
     expect(jobJson).toMatchObject({ factory: true, approved: true, name: 'Wild & Sacred', prefix: 'ws', autoswap: false, dev_theme_name: 'Wild & Sacred Clone (dev)' });
+    // token-mint wiring replaces the on-disk secret
+    expect(jobJson.job_id).toBe('job-1');
+    expect(jobJson.mint_url).toContain('/api/factory/jobs/job-1/mint-token');
+    expect(typeof jobJson.mint_key).toBe('string');
+    expect(jobJson.mint_key.length).toBeGreaterThan(0);
+    // the /clone-theme command is bundled into the workspace so headless runs are self-contained
+    expect(await exists(path.join(workspace, '.claude/commands/clone-theme.md'))).toBe(true);
 
     // six pre-placed headless scaffold files
     for (const file of ['push.mjs', 'pull.mjs', 'preflight.mjs', 'qa/lib.mjs', 'qa/bootstrap-theme.mjs', 'seed/CONVENTIONS.md']) {
@@ -94,8 +101,10 @@ describe('scaffoldWorkspace', () => {
     const result = await scaffoldWorkspace({ job: job(workspace), clientId: 'b'.repeat(32), clientSecret: 'shpss_other', reactFilesPath: reactSource });
     expect(result.adopted).toBe(true);
     expect(await readFile(path.join(workspace, 'push.mjs'), 'utf8')).toBe('// customized');
-    // but job inputs are refreshed
-    expect(await readFile(path.join(workspace, 'API.txt'), 'utf8')).toContain('shpss_other');
+    // but job inputs are refreshed — and the Client Secret is still never written to disk
+    const apiTxt = await readFile(path.join(workspace, 'API.txt'), 'utf8');
+    expect(apiTxt).not.toContain('shpss_other');
+    expect(apiTxt).toContain('b'.repeat(32));
   });
 
   it('fails clearly when the react_files source is missing', async () => {

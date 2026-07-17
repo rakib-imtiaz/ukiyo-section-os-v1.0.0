@@ -4,13 +4,13 @@
 // deliberate departure from the app's strict monochrome (see home/home.css).
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import {
-  ArrowRight, BookOpen, FolderKanban, KeyRound, Layers3, Link2, Plus, Rocket, WandSparkles,
+  ArrowRight, BookOpen, Factory, FolderKanban, KeyRound, Layers3, Link2, Plus, Rocket, WandSparkles,
 } from 'lucide-react';
 import './factory/theme.css';
 import './home/home.css';
 import { SpotlightCard, useReducedMotion } from './factory/fx';
 import { useLiveFactory } from './home/useLiveFactory';
-import type { Iteration, Job } from './factory/types';
+import type { Iteration, Job, JobStatus } from './factory/types';
 
 export type HomeTarget = 'factory' | 'build' | 'projects' | 'contract' | 'deploy' | 'settings' | 'code';
 
@@ -188,26 +188,10 @@ const PIPELINE_LOG: LogLine[] = [
   { t: '10:40:58', glyph: '✓', text: 'Preview URL: themebot.dev/theme/1a2b3c4d', dot: 'green' },
 ];
 
-const QA_LOG: LogLine[] = [
-  { t: '10:42:04', glyph: '▸', text: 'Launching headless Chromium...', dot: 'blue' },
-  { t: '10:41:48', glyph: '✓', text: 'Layout parity 96% — desktop', dot: 'green' },
-  { t: '10:41:31', glyph: '▸', text: 'Diffing hero typography...', dot: 'orange' },
-  { t: '10:41:12', glyph: '✓', text: 'Interaction sweep passed', dot: 'green' },
-  { t: '10:40:55', glyph: '●', text: 'QA iteration 4 queued', dot: 'blue' },
-];
-
-const DEPLOY_LOG: LogLine[] = [
-  { t: '10:41:03', glyph: '▸', text: 'Pushing sections/*.liquid...', dot: 'blue' },
-  { t: '10:41:00', glyph: '●', text: 'Deployment queued', dot: 'blue' },
-  { t: '10:40:58', glyph: '✓', text: 'Preview URL: themebot.dev/theme/1a2b3c4d', dot: 'green' },
-  { t: '10:38:12', glyph: '✓', text: 'Theme snapshot saved (rollback ready)', dot: 'green' },
-  { t: '10:37:44', glyph: '▸', text: 'Compiling section package...', dot: 'orange' },
-];
-
 const PIPE_NODES = ['CLONE', 'QA', 'FIX', 'DEPLOY'] as const;
 
 function pipeIndexFor(job: Job | null): number {
-  if (!job) return 2; // FIX highlighted, as mocked
+  if (!job) return -1; // no live job → no node highlighted (honest idle state)
   switch (job.status) {
     case 'queued': case 'scaffolding': case 'cloning': return 0;
     case 'qa_running': return 1;
@@ -303,7 +287,7 @@ function TerminalCard({ job, lines, reduced, bootLines }: { job: Job | null; lin
           </div>
         </div>
       )}
-      <div className="home-pipe mt-auto" role="img" aria-label={`Pipeline: ${PIPE_NODES[active]} in progress`}>
+      <div className="home-pipe mt-auto" role="img" aria-label={active >= 0 ? `Pipeline: ${PIPE_NODES[active]} in progress` : 'Pipeline idle — no active job'}>
         {PIPE_NODES.map((node, index) => (
           <Fragment key={node}>
             {index > 0 && <span className={`home-pipe__seg${index <= active ? ' is-filled' : ''}`} aria-hidden />}
@@ -433,9 +417,18 @@ function FeatureGrid({ onNavigate, projectCount, deploymentCount }: {
         <BuilderMiniPreview />
       </FeatureCard>
       <FeatureCard
+        icon={<Factory />}
+        title="Clone Factory"
+        chip="Autonomous"
+        copy="Clone entire React sites into Shopify stores autonomously, with real-browser QA and auto-fix loops."
+        cta="New clone job"
+        onClick={() => onNavigate('factory')}
+        image="/home-assets/glowing_orbital_diagram_on_transparent_background.png"
+      />
+      <FeatureCard
         icon={<FolderKanban />}
         title="Projects Library"
-        chip={`${projectCount ?? 12} projects`}
+        chip={projectCount != null ? `${projectCount} projects` : undefined}
         copy="Every saved section project, versioned on each change and ready to reopen or redeploy."
         cta="Browse projects"
         onClick={() => onNavigate('projects')}
@@ -444,11 +437,11 @@ function FeatureGrid({ onNavigate, projectCount, deploymentCount }: {
       <FeatureCard
         icon={<Rocket />}
         title="Deployments"
-        chip={`${deploymentCount ?? 3} active`}
+        chip={deploymentCount != null ? `${deploymentCount} active` : undefined}
         copy="Install compiled section packages to unpublished themes, with a full ledger and one-click rollback."
         cta="View deployments"
         onClick={() => onNavigate('deploy')}
-        image="/home-assets/glowing_orbital_diagram_on_transparent_background.png"
+        image="/home-assets/glowing_status_icons_on_transparent_background.png"
       />
       <FeatureCard
         icon={<KeyRound />}
@@ -498,7 +491,6 @@ function BannerRow() {
 
 const OPS_TABS = ['Pipeline', 'QA', 'Deploy'] as const;
 type OpsTab = (typeof OPS_TABS)[number];
-const OPS_ENTRIES: Record<OpsTab, LogLine[]> = { Pipeline: PIPELINE_LOG, QA: QA_LOG, Deploy: DEPLOY_LOG };
 const DOT_CLASS: Record<LogLine['dot'], string> = { blue: 'bg-brand-blue', green: 'bg-success', orange: 'bg-warning' };
 
 function iterationDot(status: string): LogLine['dot'] {
@@ -520,10 +512,26 @@ function iterationEntries(iterations: Iteration[]): LogLine[] {
     }));
 }
 
+/** Real operations per tab, drawn from the live iteration timeline — no mock fallback.
+ *  Returns null when there is no live run (API unreachable / no active job) so the UI can
+ *  distinguish "unknown" from a genuinely empty (but live) tab. */
+function opsEntriesFor(tab: OpsTab, iterations: Iteration[] | null): LogLine[] | null {
+  // Deploys are recorded on the Deployments page, not the factory iteration feed.
+  if (tab === 'Deploy') return [];
+  if (iterations === null) return null;
+  if (tab === 'QA') return iterationEntries(iterations.filter((iteration) => iteration.kind === 'qa'));
+  return iterationEntries(iterations);
+}
+
+function opsEmptyMessage(tab: OpsTab): string {
+  if (tab === 'Deploy') return 'Deploy activity is tracked on the Deployments page.';
+  if (tab === 'QA') return 'No QA iterations in the current run yet.';
+  return 'No operations in the current run yet.';
+}
+
 function OperationsLog({ iterations }: { iterations: Iteration[] | null }) {
   const [tab, setTab] = useState<OpsTab>('Pipeline');
-  const live = tab === 'Pipeline' && iterations !== null && iterations.length > 0;
-  const entries = live ? iterationEntries(iterations) : OPS_ENTRIES[tab];
+  const entries = opsEntriesFor(tab, iterations);
   return (
     <section className="home-card rounded-2xl border border-border bg-card p-5">
       <h3 className="text-[10px] font-bold uppercase tracking-[0.22em] text-muted-foreground">Operations log</h3>
@@ -537,15 +545,82 @@ function OperationsLog({ iterations }: { iterations: Iteration[] | null }) {
       </div>
       {/* Column flex (not grid): an implicit grid column sizes to the widest row's
           max-content, so nowrap labels overflow the card instead of truncating. */}
-      <ul key={tab} className="tab-panel mt-3 flex min-w-0 flex-col gap-0.5">
-        {entries.map((entry, index) => (
-          <li key={index} className="flex w-full min-w-0 items-center gap-2.5 rounded-lg px-1.5 py-[7px] transition-colors hover:bg-muted/70">
-            <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{entry.t}</span>
-            <span className="min-w-0 flex-1 truncate text-[12px] font-semibold">{entry.text}</span>
-            <i className={`size-1.5 shrink-0 rounded-full ${DOT_CLASS[entry.dot]}`} aria-hidden />
-          </li>
+      {entries === null ? (
+        <p key={`${tab}-idle`} className="tab-panel mt-3 px-1.5 py-6 text-center text-[12px] font-semibold text-muted-foreground">
+          Waiting for a live clone job to stream operations.
+        </p>
+      ) : entries.length === 0 ? (
+        <p key={`${tab}-empty`} className="tab-panel mt-3 px-1.5 py-6 text-center text-[12px] font-semibold text-muted-foreground">
+          {opsEmptyMessage(tab)}
+        </p>
+      ) : (
+        <ul key={tab} className="tab-panel mt-3 flex min-w-0 flex-col gap-0.5">
+          {entries.map((entry, index) => (
+            <li key={index} className="flex w-full min-w-0 items-center gap-2.5 rounded-lg px-1.5 py-[7px] transition-colors hover:bg-muted/70">
+              <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{entry.t}</span>
+              <span className="min-w-0 flex-1 truncate text-[12px] font-semibold">{entry.text}</span>
+              <i className={`size-1.5 shrink-0 rounded-full ${DOT_CLASS[entry.dot]}`} aria-hidden />
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+/* ————————————————————————— Fleet summary ————————————————————————— */
+
+const FLEET_RUNNING: JobStatus[] = ['scaffolding', 'cloning', 'qa_running', 'fixing'];
+const FLEET_BLOCKED: JobStatus[] = ['blocked', 'paused', 'exhausted', 'failed', 'aborted', 'canceled'];
+
+interface FleetCounts { running: number; queued: number; converged: number; blocked: number }
+
+function fleetCounts(jobs: Job[]): FleetCounts {
+  const counts: FleetCounts = { running: 0, queued: 0, converged: 0, blocked: 0 };
+  for (const job of jobs) {
+    if (FLEET_RUNNING.includes(job.status)) counts.running += 1;
+    else if (job.status === 'queued') counts.queued += 1;
+    else if (job.status === 'converged') counts.converged += 1;
+    else if (FLEET_BLOCKED.includes(job.status)) counts.blocked += 1;
+  }
+  return counts;
+}
+
+/** Real fleet snapshot across ALL jobs from /api/factory/jobs — not just the single active job. */
+function FleetSummary({ jobs, onNavigate }: { jobs: Job[] | null; onNavigate: (view: HomeTarget) => void }) {
+  const counts = jobs ? fleetCounts(jobs) : null;
+  const show = (value: number | undefined) => (counts == null || value == null ? '—' : value);
+  const cells: Array<{ key: keyof FleetCounts; label: string; dot: string; tone: string }> = [
+    { key: 'running', label: 'Running', dot: 'bg-brand-blue', tone: 'text-brand-blue' },
+    { key: 'queued', label: 'Queued', dot: 'bg-muted-foreground', tone: 'text-foreground' },
+    { key: 'converged', label: 'Converged', dot: 'bg-success', tone: 'text-success' },
+    { key: 'blocked', label: 'Blocked', dot: 'bg-warning', tone: 'text-warning' },
+  ];
+  return (
+    <section className="home-card rounded-2xl border border-border bg-card p-5">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-[10px] font-bold uppercase tracking-[0.22em] text-muted-foreground">Clone fleet</h3>
+        <button
+          type="button" onClick={() => onNavigate('factory')}
+          className="inline-flex items-center gap-1 text-[11px] font-bold text-brand-blue transition-colors hover:text-brand-blue/80"
+        >
+          Open factory <ArrowRight className="size-3" />
+        </button>
+      </div>
+      <div className="mt-3.5 grid grid-cols-2 gap-2">
+        {cells.map((cell) => (
+          <div key={cell.key} className="flex items-center gap-2.5 rounded-xl border border-border bg-muted/40 px-3 py-2.5">
+            <i className={`size-1.5 shrink-0 rounded-full ${cell.dot}`} aria-hidden />
+            <span className="min-w-0">
+              <b className={`block text-[19px] font-bold leading-none tabular-nums ${cell.tone}`}>{show(counts?.[cell.key])}</b>
+              <span className="mt-1 block truncate text-[11px] font-semibold text-muted-foreground">{cell.label}</span>
+            </span>
+          </div>
         ))}
-      </ul>
+      </div>
+      {jobs != null && jobs.length === 0 && (
+        <p className="mt-3 text-[11.5px] font-semibold text-muted-foreground">No clone jobs yet — start one in the Factory.</p>
+      )}
     </section>
   );
 }
@@ -603,8 +678,14 @@ function QuickActions({ onNavigate }: { onNavigate: (view: HomeTarget) => void }
       <h3 className="text-[10px] font-bold uppercase tracking-[0.22em] text-muted-foreground">Quick actions</h3>
       <div className="mt-3.5 grid gap-2.5">
         <button
-          type="button" onClick={() => onNavigate('projects')}
+          type="button" onClick={() => onNavigate('factory')}
           className="home-blue-fill inline-flex h-10 items-center justify-center gap-2 rounded-xl text-[13px] font-bold transition-transform hover:-translate-y-0.5 active:translate-y-0"
+        >
+          <Factory className="size-4" /> New clone job
+        </button>
+        <button
+          type="button" onClick={() => onNavigate('projects')}
+          className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-border bg-muted/60 text-[13px] font-bold transition-all hover:-translate-y-0.5 hover:border-brand-blue/50 active:translate-y-0"
         >
           <Plus className="size-4" /> Create new project
         </button>
@@ -664,6 +745,7 @@ export default function HomeScreen({ onNavigate }: { onNavigate: (view: HomeTarg
 
             {/* RIGHT RAIL */}
             <aside className="stagger grid min-w-0 content-start gap-5 sm:grid-cols-2 xl:grid-cols-1" aria-label="Live status">
+              <div className="sm:col-span-2 xl:col-span-1"><FleetSummary jobs={jobs} onNavigate={onNavigate} /></div>
               <div className="sm:col-span-2 xl:col-span-1"><OperationsLog iterations={iterations} /></div>
               <PipelineStatus job={targetJob} />
               <CurrentTarget job={targetJob} project={workspace.projects[0] ?? null} />

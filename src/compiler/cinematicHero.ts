@@ -93,7 +93,7 @@ const liquid = String.raw`<div
           {% for block in section.blocks %}
             {% case block.type %}
               {% when 'stat' %}
-                <div class="vso-stat" {{ block.shopify_attributes }}>
+                <div class="vso-stat" data-vso-block="{{ block.type }}" {{ block.shopify_attributes }}>
                   <strong>{{ block.settings.value }}</strong>
                   <span>{{ block.settings.label }}</span>
                 </div>

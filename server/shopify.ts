@@ -97,6 +97,56 @@ export async function listThemes(shop: string): Promise<ShopifyTheme[]> {
   return data.themes.nodes;
 }
 
+/** Fetch a single theme's live status by id (role + async-processing flag). */
+async function fetchTheme(shop: string, themeId: string): Promise<(ShopifyTheme & { processing: boolean }) | null> {
+  const data = await shopifyGraphql<{ theme: (ShopifyTheme & { processing: boolean }) | null }>(shop, `#graphql
+    query SectionOsThemeStatus($id: ID!) { theme(id: $id) { id name role processing } }
+  `, { id: themeId });
+  return data.theme;
+}
+
+/** Poll until a freshly-created/duplicated theme has finished asynchronous processing. */
+async function waitForThemeReady(shop: string, themeId: string, timeoutMs = 180_000): Promise<ShopifyTheme> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const theme = await fetchTheme(shop, themeId);
+    if (!theme) throw new Error('The duplicated theme could not be found.');
+    if (!theme.processing) return { id: theme.id, name: theme.name, role: theme.role };
+    if (Date.now() >= deadline) throw new Error('Timed out waiting for the duplicated theme to finish processing.');
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+  }
+}
+
+/**
+ * Duplicate an existing theme into a fresh, UNPUBLISHED target and wait until it is ready.
+ * Callers get a safe, writable copy so deploys never touch the live/published theme.
+ */
+export async function themeDuplicate(shop: string, sourceThemeId: string, name?: string): Promise<ShopifyTheme> {
+  const data = await shopifyGraphql<{ themeDuplicate: { theme: ShopifyTheme | null; userErrors: Array<{ field: string[] | null; message: string }> } }>(shop, `#graphql
+    mutation SectionOsThemeDuplicate($id: ID!, $name: String) {
+      themeDuplicate(id: $id, name: $name) {
+        theme { id name role }
+        userErrors { field message }
+      }
+    }
+  `, { id: sourceThemeId, name });
+  if (data.themeDuplicate.userErrors.length) throw new Error(data.themeDuplicate.userErrors.map((error) => error.message).join('; '));
+  const theme = data.themeDuplicate.theme;
+  if (!theme) throw new Error('Theme duplication did not return a theme.');
+  return waitForThemeReady(shop, theme.id);
+}
+
+/**
+ * Re-validate the write target's role IMMEDIATELY before mutating it. `listThemes` at the
+ * top of a deploy is a check-then-write race: a merchant can publish the target between the
+ * check and the upsert. Re-fetching here closes that TOCTOU so we never write to a MAIN theme.
+ */
+async function assertWritableTarget(shop: string, themeId: string) {
+  const theme = await fetchTheme(shop, themeId);
+  if (!theme) throw new Error('The selected theme could not be found.');
+  if (theme.role === 'MAIN') throw new Error('Section OS will not write directly to the published theme. Select an unpublished duplicate.');
+}
+
 export async function readThemeFiles(shop: string, themeId: string, filenames: string[]): Promise<ThemeSnapshot[]> {
   if (!filenames.length) return [];
   const data = await shopifyGraphql<{ theme: null | { files: { nodes: Array<{ filename: string; body: { content?: string; contentBase64?: string; url?: string } }>; userErrors: Array<{ code: string; filename: string }> } } }>(shop, `#graphql
@@ -119,20 +169,31 @@ export async function readThemeFiles(shop: string, themeId: string, filenames: s
   });
 }
 
+// Shopify caps each themeFilesUpsert at 50 files. Batch instead of throwing so full-theme
+// deploys (which routinely exceed 50 files) work by splitting into sequential ≤50 chunks.
+const UPSERT_CHUNK_SIZE = 50;
+
 async function upsertFiles(shop: string, themeId: string, files: Array<{ filename: string; body: { type: 'TEXT'|'BASE64'; value: string } }>) {
   if (!files.length) return [];
-  if (files.length > 50) throw new Error('Shopify accepts at most 50 theme files in one upsert request.');
-  const data = await shopifyGraphql<{ themeFilesUpsert: { upsertedThemeFiles: Array<{ filename: string }>; userErrors: Array<{ message: string }> } }>(shop, `#graphql
-    mutation SectionOsInstall($themeId: ID!, $files: [OnlineStoreThemeFilesUpsertFileInput!]!) {
-      themeFilesUpsert(themeId: $themeId, files: $files) { upsertedThemeFiles { filename } userErrors { message } }
-    }
-  `, { themeId, files });
-  if (data.themeFilesUpsert.userErrors.length) throw new Error(data.themeFilesUpsert.userErrors.map((error) => error.message).join('; '));
-  return data.themeFilesUpsert.upsertedThemeFiles.map((file) => file.filename);
+  // Close the check-then-write race: re-validate role !== MAIN right before the first write.
+  await assertWritableTarget(shop, themeId);
+  const upserted: string[] = [];
+  for (let index = 0; index < files.length; index += UPSERT_CHUNK_SIZE) {
+    const chunk = files.slice(index, index + UPSERT_CHUNK_SIZE);
+    const data = await shopifyGraphql<{ themeFilesUpsert: { upsertedThemeFiles: Array<{ filename: string }>; userErrors: Array<{ message: string }> } }>(shop, `#graphql
+      mutation SectionOsInstall($themeId: ID!, $files: [OnlineStoreThemeFilesUpsertFileInput!]!) {
+        themeFilesUpsert(themeId: $themeId, files: $files) { upsertedThemeFiles { filename } userErrors { message } }
+      }
+    `, { themeId, files: chunk });
+    if (data.themeFilesUpsert.userErrors.length) throw new Error(data.themeFilesUpsert.userErrors.map((error) => error.message).join('; '));
+    for (const file of data.themeFilesUpsert.upsertedThemeFiles) upserted.push(file.filename);
+  }
+  return upserted;
 }
 
 async function deleteFiles(shop:string,themeId:string,files:string[]){
   if(!files.length)return [];
+  await assertWritableTarget(shop, themeId);
   const data=await shopifyGraphql<{themeFilesDelete:{deletedThemeFiles:Array<{filename:string}>;userErrors:Array<{message:string}>}}>(shop,`#graphql
     mutation SectionOsDelete($themeId: ID!, $files: [String!]!) { themeFilesDelete(themeId:$themeId,files:$files){ deletedThemeFiles{filename} userErrors{message} } }
   `,{themeId,files});

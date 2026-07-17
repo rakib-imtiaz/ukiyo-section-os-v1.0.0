@@ -194,6 +194,11 @@ class Repository {
     return [...memory.versions.values()].filter((item)=>item.project_id===projectId).sort((a,b)=>b.version_number-a.version_number);
   }
 
+  async getVersion(id: string, projectId: string) {
+    if (this.pool) return (await this.pool.query<VersionRecord>('SELECT * FROM project_versions WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0] ?? null;
+    const version = memory.versions.get(id); return version?.project_id === projectId ? version : null;
+  }
+
   async createDeployment(input: Omit<DeploymentRecord,'id'|'created_at'|'updated_at'|'error'|'rolled_back_at'>) {
     const record: DeploymentRecord = { id: randomUUID(), ...input, error:null, rolled_back_at:null, created_at:now(), updated_at:now() };
     if (this.pool) return (await this.pool.query<DeploymentRecord>('INSERT INTO deployments (id,shop_id,project_id,version_id,theme_id,theme_name,status,snapshot,installed_files) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *', [record.id,input.shop_id,input.project_id,input.version_id,input.theme_id,input.theme_name,input.status,JSON.stringify(input.snapshot),JSON.stringify(input.installed_files)])).rows[0];

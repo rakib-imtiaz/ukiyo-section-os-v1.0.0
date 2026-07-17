@@ -1,11 +1,12 @@
 import type { NextFunction, Request, Response } from 'express';
 import { Router } from 'express';
 import { compileSection } from '../src/compiler/compile';
+import { contractJsonSchema } from '../src/compiler/schema';
 import type { SectionManifest } from '../src/shared/types';
 import { config } from './config';
 import { db } from './db';
 import { createSubscription, getBillingStatus } from './billing';
-import { applyInstallation, listThemes, prepareInstallation, rollbackFiles, shopifyStatus, type ThemeSnapshot } from './shopify';
+import { applyInstallation, listThemes, prepareInstallation, rollbackFiles, shopifyStatus, themeDuplicate, type ThemeSnapshot } from './shopify';
 import { currentShop, newSecret, rateLimit, requireSession, sha256 } from './security';
 import { getClaudeStatusQuick } from './claude-connect';
 import { getWorkspaceState } from './workspace';
@@ -70,8 +71,11 @@ export function createApiRouter(){
     response.json({authenticated:Boolean(record),shop:domain,persistent:db.persistent,shopify:shopifyStatus(),billing,claude,workspace});
   }));
   router.get('/shopify/status',(_request,response)=>response.json(shopifyStatus()));
+  // Public contract JSON Schema — served unauthenticated so AI platforms can fetch the shape before connecting.
+  router.get('/schema',(_request,response)=>response.json(contractJsonSchema()));
   router.use(requireSession);
   router.get('/shopify/themes',handle(async(_request,response)=>response.json({themes:await listThemes(response.locals.shop)})));
+  router.post('/shopify/themes/:id/duplicate',handle(async(request,response)=>{const domain=response.locals.shop as string;const sourceId=String(request.params.id);const source=(await listThemes(domain)).find((item)=>item.id===sourceId);if(!source){response.status(404).json({error:'Theme not found.'});return;}const requested=typeof request.body?.name==='string'?request.body.name.trim():'';const name=requested||`${source.name} (Section OS draft)`;const theme=await themeDuplicate(domain,sourceId,name);response.status(201).json({theme});}));
 
   router.get('/projects',handle(async(_request,response)=>{const {record}=await shopContext(response);response.json({projects:await db.listProjects(record.id)});}));
   router.post('/projects',handle(async(request,response)=>{const {record}=await shopContext(response);const result=compileSection(request.body.manifest);if(!result.valid){response.status(422).json(result);return;}const project=await db.createProject(record.id,request.body.manifest);const version=await db.createVersion(project.id,request.body.manifest,result.files,sha256(JSON.stringify(request.body.manifest)));response.status(201).json({project,version});}));
@@ -79,6 +83,7 @@ export function createApiRouter(){
   router.put('/projects/:id',handle(async(request,response)=>{const {record}=await shopContext(response);const result=compileSection(request.body.manifest);if(!result.valid){response.status(422).json(result);return;}const project=await db.updateProject(String(request.params.id),record.id,request.body.manifest);if(!project){response.status(404).json({error:'Project not found.'});return;}const version=await db.createVersion(project.id,request.body.manifest,result.files,sha256(JSON.stringify(request.body.manifest)));response.json({project,version});}));
   router.delete('/projects/:id',handle(async(request,response)=>{const {record}=await shopContext(response);response.status(await db.deleteProject(String(request.params.id),record.id)?204:404).end();}));
   router.get('/projects/:id/versions',handle(async(request,response)=>{const {record}=await shopContext(response);const project=await db.getProject(String(request.params.id),record.id);if(!project){response.status(404).json({error:'Project not found.'});return;}response.json({versions:await db.listVersions(project.id)});}));
+  router.post('/projects/:id/versions/:versionId/restore',handle(async(request,response)=>{const {record}=await shopContext(response);const project=await db.getProject(String(request.params.id),record.id);if(!project){response.status(404).json({error:'Project not found.'});return;}const source=await db.getVersion(String(request.params.versionId),project.id);if(!source){response.status(404).json({error:'Version not found.'});return;}const result=compileSection(source.manifest);if(!result.valid){response.status(422).json(result);return;}const updated=await db.updateProject(project.id,record.id,source.manifest);const version=await db.createVersion(project.id,source.manifest,result.files,sha256(JSON.stringify(source.manifest)));await db.audit(record.id,'project.version_restored','merchant',{projectId:project.id,restoredFrom:source.id,versionId:version.id});response.status(201).json({project:updated??project,version,restoredFrom:source.version_number});}));
   router.post('/projects/:id/deploy',handle(async(request,response)=>{const {domain,record}=await shopContext(response);const project=await db.getProject(String(request.params.id),record.id);if(!project){response.status(404).json({error:'Project not found.'});return;}const result=compileSection(project.manifest);if(!result.valid){response.status(422).json(result);return;}const version=await db.createVersion(project.id,project.manifest,result.files,sha256(JSON.stringify(project.manifest)));response.json(await deployManifest(domain,record.id,project.manifest,request.body.themeId,project.id,version.id));}));
 
   router.post('/shopify/install',handle(async(request,response)=>{const {domain,record}=await shopContext(response);response.json(await deployManifest(domain,record.id,request.body.manifest,request.body.themeId));}));
@@ -88,6 +93,7 @@ export function createApiRouter(){
   router.get('/api-keys',handle(async(_request,response)=>{const {record}=await shopContext(response);const keys=await db.listApiKeys(record.id);response.json({keys:keys.map(({secret_hash,...key})=>key)});}));
   router.post('/api-keys',handle(async(request,response)=>{const {record}=await shopContext(response);const secret=newSecret(30);const prefix=secret.slice(0,8);const token=`vso_live_${secret}`;const key=await db.createApiKey(record.id,String(request.body.label||'AI platform'),prefix,apiKeyHash(token));response.status(201).json({key:{id:key.id,label:key.label,key_prefix:key.key_prefix,created_at:key.created_at},token});}));
   router.delete('/api-keys/:id',handle(async(request,response)=>{const {record}=await shopContext(response);response.status(await db.revokeApiKey(String(request.params.id),record.id)?204:404).end();}));
+  router.post('/api-keys/:id/rotate',handle(async(request,response)=>{const {record}=await shopContext(response);const existing=(await db.listApiKeys(record.id)).find((item)=>item.id===String(request.params.id)&&!item.revoked_at);if(!existing){response.status(404).json({error:'API key not found.'});return;}if(!await db.revokeApiKey(existing.id,record.id)){response.status(404).json({error:'API key not found.'});return;}const secret=newSecret(30);const prefix=secret.slice(0,8);const token=`vso_live_${secret}`;const key=await db.createApiKey(record.id,existing.label,prefix,apiKeyHash(token));await db.audit(record.id,'api_key.rotated','merchant',{previousKeyId:existing.id,keyId:key.id});response.status(201).json({key:{id:key.id,label:key.label,key_prefix:key.key_prefix,created_at:key.created_at},token});}));
   router.get('/billing',handle(async(_request,response)=>response.json(await getBillingStatus(response.locals.shop))));
   router.post('/billing/subscribe',handle(async(_request,response)=>response.json(await createSubscription(response.locals.shop))));
   return router;
@@ -95,6 +101,7 @@ export function createApiRouter(){
 
 export function createV1Router(){
   const router=Router();router.use(requireApiKey,rateLimit(120));
+  router.get('/schema',(_request,response)=>response.json(contractJsonSchema()));
   router.post('/compile',(request,response)=>{const result=compileSection(request.body.manifest);response.status(result.valid?200:422).json(result);});
   router.get('/projects',handle(async(_request,response)=>response.json({projects:await db.listProjects(response.locals.shopId)})));
   router.post('/projects',handle(async(request,response)=>{const result=compileSection(request.body.manifest);if(!result.valid){response.status(422).json(result);return;}const project=await db.createProject(response.locals.shopId,request.body.manifest);const version=await db.createVersion(project.id,request.body.manifest,result.files,sha256(JSON.stringify(request.body.manifest)));response.status(201).json({project,version});}));

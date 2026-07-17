@@ -3,7 +3,17 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from '../config';
+import { hmac } from '../security';
 import type { FactoryJobRecord } from '../db';
+
+/**
+ * Per-job capability key for the localhost-only token-mint endpoint. Deterministically derived
+ * from the job id under the app session secret, so the server can recompute it and the workspace
+ * scripts can carry it without any reusable Shopify secret ever touching disk. This is NOT a
+ * Shopify credential: it only authorizes minting a short-lived shpat_ token for THIS job, and
+ * only from loopback while the app is running.
+ */
+export function mintKeyFor(jobId: string) { return hmac(`factory-mint:${jobId}`); }
 
 const TEMPLATES_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../templates/factory');
 
@@ -65,14 +75,15 @@ export function trustWorkspace(workspacePath: string) {
  * when missing, except job inputs which are always refreshed from the job record.
  */
 export async function scaffoldWorkspace(input: ScaffoldInput) {
-  const { job, clientId, clientSecret, reactFilesPath, storefrontPassword, extraAllow = [] } = input;
+  // clientSecret is accepted for API compatibility but deliberately never persisted to disk.
+  const { job, clientId, reactFilesPath, storefrontPassword, extraAllow = [] } = input;
   const root = job.workspace_path;
   const adopting = await isNonEmptyDir(root);
 
   // Standalone clone-theme project layout — matches shopify_folder_init so the folder is
   // usable manually (cd in, run `claude` / `/clone-theme`) independent of this app, and
   // Claude Code keeps its conversation history keyed to this folder automatically.
-  for (const dir of ['react_files', 'references', 'sections', 'templates', 'snippets', 'assets', 'layout', 'config', 'seed', 'qa/state', 'qa/reports', 'qa/screenshots', 'qa/factory', 'factory/logs', '.claude']) {
+  for (const dir of ['react_files', 'references', 'sections', 'templates', 'snippets', 'assets', 'layout', 'config', 'seed', 'qa/state', 'qa/reports', 'qa/screenshots', 'qa/factory', 'factory/logs', '.claude', '.claude/commands']) {
     await mkdir(path.join(root, dir), { recursive: true });
   }
 
@@ -80,11 +91,23 @@ export async function scaffoldWorkspace(input: ScaffoldInput) {
   // always refreshed so retries after user edits pick up current values.
   await writeFile(path.join(root, 'TARGET_SITE_INFO.txt'),
     `target site:\n\n${job.react_url}\n\nshopify store:\n\n${job.store_url}/\n\nstore pass:\n\n${storefrontPassword ?? ''}\n`);
+  // SECURITY: the Client Secret is NEVER written to disk. It stays encrypted in the job record;
+  // workspace scripts fetch a short-lived shpat_ token from the localhost-only mint endpoint
+  // (see qa/lib.mjs `mint()` + POST /api/factory/jobs/:id/mint-token). The Client ID is a public
+  // app identifier (not a secret) and is kept only as non-sensitive target info for reference.
   await writeFile(path.join(root, 'API.txt'),
-    `# Shopify custom-app credentials for ${job.name}.\n# push.mjs mints a fresh 24h shpat_ token from the Client ID + Secret below.\n# Format: label on one line, value on the next line (do not remove the labels).\n\nClient ID\n${clientId}\n\nClient Secret\n${clientSecret}\n`);
+    `# Shopify custom-app info for ${job.name}.\n` +
+    `# NOTE: the Client Secret is intentionally NOT stored here. Workspace scripts mint a fresh,\n` +
+    `# short-lived shpat_ token from the local factory app (POST /api/factory/jobs/<id>/mint-token),\n` +
+    `# which decrypts the credentials in memory. Nothing reusable lives on disk.\n\n` +
+    `Client ID\n${clientId}\n`);
   await writeFile(path.join(root, 'job.json'), JSON.stringify({
     factory: true, approved: true, name: job.name, react_url: job.react_url, store_url: job.store_url,
     autoswap: job.autoswap, prefix: job.prefix, dev_theme_name: job.dev_theme_name,
+    // Token-mint wiring for workspace scripts (no Shopify secret on disk — see API.txt note).
+    job_id: job.id,
+    mint_url: `http://127.0.0.1:${config.port}/api/factory/jobs/${job.id}/mint-token`,
+    mint_key: mintKeyFor(job.id),
   }, null, 2) + '\n');
 
   // Six pre-placed headless scaffold files (contract: use as-is, do not regenerate).
@@ -112,6 +135,11 @@ export async function scaffoldWorkspace(input: ScaffoldInput) {
       await cp(path.join(qaDir, file), path.join(root, 'qa/factory', file));
     }
   }
+
+  // Bundle the /clone-theme slash command INTO the workspace so headless `claude -p /clone-theme`
+  // runs are self-contained and reproducible (no dependency on a user-global ~/.claude/commands
+  // file). App-owned — always refreshed so bundled fixes propagate to retried/adopted workspaces.
+  await cp(path.join(TEMPLATES_ROOT, 'commands/clone-theme.md'), path.join(root, '.claude/commands/clone-theme.md'));
 
   // Scoped permission allowlist — the sandbox for headless runs. Always refreshed.
   const template = await readFile(path.join(TEMPLATES_ROOT, 'workspace/.claude/settings.json.tpl'), 'utf8');

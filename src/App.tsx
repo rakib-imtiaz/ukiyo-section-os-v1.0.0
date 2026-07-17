@@ -26,6 +26,28 @@ interface AppSession { authenticated:boolean; shop:string|null; persistent:boole
 interface SavedProject { id:string; name:string; handle:string; description:string; manifest:SectionManifest; created_at:string; updated_at:string; }
 interface SavedApiKey { id:string; label:string; key_prefix:string; last_used_at:string|null; created_at:string; revoked_at:string|null; }
 interface SavedDeployment { id:string; theme_name:string; theme_id:string; status:string; installed_files:string[]; rolled_back_at:string|null; created_at:string; }
+interface ProjectVersion { id:string; project_id:string; version_number:number; manifest:SectionManifest; compiled_files?:GeneratedFile[]; checksum:string; created_at:string; }
+
+/** Minimal LCS line diff between two JSON blobs — used by the version history panel. */
+function diffLines(oldText: string, newText: string): Array<{ type: 'same' | 'add' | 'del'; text: string }> {
+  const a = oldText.split('\n');
+  const b = newText.split('\n');
+  const m = a.length, n = b.length;
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0));
+  for (let i = m - 1; i >= 0; i--)
+    for (let j = n - 1; j >= 0; j--)
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const out: Array<{ type: 'same' | 'add' | 'del'; text: string }> = [];
+  let i = 0, j = 0;
+  while (i < m && j < n) {
+    if (a[i] === b[j]) { out.push({ type: 'same', text: a[i] }); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { out.push({ type: 'del', text: a[i] }); i++; }
+    else { out.push({ type: 'add', text: b[j] }); j++; }
+  }
+  while (i < m) { out.push({ type: 'del', text: a[i] }); i++; }
+  while (j < n) { out.push({ type: 'add', text: b[j] }); j++; }
+  return out;
+}
 
 const navItems: Array<{ id: View; label: string; icon: typeof WandSparkles; number: string }> = [
   { id: 'home', label: 'Home', icon: House, number: '00' },
@@ -209,6 +231,67 @@ function CopyButton({ text, label = 'Copy', className }: { text: string; label?:
   return <button type="button" className={className} onClick={onCopy} title="Copy">{done ? <Check size={13} /> : <Copy size={13} />}{label && (done ? 'Copied' : label)}</button>;
 }
 
+function VersionHistoryModal({ project, versions, loading, error, onRestore, onClose }: {
+  project: SavedProject; versions: ProjectVersion[]; loading: boolean; error: string;
+  onRestore: (versionId: string) => void; onClose: () => void;
+}) {
+  // Default the diff to the two most recent versions (compare = newest, base = previous).
+  const [baseId, setBaseId] = useState('');
+  const [compareId, setCompareId] = useState('');
+  useEffect(() => {
+    if (versions.length) { setCompareId(versions[0].id); setBaseId((versions[1] ?? versions[0]).id); }
+  }, [versions]);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  const base = versions.find((version) => version.id === baseId) ?? null;
+  const compare = versions.find((version) => version.id === compareId) ?? null;
+  const diff = useMemo(() => {
+    if (!base || !compare) return [];
+    return diffLines(JSON.stringify(base.manifest, null, 2), JSON.stringify(compare.manifest, null, 2));
+  }, [base, compare]);
+  const changes = diff.filter((line) => line.type !== 'same').length;
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-card modal-card--wide version-history" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+        <div className="version-history__head">
+          <div><span>VERSION HISTORY</span><h3>{project.name}</h3></div>
+          <button className="button button--quiet button--icon" onClick={onClose} aria-label="Close">×</button>
+        </div>
+        {loading ? <div className="version-history__empty"><LoaderCircle className="spin" size={20} /><p>Loading versions…</p></div>
+          : error ? <div className="error-line"><CircleAlert size={15} />{error}</div>
+          : versions.length === 0 ? <div className="version-history__empty"><History size={22} /><p>No saved versions yet. Every save creates a version.</p></div>
+          : <div className="version-history__body">
+              <ul className="version-list">
+                {versions.map((version) => (
+                  <li key={version.id} className={version.id === compareId ? 'is-current' : ''}>
+                    <div className="version-list__meta">
+                      <b>v{version.version_number}</b>
+                      <small>{new Date(version.created_at).toLocaleString()}</small>
+                      <code title={version.checksum}>{version.checksum.slice(0, 12)}</code>
+                    </div>
+                    <button className="button button--quiet" onClick={() => onRestore(version.id)} disabled={version.id === versions[0].id} title={version.id === versions[0].id ? 'This is the current version' : 'Restore this version'}><RotateCcw size={13} />Restore</button>
+                  </li>
+                ))}
+              </ul>
+              <div className="version-diff">
+                <div className="version-diff__controls">
+                  <label>Base<select value={baseId} onChange={(event) => setBaseId(event.target.value)}>{versions.map((version) => <option key={version.id} value={version.id}>v{version.version_number}</option>)}</select></label>
+                  <label>Compare<select value={compareId} onChange={(event) => setCompareId(event.target.value)}>{versions.map((version) => <option key={version.id} value={version.id}>v{version.version_number}</option>)}</select></label>
+                  <span className="version-diff__count">{changes === 0 ? 'Identical manifests' : `${changes} changed line${changes === 1 ? '' : 's'}`}</span>
+                </div>
+                <pre className="version-diff__pane">{diff.map((line, index) => (
+                  <span key={index} className={`diff-line diff-line--${line.type}`}>{line.type === 'add' ? '+' : line.type === 'del' ? '-' : ' '} {line.text}{'\n'}</span>
+                ))}</pre>
+              </div>
+            </div>}
+      </div>
+    </div>
+  );
+}
+
 /** Human message for a failed API response — distinguishes auth from other errors. */
 function apiErrorMessage(status: number, payload: { error?: string } | null, fallback: string): string {
   if (status === 401) return 'Connect a Shopify store first (Projects → Connect Shopify).';
@@ -253,6 +336,10 @@ export default function App() {
   const [keyLabel, setKeyLabel] = useState('');
   const [dirty, setDirty] = useState(false);
   const [deployProjectId, setDeployProjectId] = useState('');
+  const [historyProject, setHistoryProject] = useState<SavedProject | null>(null);
+  const [versions, setVersions] = useState<ProjectVersion[]>([]);
+  const [versionsLoading, setVersionsLoading] = useState(false);
+  const [versionsError, setVersionsError] = useState('');
 
   const update = <K extends keyof HeroBuilderState>(key: K, value: HeroBuilderState[K]) => {
     setCustomManifest(null);
@@ -447,6 +534,48 @@ export default function App() {
     if(!response.ok){setApiKeys(previous);setNotice('The key could not be revoked.');}
   };
 
+  const rotateApiKey=async(id:string)=>{
+    const target=apiKeys.find((key)=>key.id===id);
+    if(!(await confirm({title:'Rotate API key?',body:`A new secret will be minted for "${target?.label??'this key'}". The current token stops working immediately — update your integration with the new one.`,confirmLabel:'Rotate'})))return;
+    setWorking(true);
+    try{
+      const response=await fetch(`/api/api-keys/${id}/rotate`,{method:'POST'});
+      const payload=await response.json();
+      if(!response.ok)throw new Error(payload.error||'The key could not be rotated.');
+      setNewApiToken(payload.token);
+      const keys=await fetch('/api/api-keys').then((item)=>item.json());setApiKeys(keys.keys??[]);
+      setNotice(`"${target?.label??'Key'}" rotated — copy the new token now, it is shown only once.`);
+    }catch(error){setNotice(error instanceof Error?error.message:'The key could not be rotated.');}
+    finally{setWorking(false);}
+  };
+
+  const loadVersions=async(projectId:string)=>{
+    setVersionsLoading(true);setVersionsError('');
+    try{
+      const response=await fetch(`/api/projects/${projectId}/versions`);
+      if(!response.ok){setVersionsError(response.status===401?'Connect a Shopify store to view versions.':'Versions could not be loaded.');setVersions([]);return;}
+      const payload=await response.json();setVersions(payload.versions??[]);
+    }catch{setVersionsError('Could not reach the server.');setVersions([]);}
+    finally{setVersionsLoading(false);}
+  };
+
+  const openHistory=(project:SavedProject)=>{setHistoryProject(project);setVersions([]);setVersionsError('');void loadVersions(project.id);};
+
+  const restoreVersion=async(versionId:string)=>{
+    if(!historyProject)return;
+    const version=versions.find((item)=>item.id===versionId);
+    if(!(await confirm({title:'Restore this version?',body:`"${historyProject.name}" will be rolled back to version ${version?.version_number??'?'}. This is saved as a new version, so nothing is lost.`,confirmLabel:'Restore'})))return;
+    setWorking(true);
+    try{
+      const response=await fetch(`/api/projects/${historyProject.id}/versions/${versionId}/restore`,{method:'POST'});
+      const payload=await response.json().catch(()=>null);
+      if(!response.ok)throw new Error(payload?.error||'The version could not be restored.');
+      await loadProjects();await loadVersions(historyProject.id);
+      setNotice(payload?.version?.version_number?`Restored — saved as version ${payload.version.version_number}.`:'Version restored.');
+    }catch(error){setNotice(error instanceof Error?error.message:'The version could not be restored.');}
+    finally{setWorking(false);}
+  };
+
   const rollback=async(id:string)=>{
     if(!(await confirm({title:'Roll back deployment?',body:'This restores the theme files to their pre-installation snapshot.',confirmLabel:'Roll back',danger:true})))return;
     setWorking(true);try{const response=await fetch(`/api/deployments/${id}/rollback`,{method:'POST'});const payload=await response.json();if(!response.ok)throw new Error(payload.error);setDeployments((items)=>items.map((item)=>item.id===id?{...item,status:'rolled_back',rolled_back_at:new Date().toISOString()}:item));setNotice('Deployment rolled back successfully.');}catch(error){setNotice(error instanceof Error?error.message:'Rollback failed.');}finally{setWorking(false);}
@@ -469,6 +598,10 @@ export default function App() {
 
   // Install either the live builder section or a chosen saved project's manifest.
   const installManifest = (() => { const chosen = projects.find((project) => project.id === deployProjectId); return chosen ? chosen.manifest : manifest; })();
+  // The compile result reflects the builder `manifest`, so it only mirrors what installs when the
+  // builder section is the install target (no saved project chosen). Otherwise the server recompiles
+  // the chosen project's stored version on install, so we can't preview its exact files here.
+  const installFiles: GeneratedFile[] | null = (!deployProjectId && compileResult && compileResult.files.length > 0) ? compileResult.files : null;
   const filteredProjects = projects.filter((project) => `${project.name} ${project.handle} ${project.description}`.toLowerCase().includes(projectQuery.trim().toLowerCase()));
 
   const install = async () => {
@@ -523,7 +656,7 @@ export default function App() {
             {projects.length>0&&<div className="projects-toolbar"><div className="projects-search"><Search size={14}/><input value={projectQuery} onChange={(event)=>setProjectQuery(event.target.value)} placeholder="Search projects by name or handle…"/></div><span>{filteredProjects.length} of {projects.length}</span></div>}
             <div className="project-grid">
               <button className="new-project-card" onClick={newProject}><span><Plus size={21}/></span><b>Create new section</b><small>Start with the cinematic modular system</small></button>
-              {filteredProjects.map((project)=><article className="project-card" key={project.id}><div className="project-card__top"><span>SECTION PROJECT</span><div className="project-card__tools"><button title="Duplicate project" onClick={()=>cloneProject(project)}><Copy size={13}/></button><button title="Delete project" onClick={()=>deleteProject(project.id)}><Trash2 size={14}/></button></div></div><div className="project-card__visual"><Layers3 size={29}/><i/></div><h3>{project.name}</h3><code>{project.handle}</code><p>{project.description}</p><footer><span>Updated {new Date(project.updated_at).toLocaleDateString()}</span><button onClick={()=>openProject(project)}>Open <ExternalLink size={13}/></button></footer></article>)}
+              {filteredProjects.map((project)=><article className="project-card" key={project.id}><div className="project-card__top"><span>SECTION PROJECT</span><div className="project-card__tools"><button title="Version history" onClick={()=>openHistory(project)}><History size={14}/></button><button title="Duplicate project" onClick={()=>cloneProject(project)}><Copy size={13}/></button><button title="Delete project" onClick={()=>deleteProject(project.id)}><Trash2 size={14}/></button></div></div><div className="project-card__visual"><Layers3 size={29}/><i/></div><h3>{project.name}</h3><code>{project.handle}</code><p>{project.description}</p><footer><span>Updated {new Date(project.updated_at).toLocaleDateString()}</span><button onClick={()=>openProject(project)}>Open <ExternalLink size={13}/></button></footer></article>)}
             </div>
             {projectsLoading&&projects.length===0&&<div className="project-empty"><LoaderCircle className="spin" size={22}/><p>Loading your projects…</p></div>}
             {!projectsLoading&&projects.length===0&&!projectsError&&<div className="project-empty"><FolderKanban size={25}/><h3>Your section library is ready.</h3><p>Create your first modular Shopify section to begin.</p></div>}
@@ -604,7 +737,7 @@ export default function App() {
           <div className="page-heading"><div><span>SAFE THEME INSTALLATION</span><h2>Install to an unpublished theme</h2><p>ThemeBot refuses to modify the published theme. Connect a Shopify store, select a duplicated theme, and install the generated files.</p></div></div>
           <div className="deploy-grid">
             <div className="connection-card"><div className="connection-card__icon"><Store size={23} /></div><span>SHOPIFY CONNECTION</span><h3>{session?.authenticated ? session.shop : 'Store not connected'}</h3><p>{session?.authenticated ? `Secure OAuth session · Admin API ${session.shopify.apiVersion}.` : 'Connect a Shopify store from Projects before installing section files.'}</p><div className={`connection-state ${session?.authenticated ? 'is-connected' : ''}`}><i />{session?.authenticated ? 'Connected securely' : 'Connection required'}</div><button className="button button--quiet button--full" onClick={loadThemes} disabled={!session?.authenticated || working}>{working ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}Load unpublished themes</button></div>
-            <div className="install-card"><span>INSTALL TARGET</span><h3>{installManifest.name}</h3><Field label="Section to install" hint={deployProjectId ? 'Installing a saved project version.' : 'Installing the section currently open in the builder.'}><select value={deployProjectId} onChange={(event) => setDeployProjectId(event.target.value)}><option value="">Current builder section</option>{projects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}</select></Field><div className="install-files"><div><FileCode2 size={15} /><span>sections/{installManifest.handle}.liquid</span><Check size={14} /></div><div><FileCode2 size={15} /><span>assets/{installManifest.handle}.css</span><Check size={14} /></div><div><FileCode2 size={15} /><span>assets/{installManifest.handle}.js</span><Check size={14} /></div></div><Field label="Unpublished theme"><select value={themeId} onChange={(event) => setThemeId(event.target.value)} disabled={!themes.length}><option value="">{themes.length ? 'Select a theme' : 'Load connected themes first'}</option>{themes.map((theme) => <option value={theme.id} key={theme.id}>{theme.name} · {theme.role.toLowerCase()}</option>)}</select></Field><div className="safety-note"><PanelLeftClose size={16} /><p><b>Published-theme lock is active.</b><br />Installation is only allowed on an unpublished theme.</p></div><button className="button button--accent button--full" onClick={install} disabled={!themeId || working}>{working ? <LoaderCircle className="spin" size={15} /> : <PackageCheck size={15} />}Install section package</button></div>
+            <div className="install-card"><span>INSTALL TARGET</span><h3>{installManifest.name}</h3><Field label="Section to install" hint={deployProjectId ? 'Installing a saved project version.' : 'Installing the section currently open in the builder.'}><select value={deployProjectId} onChange={(event) => setDeployProjectId(event.target.value)}><option value="">Current builder section</option>{projects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}</select></Field><div className="install-files">{installFiles ? installFiles.map((file) => <div key={file.path}><FileCode2 size={15} /><span>{file.path}</span><Check size={14} /></div>) : <div className="install-files__hint"><FileCode2 size={15} /><span>{deployProjectId ? 'This saved version is compiled on the server at install time.' : 'Compile the section to preview the exact files that will install.'}</span></div>}</div><Field label="Unpublished theme"><select value={themeId} onChange={(event) => setThemeId(event.target.value)} disabled={!themes.length}><option value="">{themes.length ? 'Select a theme' : 'Load connected themes first'}</option>{themes.map((theme) => <option value={theme.id} key={theme.id}>{theme.name} · {theme.role.toLowerCase()}</option>)}</select></Field><div className="safety-note"><PanelLeftClose size={16} /><p><b>Published-theme lock is active.</b><br />Installation is only allowed on an unpublished theme.</p></div><button className="button button--accent button--full" onClick={install} disabled={!themeId || working}>{working ? <LoaderCircle className="spin" size={15} /> : <PackageCheck size={15} />}Install section package</button></div>
           </div>
           {session?.authenticated&&<div className="deployment-history"><div className="history-heading"><div><History size={17}/><div><span>DEPLOYMENT LEDGER</span><h3>Installation history</h3></div></div><button onClick={()=>fetch('/api/deployments').then((item)=>item.json()).then((data)=>setDeployments(data.deployments??[]))}><RefreshCw size={14}/>Refresh</button></div>{deployments.length===0?<div className="history-empty">No deployments have been made from this store yet.</div>:<div className="history-table">{deployments.map((deployment)=><div key={deployment.id}><span className={`deployment-status deployment-status--${deployment.status}`}>{deployment.status.replace('_',' ')}</span><div><b>{deployment.theme_name}</b><small>{deployment.installed_files.length} files · {new Date(deployment.created_at).toLocaleString()}</small></div><code>{deployment.theme_id.split('/').pop()}</code><button onClick={()=>rollback(deployment.id)} disabled={deployment.status!=='succeeded'||working}><RotateCcw size={13}/>Rollback</button></div>)}</div>}</div>}
         </section>}
@@ -613,7 +746,7 @@ export default function App() {
           <div className="page-heading"><div><span>CONNECTIONS & PRODUCT ACCESS</span><h2>Platform connections</h2><p>Securely connect Shopify and give external coding agents access through scoped ThemeBot API keys.</p></div></div>
           <div className="settings-grid">
             <div className="settings-card"><div className="settings-card__heading"><Store size={19}/><div><span>SHOPIFY STORE</span><h3>{session?.shop??'Not connected'}</h3></div></div><p>{session?.authenticated?'The store is connected with an encrypted, rotating offline token.':'Connect from the Projects page to enable persistence and deployment.'}</p><div className="settings-facts"><div><span>API version</span><b>{session?.shopify.apiVersion??'2026-07'}</b></div><div><span>Database</span><b>{session?.persistent?'PostgreSQL':'Development memory'}</b></div><div><span>Billing</span><b>{session?.billing?.enabled?(session.billing.active?'Active':'Approval required'):'Disabled'}</b></div></div>{session?.authenticated&&<button className="button button--quiet button--full" onClick={()=>fetch('/auth/logout',{method:'POST'}).then(()=>window.location.reload())}><LogOut size={14}/>Disconnect this browser</button>}</div>
-            <div className="settings-card settings-card--wide"><div className="settings-card__heading"><KeyRound size={19}/><div><span>AI PLATFORM ACCESS</span><h3>API and MCP keys</h3></div></div><p>Use one key for Claude, Kimi, Bolt, Emergent, or each outside development team. The full secret is shown only once.</p><div className="key-create"><input value={keyLabel} onChange={(event)=>setKeyLabel(event.target.value)} placeholder="Key label (e.g. Claude — production)" disabled={!session?.authenticated} onKeyDown={(event)=>{if(event.key==='Enter'&&session?.authenticated&&!working)void createApiKey();}} /><button className="button button--accent" onClick={createApiKey} disabled={!session?.authenticated||working}><Plus size={14}/>Create key</button></div>{newApiToken&&<div className="token-reveal"><div><ShieldCheck size={17}/><span><b>Copy this key now</b><small>It cannot be displayed again.</small></span></div><code>{newApiToken}</code><CopyButton text={newApiToken}/><button className="token-reveal__done" onClick={()=>setNewApiToken('')}><Check size={14}/>Done</button></div>}<div className="endpoint-row"><div><span>MCP endpoint</span><code>{window.location.origin}/mcp</code><CopyButton text={`${window.location.origin}/mcp`} label="" /></div><div><span>REST endpoint</span><code>{window.location.origin}/v1</code><CopyButton text={`${window.location.origin}/v1`} label="" /></div></div><details className="mcp-tools"><summary>MCP tools available to a connected agent</summary><ul><li><code>validate_shopify_section</code> — validate a contract without saving</li><li><code>compile_shopify_section</code> — compile to Liquid, CSS, JS, schema</li><li><code>list_section_projects</code> — list saved projects</li><li><code>save_section_project</code> — save a new project</li><li><code>deploy_section_to_unpublished_theme</code> — deploy (explicit confirmation required)</li></ul></details><div className="key-list">{apiKeys.length===0?<p>No external platform keys created yet.</p>:apiKeys.map((key)=><div key={key.id} className={key.revoked_at?'is-revoked':''}><KeyRound size={14}/><span><b>{key.label}</b><small>vso_live_{key.key_prefix}•••• · created {new Date(key.created_at).toLocaleDateString()} · {key.last_used_at?`used ${new Date(key.last_used_at).toLocaleDateString()}`:'never used'}</small></span><em>{key.revoked_at?'Revoked':'Active'}</em>{!key.revoked_at&&<button onClick={()=>revokeApiKey(key.id)}><Trash2 size={13}/></button>}</div>)}</div></div>
+            <div className="settings-card settings-card--wide"><div className="settings-card__heading"><KeyRound size={19}/><div><span>AI PLATFORM ACCESS</span><h3>API and MCP keys</h3></div></div><p>Use one key for Claude, Kimi, Bolt, Emergent, or each outside development team. The full secret is shown only once.</p><div className="key-create"><input value={keyLabel} onChange={(event)=>setKeyLabel(event.target.value)} placeholder="Key label (e.g. Claude — production)" disabled={!session?.authenticated} onKeyDown={(event)=>{if(event.key==='Enter'&&session?.authenticated&&!working)void createApiKey();}} /><button className="button button--accent" onClick={createApiKey} disabled={!session?.authenticated||working}><Plus size={14}/>Create key</button></div>{newApiToken&&<div className="token-reveal"><div><ShieldCheck size={17}/><span><b>Copy this key now</b><small>It cannot be displayed again.</small></span></div><code>{newApiToken}</code><CopyButton text={newApiToken}/><button className="token-reveal__done" onClick={()=>setNewApiToken('')}><Check size={14}/>Done</button></div>}<div className="endpoint-row"><div><span>MCP endpoint</span><code>{window.location.origin}/mcp</code><CopyButton text={`${window.location.origin}/mcp`} label="" /></div><div><span>REST endpoint</span><code>{window.location.origin}/v1</code><CopyButton text={`${window.location.origin}/v1`} label="" /></div></div><details className="mcp-tools"><summary>MCP tools available to a connected agent</summary><ul><li><code>validate_shopify_section</code> — validate a contract without saving</li><li><code>compile_shopify_section</code> — compile to Liquid, CSS, JS, schema</li><li><code>list_section_projects</code> — list saved projects</li><li><code>save_section_project</code> — save a new project</li><li><code>deploy_section_to_unpublished_theme</code> — deploy (explicit confirmation required)</li></ul></details><div className="key-list">{apiKeys.length===0?<p>No external platform keys created yet.</p>:apiKeys.map((key)=><div key={key.id} className={key.revoked_at?'is-revoked':''}><KeyRound size={14}/><span><b>{key.label}</b><small>vso_live_{key.key_prefix}•••• · created {new Date(key.created_at).toLocaleDateString()} · {key.last_used_at?`used ${new Date(key.last_used_at).toLocaleDateString()}`:'never used'}</small></span><em>{key.revoked_at?'Revoked':'Active'}</em>{!key.revoked_at&&<button title="Rotate key" onClick={()=>void rotateApiKey(key.id)} disabled={working}><RefreshCw size={13}/></button>}{!key.revoked_at&&<button title="Revoke key" onClick={()=>revokeApiKey(key.id)}><Trash2 size={13}/></button>}</div>)}</div></div>
           </div>
         </section>}
 
@@ -624,6 +757,7 @@ export default function App() {
         {view === 'browser' && <BrowserPane onActivity={() => window.dispatchEvent(new Event('app:refresh'))} />}
       </main>
       {confirmState && <ConfirmModal state={confirmState} onResolve={resolveConfirm} />}
+      {historyProject && <VersionHistoryModal project={historyProject} versions={versions} loading={versionsLoading} error={versionsError} onRestore={(versionId) => void restoreVersion(versionId)} onClose={() => setHistoryProject(null)} />}
     </div>
   );
 }

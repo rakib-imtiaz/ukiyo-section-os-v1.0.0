@@ -1,4 +1,5 @@
-import { createHash } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
@@ -8,20 +9,50 @@ function value(name: string, fallback = '') {
   return process.env[name]?.trim() || fallback;
 }
 
-function secret(name: string, developmentFallback: string) {
-  const resolved = value(name, production ? '' : developmentFallback);
-  if (!resolved) throw new Error(`${name} is required in production.`);
-  return resolved;
+// Per-install secret material for LOCAL DEV only. Persisted OUTSIDE the repo (under
+// ~/.themebot) so it is never committed and the dev file-watcher never sees it churn.
+// This replaces the old shared, hard-coded development fallbacks — those were identical
+// on every machine, so any dev-stored secret (Shopify tokens, session cookies, API-key
+// peppers) was trivially forgeable/decryptable by anyone who read the source.
+const devSecretDir = path.join(homedir(), '.themebot', 'secrets');
+
+function persistedDevSecret(name: string): string {
+  const file = path.join(devSecretDir, name);
+  try {
+    if (existsSync(file)) {
+      const existing = readFileSync(file, 'utf8').trim();
+      if (existing) return existing;
+    }
+  } catch { /* unreadable — regenerate below */ }
+  const generated = randomBytes(32).toString('base64url');
+  try {
+    mkdirSync(devSecretDir, { recursive: true });
+    writeFileSync(file, generated, { mode: 0o600 });
+  } catch { /* ephemeral fallback: a fresh random per boot still beats a shared known key */ }
+  return generated;
 }
 
-function encryptionKey() {
+function secret(name: string, devSlug: string) {
+  const configured = value(name);
+  if (configured) return configured;
+  if (production) throw new Error(`${name} is required in production.`);
+  return persistedDevSecret(devSlug);
+}
+
+function encryptionKey(): Buffer {
   const configured = value('APP_ENCRYPTION_KEY');
   if (configured) {
     const decoded = Buffer.from(configured, 'base64');
     if (decoded.length === 32) return decoded;
-    if (production) throw new Error('APP_ENCRYPTION_KEY must be a base64-encoded 32-byte key.');
+    throw new Error('APP_ENCRYPTION_KEY must be a base64-encoded 32-byte key.');
   }
-  return createHash('sha256').update('section-os-development-encryption-key').digest();
+  if (production) throw new Error('APP_ENCRYPTION_KEY is required in production (base64-encoded 32-byte key).');
+  // Dev: derive a stable, per-install random key persisted outside the repo. Never fall
+  // back to a hard-coded constant — that would make every dev install decryptable alike.
+  const stored = persistedDevSecret('encryption-key');
+  const key = Buffer.from(stored, 'base64url');
+  if (key.length >= 32) return key.subarray(0, 32);
+  return Buffer.concat([key, Buffer.alloc(32 - key.length)]);
 }
 
 export const config = {
@@ -39,8 +70,8 @@ export const config = {
   },
   security: {
     encryptionKey: encryptionKey(),
-    sessionSecret: secret('SESSION_SECRET', 'section-os-development-session-secret-change-me'),
-    apiKeyPepper: secret('API_KEY_PEPPER', 'section-os-development-api-pepper-change-me'),
+    sessionSecret: secret('SESSION_SECRET', 'session-secret'),
+    apiKeyPepper: secret('API_KEY_PEPPER', 'api-key-pepper'),
     cookieSecure: production,
   },
   billing: {
@@ -55,7 +86,7 @@ export const config = {
     enabled: value('FACTORY_ENABLED', production ? 'false' : 'true') === 'true',
     workspaceRoot: value('FACTORY_WORKSPACE_ROOT', 'C:/patrick_workspace/shopify_works'),
     claudePath: value('FACTORY_CLAUDE_PATH', path.join(homedir(), '.local', 'bin', 'claude.exe')),
-    playwrightRoot: value('FACTORY_PW_ROOT', 'C:/patrick_workspace/qa/node_modules'),
+    playwrightRoot: value('FACTORY_PW_ROOT', path.resolve('node_modules')),
     defaultConcurrency: Number(value('FACTORY_CONCURRENCY', '2')),
     launchStaggerSec: Number(value('FACTORY_LAUNCH_STAGGER_SEC', '90')),
     inactivityTimeoutMin: Number(value('FACTORY_INACTIVITY_TIMEOUT_MIN', '20')),

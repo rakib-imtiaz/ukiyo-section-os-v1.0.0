@@ -5,8 +5,8 @@ import type { NextFunction, Request, Response } from 'express';
 import { Router } from 'express';
 import { config } from '../config';
 import { db, type FactoryJobRecord } from '../db';
-import { encrypt, normalizeShop, rateLimit } from '../security';
-import { derivePrefix, resolveWorkspacePath, scaffoldWorkspace, slugify } from './scaffolder';
+import { decrypt, encrypt, normalizeShop, rateLimit, secureEqual } from '../security';
+import { derivePrefix, mintKeyFor, resolveWorkspacePath, scaffoldWorkspace, slugify } from './scaffolder';
 import { factoryScheduler } from './scheduler';
 import { getFactorySettings, lockedFields, updateFactorySettings } from './settings';
 import { scrubSecrets } from './runner';
@@ -26,6 +26,12 @@ function publicJob(job: FactoryJobRecord) {
 }
 
 async function fileExists(target: string) { return access(target).then(() => true, () => false); }
+
+/** Loopback-only guard for the token-mint endpoint (it hands out live Shopify tokens). */
+function isLoopback(request: Request) {
+  const address = request.socket.remoteAddress ?? '';
+  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+}
 
 /** Resolve a workspace-relative file while refusing traversal outside the allowed prefix. */
 function safeResolve(root: string, prefix: string, name: string) {
@@ -135,6 +141,47 @@ export function createFactoryRouter() {
       try { return (await readdir(path.join(reportsDir, sub), { withFileTypes: true })).filter((entry) => entry.isFile()).map((entry) => path.posix.join(sub, entry.name)); } catch { return []; }
     };
     response.json({ job: publicJob(job), iterations: await db.listFactoryIterations(job.id), reports: [...await listReports(), ...await listReports('factory')] });
+  }));
+
+  // Mint a short-lived shpat_ token for a job's workspace scripts WITHOUT ever writing the
+  // Shopify Client Secret to disk. Decrypts the job's stored creds in memory, performs the OAuth
+  // client_credentials mint server-side, and returns only the resulting token. Localhost-only +
+  // per-job capability key (mintKeyFor) so it cannot be reached off-box or from another job.
+  router.post('/jobs/:id/mint-token', handle(async (request, response) => {
+    if (config.production) { response.status(404).json({ error: 'Token minting is disabled in production.' }); return; }
+    if (!isLoopback(request)) { response.status(403).json({ error: 'Token minting is available on localhost only.' }); return; }
+    const job = await db.getFactoryJob(String(request.params.id));
+    if (!job) { response.status(404).json({ error: 'Job not found.' }); return; }
+    const provided = String(request.headers['x-factory-mint-key'] ?? '');
+    if (!provided || !secureEqual(provided, mintKeyFor(job.id))) { response.status(401).json({ error: 'Invalid or missing mint key.' }); return; }
+
+    let clientId: string;
+    let clientSecret: string;
+    try { clientId = decrypt(job.client_id_cipher); clientSecret = decrypt(job.client_secret_cipher); }
+    catch { response.status(500).json({ error: 'Could not decrypt the stored credentials for this job.' }); return; }
+
+    const shop = normalizeShop(job.store_url) ?? new URL(job.store_url).host;
+    let minted: { access_token: string; scope?: string };
+    try {
+      const mintResponse = await fetch(`https://${shop}/admin/oauth/access_token`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_id: clientId, client_secret: clientSecret, grant_type: 'client_credentials' }),
+      });
+      if (!mintResponse.ok) { response.status(502).json({ error: `Token mint failed: HTTP ${mintResponse.status}. Check that the custom app is still installed and its credentials are current.` }); return; }
+      minted = await mintResponse.json() as { access_token: string; scope?: string };
+    } catch (error) {
+      response.status(502).json({ error: `Token mint request failed: ${error instanceof Error ? error.message : 'unknown error'}` });
+      return;
+    }
+
+    // Resolve the canonical myshopify host (store_url may carry a custom/alias domain form).
+    let host = shop;
+    try {
+      const shopResponse = await fetch(`https://${shop}/admin/api/${config.shopify.apiVersion}/shop.json`, { headers: { 'X-Shopify-Access-Token': minted.access_token } });
+      if (shopResponse.ok) host = ((await shopResponse.json()) as { shop: { myshopify_domain: string } }).shop.myshopify_domain;
+    } catch { /* fall back to the request host */ }
+
+    response.json({ access_token: minted.access_token, scope: minted.scope ?? '', host, expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() });
   }));
 
   router.post('/jobs/:id/retry', handle(async (request, response) => {

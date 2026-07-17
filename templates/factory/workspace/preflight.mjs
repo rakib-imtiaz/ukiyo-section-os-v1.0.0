@@ -1,11 +1,11 @@
 // Preflight: mint token, verify shop identity, list themes, canary write+delete.
 // Proves end-to-end write access before any real work. Never prints secrets or tokens.
 import { writeFileSync, mkdirSync } from 'node:fs';
-import { creds, mint, client, ROOT, API_VER } from './qa/lib.mjs';
+import { loginHost, mint, client, ROOT, API_VER } from './qa/lib.mjs';
 
-const { id, secret, loginHost } = creds();
-console.log(`shop host: ${loginHost}`);
-console.log(`client_id: ...${id.slice(-4)} (len ${id.length})  client_secret: shpss_...${secret.slice(-4)}`);
+// No secret is read from disk: factory mode mints via the app's localhost-only endpoint.
+const shopHost = loginHost();
+console.log(`shop host: ${shopHost}`);
 
 // --- 0.4 token mint ---
 let minted;
@@ -31,7 +31,7 @@ const shop = (await shopRes.json()).shop;
 console.log(`\nOK shop.json:`);
 console.log(`   name:             ${shop.name}`);
 console.log(`   myshopify_domain: ${shop.myshopify_domain}`);
-console.log(`   domain-match:     ${shop.myshopify_domain === loginHost ? 'YES' : 'NO <-- MISMATCH'}`);
+console.log(`   domain-match:     ${shop.myshopify_domain === shopHost ? 'YES' : 'NO <-- MISMATCH'}`);
 console.log(`   plan:             ${shop.plan_name}`);
 
 // --- 0.6 themes + canary (real write proves access; deleted immediately) ---

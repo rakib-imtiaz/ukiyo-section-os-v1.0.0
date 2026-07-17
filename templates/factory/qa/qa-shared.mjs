@@ -10,12 +10,29 @@ export const ROOT = process.cwd();
 // ---------- Playwright ----------
 
 export async function loadPlaywright() {
-  const pwRoot = process.env.PW_ROOT || 'C:/patrick_workspace/qa/node_modules';
-  const candidates = [path.join(pwRoot, 'playwright', 'index.mjs'), path.join(pwRoot, 'playwright', 'index.js')];
+  // Resolution order (no hardcoded machine path):
+  //   1. FACTORY_PW_ROOT env (explicit override).
+  //   2. PW_ROOT env (passed by the factory runner from config.factory.playwrightRoot).
+  //   3. the app's OWN installed Playwright — repo `node_modules/playwright`, discovered by
+  //      walking up from this file so it resolves relative to the workspace/repo.
+  const roots = [];
+  for (const env of [process.env.FACTORY_PW_ROOT, process.env.PW_ROOT]) {
+    if (env && env.trim()) roots.push(env.trim());
+  }
+  for (let dir = import.meta.dirname; ; ) {
+    roots.push(path.join(dir, 'node_modules'));
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  const candidates = roots.flatMap((root) => [
+    path.join(root, 'playwright', 'index.mjs'),
+    path.join(root, 'playwright', 'index.js'),
+  ]);
   for (const candidate of candidates) {
     if (existsSync(candidate)) return import(pathToFileURL(candidate).href);
   }
-  throw new Error(`Playwright not found under PW_ROOT=${pwRoot}. Install it or set PW_ROOT.`);
+  throw new Error(`Playwright not found. Set FACTORY_PW_ROOT (or PW_ROOT) to a node_modules dir containing playwright, or install playwright in the app. Tried: ${candidates.join(', ')}`);
 }
 
 // ---------- Page interaction helpers ----------
