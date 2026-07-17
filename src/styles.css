@@ -144,6 +144,12 @@ button:not(.factory-root *) { color: inherit; }
 
 /* ===== Main + topbar — soft translucent light bar, home-style pills ===== */
 main { min-width: 0; height: 100vh; overflow: auto; }
+/* Full-height surfaces (Home, Factory) mount with Tailwind `h-full`, which resolves to 100% of
+   main = 100vh. main also contains the 88px topbar, so its content became 88px taller than the
+   viewport — producing a second (outer) scrollbar that scrolled only past the topbar. Size these
+   surfaces to the space below the topbar instead, exactly like .term-surface/.browser-surface.
+   (Kept BEFORE the mobile media query at equal specificity so `height: auto` still wins there.) */
+main .factory-root { height: calc(100vh - 88px); }
 .topbar { position: sticky; top: 0; z-index: 4; display: flex; min-height: 88px; align-items: center; justify-content: space-between; gap: 18px; padding: 14px 26px 14px 30px; border-bottom: 1px solid var(--line); background: rgba(243,245,249,.85); backdrop-filter: blur(18px); }
 :root[data-app-theme='dark'] .topbar { background: rgba(9,9,11,.85); }
 .topbar > div:first-child { min-width: 0; }
@@ -926,6 +932,11 @@ html[data-app-theme='dark'] .browser-qa-issue { color: #fca5a5; }
 .app-boot { display: grid; place-items: center; min-height: 100vh; background: var(--bg); color: var(--blue); }
 .ob-root { position: fixed; inset: 0; z-index: 60; overflow: auto; display: grid; place-items: center; padding: 28px; background: linear-gradient(160deg, #eef2fb 0%, #f4f6fb 46%, #eaf0fc 100%); color: var(--text); }
 .ob-root[data-theme='dark'] { background: linear-gradient(160deg, #0d1017 0%, #0b0d12 55%, #0e131d 100%); }
+/* .ob-root also carries .factory-root, whose theme.css tokens redefine --muted as a
+   BACKGROUND surface gray (#f1f1f3 / #1b1b1f). Onboarding uses --muted as FOREGROUND
+   text — re-assert the foreground values here so muted text stays readable in both themes. */
+.ob-root.factory-root { --muted: #5b6170; }
+.ob-root.factory-root[data-theme='dark'] { --muted: #a1a1aa; }
 .ob-shell { display: grid; grid-template-columns: minmax(0, 0.72fr) minmax(0, 1fr); width: min(1080px, 100%); min-height: 620px; border: 1px solid color-mix(in srgb, var(--blue) 12%, var(--line)); border-radius: 26px; overflow: hidden; background: var(--panel); box-shadow: 0 40px 100px -30px rgba(37, 84, 190, .35), 0 8px 30px rgba(0,0,0,.06); }
 /* left illustration panel */
 .ob-aside { position: relative; display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 40px 28px; overflow: hidden; background: linear-gradient(180deg, #e6edfb, #eef2fc 55%, #e9f0fe); }
