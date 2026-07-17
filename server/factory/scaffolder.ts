@@ -1,4 +1,5 @@
-import { cp, mkdir, readFile, readdir, writeFile, access } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile, access } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,7 +16,7 @@ import type { FactoryJobRecord } from '../db';
  */
 export function mintKeyFor(jobId: string) { return hmac(`factory-mint:${jobId}`); }
 
-const TEMPLATES_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../templates/factory');
+export const TEMPLATES_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../templates/factory');
 
 export function slugify(name: string) {
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40);
@@ -37,6 +38,113 @@ async function isNonEmptyDir(target: string) {
 }
 
 function hostOf(url: string) { return new URL(url).host; }
+
+// ---------- react_files intake: folder OR .zip (flat / single-root / zip-of-zips) ----------
+
+/** True when the path looks like a zip archive (wizard may hand us a .zip instead of a folder). */
+export function isZipPath(target: string) { return /\.zip$/i.test(target.trim()); }
+
+/** Shared package.json probe (also used by routes' /validate + intake): searches `depth` levels deep. */
+export async function containsPackageJson(root: string, depth = 3): Promise<boolean> {
+  if (await exists(path.join(root, 'package.json'))) return true;
+  if (depth === 0) return false;
+  try {
+    for (const entry of await readdir(root, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
+      if (await containsPackageJson(path.join(root, entry.name), depth - 1)) return true;
+    }
+  } catch { /* unreadable dir */ }
+  return false;
+}
+
+function runExtractor(command: string, args: string[]) {
+  return new Promise<{ code: number | null; stderr: string; spawnError?: Error }>((resolve) => {
+    let child: ReturnType<typeof spawn>;
+    try { child = spawn(command, args, { shell: false, windowsHide: true }); }
+    catch (error) { resolve({ code: null, stderr: '', spawnError: error as Error }); return; }
+    let stderr = '';
+    child.stderr?.on('data', (chunk: Buffer) => { if (stderr.length < 4096) stderr += chunk.toString('utf8'); });
+    child.on('error', (error) => resolve({ code: null, stderr, spawnError: error }));
+    child.on('exit', (code) => resolve({ code, stderr }));
+  });
+}
+
+/**
+ * Extract a zip without adding npm deps: PowerShell Expand-Archive on win32 (spawn, shell:false),
+ * falling back to `unzip` when present. Throws an actionable error when neither works.
+ */
+async function extractZip(zipPath: string, destDir: string) {
+  await mkdir(destDir, { recursive: true });
+  const attempts: Array<{ label: string; command: string; args: string[] }> = [];
+  if (process.platform === 'win32') {
+    const quote = (value: string) => `'${value.replace(/'/g, "''")}'`;
+    attempts.push({
+      label: 'PowerShell Expand-Archive', command: 'powershell.exe',
+      args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command',
+        `Expand-Archive -LiteralPath ${quote(zipPath)} -DestinationPath ${quote(destDir)} -Force`],
+    });
+  }
+  attempts.push({ label: 'unzip', command: 'unzip', args: ['-o', '-q', zipPath, '-d', destDir] });
+  const failures: string[] = [];
+  for (const attempt of attempts) {
+    const result = await runExtractor(attempt.command, attempt.args);
+    if (result.code === 0) return;
+    failures.push(`${attempt.label}: ${result.spawnError ? result.spawnError.message : `exit ${result.code}${result.stderr.trim() ? ` — ${result.stderr.trim().slice(0, 300)}` : ''}`}`);
+  }
+  throw new Error(`Could not extract ${zipPath} (${failures.join('; ')}). Install PowerShell 5+ (Expand-Archive) or the "unzip" CLI, or extract the archive yourself and pass the folder path instead.`);
+}
+
+/** Zip archives usually wrap everything in one root folder — unwrap it so react_files/ holds the project directly. */
+async function unwrapSingleRoot(dir: string, maxLevels = 3) {
+  for (let level = 0; level < maxLevels; level++) {
+    let entries;
+    try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
+    const meaningful = entries.filter((entry) => !/^(__MACOSX|\.DS_Store|Thumbs\.db)$/i.test(entry.name));
+    if (meaningful.length !== 1 || !meaningful[0].isDirectory()) return;
+    // Rename to a staging name first so a child with the same name as the wrapper can't collide.
+    const staging = path.join(dir, `.__unwrap_${level}_${Date.now()}`);
+    await rename(path.join(dir, meaningful[0].name), staging);
+    for (const child of await readdir(staging)) {
+      await rename(path.join(staging, child), path.join(dir, child));
+    }
+    await rm(staging, { recursive: true, force: true });
+  }
+}
+
+/** One level of zip-of-zips (mirrors shopify_folder_init): extract each top-level inner zip into a folder named after it. */
+async function extractInnerZips(dir: string) {
+  let extracted = 0;
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    if (!entry.isFile() || !isZipPath(entry.name)) continue;
+    const zipPath = path.join(dir, entry.name);
+    const target = path.join(dir, entry.name.replace(/\.zip$/i, ''));
+    await extractZip(zipPath, target);
+    await unwrapSingleRoot(target);
+    await rm(zipPath, { force: true });
+    extracted++;
+  }
+  return extracted;
+}
+
+/**
+ * Ingest the wizard's react_files source into the workspace: a folder is copied as-is; a .zip is
+ * extracted (handling single-root wrappers and one level of zip-of-zips), then validated to
+ * actually contain a React project (package.json within 3 levels).
+ */
+export async function ingestReactSource(source: string, target: string) {
+  if (!(await exists(source))) throw new Error(`react_files source not found: ${source}`);
+  if (isZipPath(source)) {
+    if (!(await stat(source)).isFile()) throw new Error(`react_files source ends in .zip but is not a file: ${source}`);
+    await extractZip(source, target);
+    await unwrapSingleRoot(target);
+    if (await extractInnerZips(target)) await unwrapSingleRoot(target);
+    if (!(await containsPackageJson(target))) {
+      throw new Error(`The extracted zip does not contain a package.json within 3 levels: ${source}. Make sure the archive holds the React project source (not a build output).`);
+    }
+    return;
+  }
+  await cp(source, target, { recursive: true });
+}
 
 export interface ScaffoldInput { job: FactoryJobRecord; clientId: string; clientSecret: string; reactFilesPath?: string; storefrontPassword?: string; extraAllow?: string[]; }
 
@@ -149,12 +257,13 @@ export async function scaffoldWorkspace(input: ScaffoldInput) {
 
   await trustWorkspace(root);
 
-  // React source ingestion (copy once; adopted workspaces may already have it).
+  // React source ingestion (copy/extract once; adopted workspaces may already have it).
+  // Folder sources are copied recursively; .zip sources are extracted in place (single-root
+  // wrappers unwrapped, one level of zip-of-zips handled) and validated for a package.json.
   if (reactFilesPath) {
     const reactTarget = path.join(root, 'react_files');
     if (!(await isNonEmptyDir(reactTarget))) {
-      if (!(await exists(reactFilesPath))) throw new Error(`react_files source not found: ${reactFilesPath}`);
-      await cp(reactFilesPath, reactTarget, { recursive: true });
+      await ingestReactSource(reactFilesPath, reactTarget);
     }
   }
 

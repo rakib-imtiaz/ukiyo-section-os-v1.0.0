@@ -126,12 +126,13 @@ function buildReadme(manifest: SectionManifest): string {
 }
 
 export function compileSection(input: unknown): CompileResult {
-  const { manifest, issues } = validateManifest(input);
+  const { manifest, issues, migratedFrom } = validateManifest(input);
   if (!manifest || issues.some((issue) => issue.severity === 'error')) {
     return {
       valid: false,
       files: [],
       issues,
+      migratedFrom,
       stats: { settings: 0, blockTypes: 0, liquidBytes: 0, cssBytes: 0, javascriptBytes: 0 },
     };
   }
@@ -155,6 +156,7 @@ export function compileSection(input: unknown): CompileResult {
     valid: true,
     files,
     issues,
+    migratedFrom,
     stats: {
       settings: manifest.settings.filter(isSetting).length,
       blockTypes: manifest.blocks.length,

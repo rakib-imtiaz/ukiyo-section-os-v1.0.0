@@ -121,6 +121,7 @@ export default function Sidebar<V extends string>({ items, view, onNavigate, col
             ? { opacity: 1, width: indicator.w, height: indicator.h, transform: `translate(${indicator.x}px, ${indicator.y}px)` }
             : { opacity: 0 }}
         />
+        <div className="sidebar__nav-label" aria-hidden>Menu</div>
         {items.map((item) => {
           const Icon = item.icon;
           const active = view === item.id;

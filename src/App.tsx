@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDown, ArrowUp, Braces, Check, ChevronDown, CircleAlert, Code2, Copy, Download, ExternalLink,
-  Factory, FileCode2, FolderKanban, Globe, History, House, KeyRound, Layers3, Link2, LoaderCircle, LogOut,
+  Factory, FileCode2, FileDiff, FolderKanban, Globe, History, House, KeyRound, Layers3, Link2, LoaderCircle, LogOut,
   Monitor, Moon, PackageCheck, PanelLeftClose, Play, Plus, RefreshCw, Rocket, RotateCcw,
   Save, Search, ShieldCheck, SlidersHorizontal, Smartphone, Sparkles, Store, Sun, TerminalSquare, Trash2,
   Upload, WandSparkles,
 } from 'lucide-react';
 import { createCinematicHeroManifest, defaultHeroState } from './compiler/cinematicHero';
+import { locateIssue } from './compiler/inspect';
 import { getTemplate, templateForManifest, templates } from './compiler/templates';
 import type { ControlDef, TemplateDef } from './compiler/templates';
 import FactoryApp, { applyFactoryTheme } from './factory/FactoryApp';
@@ -35,6 +36,8 @@ interface CloneMeta { react_url?:string; store_url?:string; status?:string; stat
 interface SavedProject { id:string; name:string; handle:string; description:string; kind?:'section'|'clone'|string; status?:string; clone_meta?:CloneMeta|null; factory_job_id?:string|null; manifest:SectionManifest|null; created_at:string; updated_at:string; }
 interface SavedApiKey { id:string; label:string; key_prefix:string; last_used_at:string|null; created_at:string; revoked_at:string|null; }
 interface SavedDeployment { id:string; theme_name:string; theme_id:string; status:string; installed_files:string[]; rolled_back_at:string|null; created_at:string; }
+/** One file in a deploy dry-run diff (POST /api/shopify/diff). */
+interface DiffFileEntry { path: string; status: 'new' | 'changed' | 'same'; bytes: number }
 interface ProjectVersion { id:string; project_id:string; version_number:number; manifest:SectionManifest; compiled_files?:GeneratedFile[]; checksum:string; created_at:string; }
 
 /** Minimal LCS line diff between two JSON blobs — used by the version history panel. */
@@ -465,6 +468,8 @@ function apiErrorMessage(status: number, payload: { error?: string } | null, fal
   return payload?.error || fallback;
 }
 
+const formatBytes = (bytes: number) => (bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`);
+
 export default function App() {
   const [view, setView] = useState<View>('home');
   const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
@@ -531,6 +536,35 @@ export default function App() {
   const [versions, setVersions] = useState<ProjectVersion[]>([]);
   const [versionsLoading, setVersionsLoading] = useState(false);
   const [versionsError, setVersionsError] = useState('');
+  // Deploy dry-run diff (Preview changes) state.
+  const [diffFiles, setDiffFiles] = useState<DiffFileEntry[] | null>(null);
+  const [diffLoading, setDiffLoading] = useState(false);
+  const [diffError, setDiffError] = useState('');
+  // Contract editor line lookup (compiler inspect module).
+  const contractAreaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  /** Line/column for each contract issue index, resolved against the CURRENT textarea text. */
+  const contractIssueLocations = useMemo(() => {
+    const map = new Map<number, { line: number; column: number }>();
+    contractIssues.forEach((issue, index) => {
+      try { const location = locateIssue(contractText, issue.path); if (location) map.set(index, location); } catch { /* tolerate locator errors */ }
+    });
+    return map;
+  }, [contractIssues, contractText]);
+
+  /** Scroll + focus the contract textarea to a 1-indexed line and select it. */
+  const jumpToContractLine = (line: number) => {
+    const area = contractAreaRef.current;
+    if (!area) return;
+    const lines = contractText.split('\n');
+    const bounded = Math.max(1, Math.min(line, lines.length));
+    let offset = 0;
+    for (let index = 0; index < bounded - 1; index++) offset += lines[index].length + 1;
+    area.focus();
+    area.setSelectionRange(offset, offset + (lines[bounded - 1]?.length ?? 0));
+    const lineHeight = parseFloat(window.getComputedStyle(area).lineHeight) || 18;
+    area.scrollTop = Math.max(0, (bounded - 1) * lineHeight - area.clientHeight / 2);
+  };
 
   // Editing a control regenerates the manifest from the CURRENT template's state (never the
   // hero's), so a non-hero section survives control edits — the old customManifest-nuking bug.
@@ -839,6 +873,23 @@ export default function App() {
     (projectKindFilter === 'all' || projectKindOf(project) === projectKindFilter)
     && `${project.name} ${project.handle} ${project.description ?? ''}`.toLowerCase().includes(projectQuery.trim().toLowerCase()));
 
+  // A stale diff describes a different target — drop it when the section or theme changes.
+  useEffect(() => { setDiffFiles(null); setDiffError(''); }, [themeId, deployProjectId]);
+
+  /** Dry-run: ask the server what installing would change on the selected theme. */
+  const previewChanges = async () => {
+    if (!themeId) return;
+    setDiffLoading(true); setDiffError(''); setDiffFiles(null);
+    try {
+      const response = await fetch('/api/shopify/diff', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ manifest: installManifest, themeId }) });
+      if (response.status === 404) { setDiffError('Dry-run preview is not available on this server yet.'); return; }
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) { setDiffError(apiErrorMessage(response.status, payload, response.status === 422 ? 'The section has validation errors — compile it first to review them.' : 'The changes could not be previewed.')); return; }
+      setDiffFiles(Array.isArray(payload?.files) ? (payload.files as DiffFileEntry[]) : []);
+    } catch { setDiffError('The diff service is not reachable.'); }
+    finally { setDiffLoading(false); }
+  };
+
   const install = async () => {
     if (!themeId) return;
     setWorking(true);
@@ -878,7 +929,7 @@ export default function App() {
 
         {notice && <div className="notice"><Sparkles size={15} /><span>{notice}</span><button onClick={() => setNotice('')}>×</button></div>}
 
-        {view === 'home' && <HomeScreen onNavigate={(target) => setView(target)} />}
+        {view === 'home' && <HomeScreen onNavigate={(target) => setView(target)} workspaceName={session?.workspace?.name ?? null} onSwitchWorkspace={() => void switchWorkspace()} />}
 
         {view === 'projects' && <section className="page-pad projects-page">
           <div className="page-heading"><div><span>YOUR MODULAR SECTION LIBRARY</span><h2>Section projects</h2><p>Create once, version every change, and deploy the same design system across connected Shopify stores and unpublished themes.</p></div><button className="button button--accent" onClick={()=>newProject()}><Plus size={15}/>New section</button></div>
@@ -981,8 +1032,11 @@ export default function App() {
             <span className="contract-toolbar__hint">Agents: POST to <code>{window.location.origin}/mcp</code> (<code>validate_shopify_section</code>, <code>compile_shopify_section</code>) or <code>/v1/compile</code>.</span>
           </div>
           {contractError && <div className="error-line"><CircleAlert size={15} />{contractError}</div>}
-          {contractIssues.length > 0 && <div className="issues">{contractIssues.map((issue, index) => <div key={index} className={`issue issue--${issue.severity}`}><CircleAlert size={14} /><span><b>{issue.path}</b>{issue.message}</span></div>)}</div>}
-          <div className="contract-editor"><div className="editor-gutter">{contractText.split('\n').map((_, index) => <span key={index}>{index + 1}</span>)}</div><textarea spellCheck={false} value={contractText} onChange={(event) => setContractText(event.target.value)} /></div>
+          {contractIssues.length > 0 && <div className="issues">{contractIssues.map((issue, index) => {
+            const location = contractIssueLocations.get(index);
+            return <div key={index} className={`issue issue--${issue.severity}${location ? ' issue--clickable' : ''}`} onClick={location ? () => jumpToContractLine(location.line) : undefined}><CircleAlert size={14} /><span><b>{issue.path}</b>{issue.message}</span>{location && <button type="button" className="issue__line" title={`Jump to line ${location.line}, column ${location.column}`} onClick={() => jumpToContractLine(location.line)}>Ln {location.line}</button>}</div>;
+          })}</div>}
+          <div className="contract-editor"><div className="editor-gutter">{contractText.split('\n').map((_, index) => <span key={index}>{index + 1}</span>)}</div><textarea ref={contractAreaRef} spellCheck={false} value={contractText} onChange={(event) => setContractText(event.target.value)} /></div>
         </section>}
 
         {view === 'code' && <section className="page-pad code-page">
@@ -998,7 +1052,21 @@ export default function App() {
           <div className="page-heading"><div><span>SAFE THEME INSTALLATION</span><h2>Install to an unpublished theme</h2><p>ThemeBot refuses to modify the published theme. Connect a Shopify store, select a duplicated theme, and install the generated files.</p></div></div>
           <div className="deploy-grid">
             <div className="connection-card"><div className="connection-card__icon"><Store size={23} /></div><span>SHOPIFY CONNECTION</span><h3>{session?.authenticated ? session.shop : 'Store not connected'}</h3><p>{session?.authenticated ? `Secure OAuth session · Admin API ${session.shopify.apiVersion}.` : 'Connect a Shopify store from Projects before installing section files.'}</p><div className={`connection-state ${session?.authenticated ? 'is-connected' : ''}`}><i />{session?.authenticated ? 'Connected securely' : 'Connection required'}</div><button className="button button--quiet button--full" onClick={loadThemes} disabled={!session?.authenticated || working}>{working ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}Load unpublished themes</button></div>
-            <div className="install-card"><span>INSTALL TARGET</span><h3>{installManifest.name}</h3><Field label="Section to install" hint={deployProjectId ? 'Installing a saved project version.' : 'Installing the section currently open in the builder.'}><select value={deployProjectId} onChange={(event) => setDeployProjectId(event.target.value)}><option value="">Current builder section</option>{sectionProjects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}</select></Field><div className="install-files">{installFiles ? installFiles.map((file) => <div key={file.path}><FileCode2 size={15} /><span>{file.path}</span><Check size={14} /></div>) : <div className="install-files__hint"><FileCode2 size={15} /><span>{deployProjectId ? 'This saved version is compiled on the server at install time.' : 'Compile the section to preview the exact files that will install.'}</span></div>}</div><Field label="Unpublished theme"><select value={themeId} onChange={(event) => setThemeId(event.target.value)} disabled={!themes.length}><option value="">{themes.length ? 'Select a theme' : 'Load connected themes first'}</option>{themes.map((theme) => <option value={theme.id} key={theme.id}>{theme.name} · {theme.role.toLowerCase()}</option>)}</select></Field><div className="safety-note"><PanelLeftClose size={16} /><p><b>Published-theme lock is active.</b><br />Installation is only allowed on an unpublished theme.</p></div><button className="button button--accent button--full" onClick={install} disabled={!themeId || working}>{working ? <LoaderCircle className="spin" size={15} /> : <PackageCheck size={15} />}Install section package</button></div>
+            <div className="install-card"><span>INSTALL TARGET</span><h3>{installManifest.name}</h3><Field label="Section to install" hint={deployProjectId ? 'Installing a saved project version.' : 'Installing the section currently open in the builder.'}><select value={deployProjectId} onChange={(event) => setDeployProjectId(event.target.value)}><option value="">Current builder section</option>{sectionProjects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}</select></Field><div className="install-files">{installFiles ? installFiles.map((file) => <div key={file.path}><FileCode2 size={15} /><span>{file.path}</span><Check size={14} /></div>) : <div className="install-files__hint"><FileCode2 size={15} /><span>{deployProjectId ? 'This saved version is compiled on the server at install time.' : 'Compile the section to preview the exact files that will install.'}</span></div>}</div><Field label="Unpublished theme"><select value={themeId} onChange={(event) => setThemeId(event.target.value)} disabled={!themes.length}><option value="">{themes.length ? 'Select a theme' : 'Load connected themes first'}</option>{themes.map((theme) => <option value={theme.id} key={theme.id}>{theme.name} · {theme.role.toLowerCase()}</option>)}</select></Field><div className="safety-note"><PanelLeftClose size={16} /><p><b>Published-theme lock is active.</b><br />Installation is only allowed on an unpublished theme.</p></div>
+              {diffError && <div className="error-line"><CircleAlert size={15} />{diffError}</div>}
+              {diffFiles && <div className="deploy-diff">
+                <div className="deploy-diff__summary">
+                  {(['new', 'changed', 'same'] as const).map((status) => {
+                    const count = diffFiles.filter((file) => file.status === status).length;
+                    return <span key={status} className={`diff-badge diff-badge--${status}`}>{count} {status === 'same' ? 'unchanged' : status}</span>;
+                  })}
+                </div>
+                {diffFiles.length === 0
+                  ? <div className="deploy-diff__empty">The server reported no files for this install.</div>
+                  : diffFiles.map((file) => <div key={file.path} className="deploy-diff__row"><FileCode2 size={14} /><span title={file.path}>{file.path}</span><em className={`diff-badge diff-badge--${file.status}`}>{file.status === 'same' ? 'unchanged' : file.status}</em><small>{formatBytes(file.bytes)}</small></div>)}
+              </div>}
+              <button className="button button--quiet button--full" onClick={previewChanges} disabled={!themeId || working || diffLoading} title="Dry run — see which theme files would be added or changed, without installing">{diffLoading ? <LoaderCircle className="spin" size={15} /> : <FileDiff size={15} />}Preview changes</button>
+              <button className="button button--accent button--full" onClick={install} disabled={!themeId || working}>{working ? <LoaderCircle className="spin" size={15} /> : <PackageCheck size={15} />}Install section package</button></div>
           </div>
           {session?.authenticated&&<div className="deployment-history"><div className="history-heading"><div><History size={17}/><div><span>DEPLOYMENT LEDGER</span><h3>Installation history</h3></div></div><button onClick={()=>fetch('/api/deployments').then((item)=>item.json()).then((data)=>setDeployments(data.deployments??[]))}><RefreshCw size={14}/>Refresh</button></div>{deployments.length===0?<div className="history-empty">No deployments have been made from this store yet.</div>:<div className="history-table">{deployments.map((deployment)=><div key={deployment.id}><span className={`deployment-status deployment-status--${deployment.status}`}>{deployment.status.replace('_',' ')}</span><div><b>{deployment.theme_name}</b><small>{deployment.installed_files.length} files · {new Date(deployment.created_at).toLocaleString()}</small></div><code>{deployment.theme_id.split('/').pop()}</code><button onClick={()=>rollback(deployment.id)} disabled={deployment.status!=='succeeded'||working}><RotateCcw size={13}/>Rollback</button></div>)}</div>}</div>}
         </section>}
@@ -1011,7 +1079,7 @@ export default function App() {
           </div>
         </section>}
 
-        {view === 'factory' && <FactoryApp />}
+        {view === 'factory' && <FactoryApp onNavigate={(target) => void requestView(target)} />}
 
         {view === 'terminal' && <TerminalPane onActivity={() => window.dispatchEvent(new Event('app:refresh'))} />}
 

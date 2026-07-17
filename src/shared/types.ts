@@ -108,6 +108,12 @@ export interface CompileResult {
   valid: boolean;
   files: GeneratedFile[];
   issues: ValidationIssue[];
+  /**
+   * When the input manifest was authored against an older contract version, the
+   * version it was upgraded from (0 = versionless); null when no migration ran.
+   * Lets the UI show "upgraded from vX" after compiling a legacy contract.
+   */
+  migratedFrom?: number | null;
   stats: {
     settings: number;
     blockTypes: number;

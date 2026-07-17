@@ -18,11 +18,11 @@ async function postJson<T>(url: string, body?: unknown): Promise<{ ok: boolean; 
   catch { return { ok: false, data: null }; }
 }
 
-function IllustrationPanel() {
+function IllustrationPanel({ theme }: { theme: 'light' | 'dark' }) {
   return (
     <aside className="ob-aside" aria-hidden>
       <div className="ob-aside__glow" />
-      <img className="ob-aside__art" src="/onboarding/crystal.png" alt="" draggable={false} />
+      <img className="ob-aside__art" src={theme === 'dark' ? '/onboarding/crystal-dark.png' : '/onboarding/crystal.png'} alt="" draggable={false} />
       <div className="ob-aside__sparks">{[0, 1, 2, 3, 4].map((i) => <i key={i} style={{ ['--d' as string]: `${i * 0.8}s`, ['--x' as string]: `${(i - 2) * 20}px` }} />)}</div>
       <div className="ob-aside__caption"><b>Clone React sites into Shopify.</b><span>Design, QA, and ship — from one cockpit.</span></div>
     </aside>
@@ -81,10 +81,11 @@ export default function OnboardingGate({ onComplete }: { onComplete: () => void 
   ];
   const stepIndex = steps.findIndex((entry) => entry.id === step);
 
+  const theme = document.documentElement.getAttribute('data-app-theme') === 'dark' ? 'dark' : 'light';
   return (
-    <div className="ob-root factory-root" data-theme={document.documentElement.getAttribute('data-app-theme') === 'dark' ? 'dark' : 'light'}>
+    <div className="ob-root factory-root" data-theme={theme}>
       <div className="ob-shell">
-        <IllustrationPanel />
+        <IllustrationPanel theme={theme} />
         <div className="ob-main">
           <div className="ob-brand"><span className="ob-brand__mark"><Sparkles size={15} /></span> THEMEBOT</div>
           <ol className="ob-steps">

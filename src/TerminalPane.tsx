@@ -11,13 +11,25 @@ import '@xterm/xterm/css/xterm.css';
 
 type Status = 'connecting' | 'connected' | 'closed';
 
+/** Cross-surface handoff: another view (e.g. a factory job) can request a terminal
+ * opened in a specific directory. The request is stashed module-level so it survives
+ * until TerminalPane mounts, and also dispatched as a window event so an already
+ * mounted pane reacts immediately. Event name: 'themebot:open-terminal'. */
+export interface TerminalOpenRequest { cwd: string; label?: string }
+const OPEN_TERMINAL_EVENT = 'themebot:open-terminal';
+let pendingOpenRequest: TerminalOpenRequest | null = null;
+export function openTerminalSession(request: TerminalOpenRequest) {
+  pendingOpenRequest = request;
+  window.dispatchEvent(new CustomEvent<TerminalOpenRequest>(OPEN_TERMINAL_EVENT, { detail: request }));
+}
+
 const TERMINAL_THEME = {
   background: '#0b0b0e', foreground: '#e4e4e7', cursor: '#4f7cff',
   selectionBackground: 'rgba(79,124,255,0.28)', black: '#18181b', brightBlack: '#52525b',
 };
 
 /** One independent PTY session. Kept mounted (hidden) when its tab is inactive so the shell persists. */
-function TerminalInstance({ active, onStatus, onActivity }: { active: boolean; onStatus: (status: Status) => void; onActivity?: () => void }) {
+function TerminalInstance({ active, cwd, onStatus, onActivity }: { active: boolean; cwd?: string; onStatus: (status: Status) => void; onActivity?: () => void }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -45,7 +57,9 @@ function TerminalInstance({ active, onStatus, onActivity }: { active: boolean; o
     fitRef.current = fit;
     onStatus('connecting');
 
-    const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/terminal`);
+    // Optional working directory (validated server-side; invalid cwd falls back to project root).
+    const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : '';
+    const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/terminal${query}`);
     const sendResize = () => {
       try { fit.fit(); } catch { return; }
       if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
@@ -70,7 +84,7 @@ function TerminalInstance({ active, onStatus, onActivity }: { active: boolean; o
       termRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [generation]);
+  }, [generation, cwd]);
 
   // Refit + focus whenever this tab becomes active (it was display:none before).
   useEffect(() => {
@@ -90,7 +104,7 @@ function TerminalInstance({ active, onStatus, onActivity }: { active: boolean; o
   );
 }
 
-interface Session { id: number; status: Status }
+interface Session { id: number; status: Status; cwd?: string; label?: string }
 
 export default function TerminalPane({ onActivity }: { onActivity?: () => void }) {
   const nextId = useRef(2);
@@ -101,11 +115,28 @@ export default function TerminalPane({ onActivity }: { onActivity?: () => void }
     setSessions((current) => current.map((session) => (session.id === id ? { ...session, status } : session)));
   }, []);
 
-  const addSession = () => {
+  const addSession = useCallback((options?: { cwd?: string; label?: string }) => {
     const id = nextId.current++;
-    setSessions((current) => [...current, { id, status: 'connecting' }]);
+    setSessions((current) => [...current, { id, status: 'connecting', cwd: options?.cwd, label: options?.label }]);
     setActive(id);
-  };
+  }, []);
+
+  // Honor "open terminal here" requests from other surfaces (factory jobs): a pending
+  // request stashed before this pane mounted, plus live 'themebot:open-terminal' events.
+  useEffect(() => {
+    if (pendingOpenRequest) {
+      const request = pendingOpenRequest;
+      pendingOpenRequest = null;
+      addSession({ cwd: request.cwd, label: request.label });
+    }
+    const onOpenRequest = (event: Event) => {
+      const detail = (event as CustomEvent<TerminalOpenRequest>).detail;
+      pendingOpenRequest = null; // this pane handles it now — don't replay on a future remount
+      if (detail?.cwd) addSession({ cwd: detail.cwd, label: detail.label });
+    };
+    window.addEventListener(OPEN_TERMINAL_EVENT, onOpenRequest);
+    return () => window.removeEventListener(OPEN_TERMINAL_EVENT, onOpenRequest);
+  }, [addSession]);
 
   const closeSession = (id: number) => {
     setSessions((current) => {
@@ -125,24 +156,24 @@ export default function TerminalPane({ onActivity }: { onActivity?: () => void }
         <div className="term-tabbar__tabs">
           {sessions.map((session, index) => (
             <div key={session.id} className={`term-tab${session.id === active ? ' is-active' : ''}`}>
-              <button type="button" className="term-tab__main" onClick={() => setActive(session.id)}>
-                <i className={dotClass(session.status)} aria-hidden /> Shell {index + 1}
+              <button type="button" className="term-tab__main" title={session.cwd} onClick={() => setActive(session.id)}>
+                <i className={dotClass(session.status)} aria-hidden /> {session.label ?? `Shell ${index + 1}`}
               </button>
               <button type="button" className="term-tab__close" title="Close shell" onClick={() => closeSession(session.id)}><X size={12} /></button>
             </div>
           ))}
-          <button type="button" className="term-tab__add" title="New shell" onClick={addSession}><Plus size={15} /></button>
+          <button type="button" className="term-tab__add" title="New shell" onClick={() => addSession()}><Plus size={15} /></button>
         </div>
       </div>
       <div className="term-body">
         {sessions.map((session) => (
           // Kept mounted (hidden) so each shell survives tab switches.
           <div key={session.id} className="term-slot" style={{ display: session.id === active ? 'flex' : 'none' }}>
-            <TerminalInstance active={session.id === active} onStatus={(status) => setStatus(session.id, status)} onActivity={onActivity} />
+            <TerminalInstance active={session.id === active} cwd={session.cwd} onStatus={(status) => setStatus(session.id, status)} onActivity={onActivity} />
           </div>
         ))}
       </div>
-      <div className="term-foot">Real shells in the project directory · localhost-only · each tab is an independent session · changes sync to the app automatically.</div>
+      <div className="term-foot">Real shells in the project or job workspace directory · localhost-only · each tab is an independent session · changes sync to the app automatically.</div>
     </div>
   );
 }

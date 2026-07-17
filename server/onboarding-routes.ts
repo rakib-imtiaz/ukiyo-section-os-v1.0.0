@@ -3,7 +3,7 @@
 // integrated terminal/browser). Mounted BEFORE the session-gated /api router.
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { config } from './config';
-import { disconnectClaude, getClaudeStatus, reconnectCli, setApiKey, startLogin } from './claude-connect';
+import { disconnectClaude, getClaudeStatus, getClaudeStatusQuick, reconnectCli, setApiKey, startLogin } from './claude-connect';
 import { browse, getWorkspaceState, recentWorkspaces, refreshWorkspace, selectWorkspace, clearActiveWorkspace } from './workspace';
 import { progressSnapshot } from './progress';
 
@@ -28,6 +28,12 @@ export function createOnboardingRouter() {
   // ---- Claude connection ----
   router.get('/claude/status', handle(async (request, response) => {
     response.json(await getClaudeStatus(request.query.force === '1'));
+  }));
+  // Minimal probe-free summary for the main app's Connections UI (same localhost/dev gate
+  // as the rest of this router — scoped by the '/claude' prefix above). No paths/secrets.
+  router.get('/claude/summary', handle(async (_request, response) => {
+    const status = await getClaudeStatusQuick().catch(() => null);
+    response.json({ connected: Boolean(status?.connected), method: status?.method ?? null });
   }));
   router.post('/claude/login', handle(async (_request, response) => {
     response.json(await startLogin());

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { migrateContract } from './migrate';
 import { SETTING_TYPES } from '../shared/types';
 import type {
   BlockDefinition,
@@ -165,7 +166,9 @@ function validateEntries(
 ) {
   const ids = new Set<string>();
   entries.forEach((entry, index) => {
-    const itemPath = `${path}[${index}]`;
+    // Dot notation (`settings.3`, not `settings[3]`) so every emitted path is
+    // machine-usable by locateIssue (./inspect.ts) and matches zod's join('.').
+    const itemPath = `${path}.${index}`;
     validateVisibleIf(entry, itemPath, visibilityScope, issues);
     if (!isSetting(entry)) return;
     if (!idPattern.test(entry.id)) {
@@ -211,18 +214,18 @@ function validateBlocks(blocks: BlockDefinition[], sectionSettingIds: Set<string
   const types = new Set<string>();
   blocks.forEach((block, index) => {
     if (!idPattern.test(block.type)) {
-      issues.push({ severity: 'error', path: `blocks[${index}].type`, message: 'Block types must use snake_case.' });
+      issues.push({ severity: 'error', path: `blocks.${index}.type`, message: 'Block types must use snake_case.' });
     }
     if (types.has(block.type)) {
-      issues.push({ severity: 'error', path: `blocks[${index}].type`, message: `Duplicate block type: ${block.type}.` });
+      issues.push({ severity: 'error', path: `blocks.${index}.type`, message: `Duplicate block type: ${block.type}.` });
     }
     types.add(block.type);
     // Within a block, visible_if may target the block's own settings; fall back to
     // section settings for shared toggles.
     const scope = new Set<string>([...sectionSettingIds, ...collectSettingIds(block.settings)]);
-    validateEntries(block.settings, `blocks[${index}].settings`, issues, scope);
+    validateEntries(block.settings, `blocks.${index}.settings`, issues, scope);
     if (typeof block.limit === 'number' && block.limit > SHOPIFY_MAX_BLOCKS) {
-      issues.push({ severity: 'error', path: `blocks[${index}].limit`, message: `Block limit may not exceed ${SHOPIFY_MAX_BLOCKS}.` });
+      issues.push({ severity: 'error', path: `blocks.${index}.limit`, message: `Block limit may not exceed ${SHOPIFY_MAX_BLOCKS}.` });
     }
   });
 }
@@ -238,14 +241,14 @@ function validatePresets(
   blocks.forEach((block) => blockSettingIds.set(block.type, collectSettingIds(block.settings)));
 
   presets.forEach((preset, index) => {
-    const presetPath = `presets[${index}]`;
+    const presetPath = `presets.${index}`;
     (preset.settings ? Object.keys(preset.settings) : []).forEach((key) => {
       if (!sectionSettingIds.has(key)) {
         issues.push({ severity: 'warning', path: `${presetPath}.settings.${key}`, message: `Preset sets "${key}", which is not a declared section setting.` });
       }
     });
     (preset.blocks ?? []).forEach((presetBlock, blockIndex) => {
-      const blockPath = `${presetPath}.blocks[${blockIndex}]`;
+      const blockPath = `${presetPath}.blocks.${blockIndex}`;
       if (!declaredBlockTypes.has(presetBlock.type)) {
         issues.push({ severity: 'error', path: `${blockPath}.type`, message: `Preset block references undeclared block type "${presetBlock.type}".` });
         return;
@@ -260,9 +263,30 @@ function validatePresets(
   });
 }
 
-export function validateManifest(input: unknown): { manifest?: SectionManifest; issues: ValidationIssue[] } {
+/**
+ * Validate a design contract.
+ *
+ * Runs `migrateContract` (./migrate.ts) FIRST, so versionless or older-version
+ * manifests are upgraded to the current contract before any checks run — the
+ * returned `manifest` is the upgraded document. `migratedFrom` reports the
+ * version the input arrived at (0 = versionless) so callers can show
+ * "upgraded from vX"; it is null when no migration was needed. Current-version
+ * manifests pass through migration by reference, byte-identical.
+ *
+ * Every issue carries a machine-usable dot-notation `path` (e.g.
+ * `settings.3.type`, `blocks.0.settings.1.id`) that `locateIssue`
+ * (./inspect.ts) can resolve to a line/column in the raw JSON text. Root-level
+ * issues use the sentinel path `manifest`, which locateIssue maps to the start
+ * of the document.
+ */
+export function validateManifest(input: unknown): {
+  manifest?: SectionManifest;
+  issues: ValidationIssue[];
+  migratedFrom: number | null;
+} {
+  const { manifest: migrated, migratedFrom } = migrateContract(input);
   const issues: ValidationIssue[] = [];
-  const parsed = manifestSchema.safeParse(input);
+  const parsed = manifestSchema.safeParse(migrated);
   if (!parsed.success) {
     parsed.error.issues.forEach((issue) => {
       issues.push({ severity: 'error', path: issue.path.join('.') || 'manifest', message: issue.message });
@@ -272,7 +296,7 @@ export function validateManifest(input: unknown): { manifest?: SectionManifest; 
   // Best-effort deep checks: run even when the zod pass failed so a broken manifest
   // surfaces every actionable problem at once. Each access is guarded because the
   // shape is not yet trusted.
-  const candidate = (input && typeof input === 'object' ? input : {}) as Partial<SectionManifest>;
+  const candidate = (migrated && typeof migrated === 'object' ? migrated : {}) as Partial<SectionManifest>;
   const sectionSettings = Array.isArray(candidate.settings) ? (candidate.settings as EditorEntry[]) : [];
   const blocks = Array.isArray(candidate.blocks) ? (candidate.blocks as BlockDefinition[]) : [];
   const presets = Array.isArray(candidate.presets) ? (candidate.presets as SectionPreset[]) : [];
@@ -306,7 +330,7 @@ export function validateManifest(input: unknown): { manifest?: SectionManifest; 
   }
 
   if (!parsed.success) {
-    return { issues };
+    return { issues, migratedFrom };
   }
-  return { manifest: input as SectionManifest, issues };
+  return { manifest: migrated as SectionManifest, issues, migratedFrom };
 }

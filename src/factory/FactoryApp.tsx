@@ -9,7 +9,10 @@ import { JobDetail } from './JobDetail';
 import { SettingsPanel } from './SettingsPanel';
 import { STATUS_META, TERMINAL, type FactorySettings, type Job } from './types';
 
-function FactoryInner() {
+/** Views the factory surface can hand off to (terminal "open here", browser compare). */
+export type FactoryNavigate = (view: 'terminal' | 'browser') => void;
+
+function FactoryInner({ onNavigate }: { onNavigate?: FactoryNavigate }) {
   const toast = useToast();
   const [tab, setTab] = useState('dashboard');
   const [openJobId, setOpenJobId] = useState<string | null>(null);
@@ -86,7 +89,7 @@ function FactoryInner() {
         {tab === 'settings' && <SettingsPanel jobs={jobs} refreshFleet={refresh} />}
       </div>
 
-      <JobDetail jobId={openJobId} onClose={() => setOpenJobId(null)} />
+      <JobDetail jobId={openJobId} onClose={() => setOpenJobId(null)} onNavigate={onNavigate} />
     </div>
   );
 }
@@ -119,12 +122,12 @@ export function ThemeToggle() {
   );
 }
 
-export default function FactoryApp() {
+export default function FactoryApp({ onNavigate }: { onNavigate?: FactoryNavigate } = {}) {
   const initial = typeof localStorage !== 'undefined' && localStorage.getItem('factory-theme') === 'dark' ? 'dark' : 'light';
   return (
     <div className="factory-root h-full min-h-0" data-theme={initial}>
       <ToastProvider>
-        <FactoryInner />
+        <FactoryInner onNavigate={onNavigate} />
       </ToastProvider>
     </div>
   );

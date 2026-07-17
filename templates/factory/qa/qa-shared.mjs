@@ -126,8 +126,15 @@ export function parseHandles(raw) {
 
 export function loadHandles() {
   const handlesPath = path.join(ROOT, 'qa', 'state', 'handles.json');
-  if (!existsSync(handlesPath)) return {};
-  try { return parseHandles(JSON.parse(readFileSync(handlesPath, 'utf8'))); } catch { return {}; }
+  if (!existsSync(handlesPath)) {
+    console.warn('[qa] WARNING: handles.json missing — falling back to heuristic route mapping; scores may be unreliable (expected at qa/state/handles.json)');
+    return {};
+  }
+  try { return parseHandles(JSON.parse(readFileSync(handlesPath, 'utf8'))); }
+  catch (error) {
+    console.warn(`[qa] WARNING: handles.json unparseable (${error?.message ?? 'unknown error'}) — falling back to heuristic route mapping; scores may be unreliable`);
+    return {};
+  }
 }
 
 /** Discover React routes: handles.json keys + same-origin nav links crawled from the home page. */

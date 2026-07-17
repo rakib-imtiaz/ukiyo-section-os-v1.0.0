@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from '../config';
 import { decrypt } from '../security';
@@ -82,7 +82,7 @@ export function compositeScore(subscores: QaSubscores, weights = DEFAULT_SCORE_W
 
 function issueKey(issue: QaIssue) { return `${issue.kind}|${issue.page}|${issue.title}`; }
 
-function renderSummary(job: FactoryJobRecord, iteration: number, score: number, subscores: QaSubscores, issues: QaIssue[], fixedKeys: string[], unreachable: string[]) {
+function renderSummary(job: FactoryJobRecord, iteration: number, score: number, subscores: QaSubscores, issues: QaIssue[], fixedKeys: string[], unreachable: string[], handlesMissing: boolean) {
   const pct = (value: number | null) => value == null ? 'n/a' : `${Math.round(value * 100)}%`;
   const lines = [
     `# QA summary — iteration ${iteration} for ${job.name}`,
@@ -91,6 +91,9 @@ function renderSummary(job: FactoryJobRecord, iteration: number, score: number, 
     `Subscores — section presence: ${pct(subscores.presence)} · text match: ${pct(subscores.text)} · interactions: ${pct(subscores.interaction)}`,
     '',
   ];
+  if (handlesMissing) {
+    lines.push('> **WARNING:** `qa/state/handles.json` missing — falling back to heuristic route mapping; scores may be unreliable.', '');
+  }
   if (fixedKeys.length) {
     lines.push(`## Fixed since last iteration (${fixedKeys.length})`, '');
     fixedKeys.forEach((key) => lines.push(`- ~~${key.split('|').slice(1).join(' — ')}~~`));
@@ -120,6 +123,13 @@ export async function runQa(job: FactoryJobRecord, iteration: number, settings: 
     const logPath = path.join(job.workspace_path, 'factory', 'logs', `qa-${iteration}.log`);
     const password = job.storefront_password_cipher ? decrypt(job.storefront_password_cipher) : null;
     const timeoutMin = settings.qaTimeoutMin;
+
+    // Route mapping ground truth: without handles.json the QA scripts fall back to heuristic
+    // React-route -> Shopify-path guessing, which silently skews scores. Say so, loudly.
+    const handlesMissing = !(await access(path.join(job.workspace_path, 'qa', 'state', 'handles.json')).then(() => true, () => false));
+    if (handlesMissing) {
+      await appendFile(logPath, `[qa] WARNING: handles.json missing — falling back to heuristic route mapping; scores may be unreliable (expected at qa/state/handles.json)\n`).catch(() => {});
+    }
 
     const runSections = job.qa_mode !== 'interactions';
     const runInteractions = job.qa_mode !== 'sections';
@@ -151,12 +161,14 @@ export async function runQa(job: FactoryJobRecord, iteration: number, settings: 
 
     const unreachable = (sections?.pages ?? []).filter((page) => page.status === 'unreachable').map((page) => page.route);
     const summaryRelative = path.join('qa', 'reports', 'factory', `qa-summary-${iteration}.md`);
-    await writeFile(path.join(job.workspace_path, summaryRelative), renderSummary(job, iteration, score, subscores, issues, fixedKeys, unreachable));
+    await writeFile(path.join(job.workspace_path, summaryRelative), renderSummary(job, iteration, score, subscores, issues, fixedKeys, unreachable, handlesMissing));
 
     return {
       score,
       subscores,
-      breakdown: { issues: issues.length, fixed: fixedKeys.length, unreachable: unreachable.length, pages: sections?.pages?.length ?? 0 },
+      // subscores ride inside breakdown so they persist per-iteration in factory_iterations
+      // and surface through GET /jobs/:id for the UI to chart presence/text/interaction.
+      breakdown: { issues: issues.length, fixed: fixedKeys.length, unreachable: unreachable.length, pages: sections?.pages?.length ?? 0, subscores, handlesMissing },
       summaryPath: summaryRelative,
       issueCount: issues.length,
     };

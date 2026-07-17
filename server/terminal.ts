@@ -5,7 +5,10 @@
 //   1. Disabled in production (config.terminal.enabled defaults off when NODE_ENV=production).
 //   2. Localhost-only — connections whose Host/Origin isn't a loopback address are rejected.
 // Never expose the server port publicly with this enabled.
+import { statSync } from 'node:fs';
+import type { IncomingMessage } from 'node:http';
 import os from 'node:os';
+import path from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
 import pty from 'node-pty';
 import { config } from './config';
@@ -33,6 +36,31 @@ function isLocalRequest(host: string | undefined, origin: string | undefined): b
   // Origin is absent for non-browser clients; when present it must also be loopback.
   const originOk = origin == null || loop(hostname(origin));
   return hostOk && originOk;
+}
+
+/**
+ * Per-session working directory from the upgrade URL (`/terminal?cwd=<encoded abs path>`).
+ * SECURITY: this hands a real shell its starting directory, so the requested path must
+ * resolve INSIDE an allowed root — the factory workspace or this project — and must be an
+ * existing directory. Anything else silently falls back to the default cwd (never errors
+ * the socket): a bad path from the UI should still open a usable terminal.
+ * `path.relative` on win32 compares case-insensitively, so drive-letter/case tricks don't escape.
+ */
+function resolveSessionCwd(requestUrl: string | undefined): string {
+  const fallback = config.terminal.cwd;
+  if (!requestUrl) return fallback;
+  let requested: string | null;
+  try { requested = new URL(requestUrl, 'http://localhost').searchParams.get('cwd'); } catch { return fallback; }
+  if (!requested || !requested.trim()) return fallback;
+  const resolved = path.resolve(requested.trim());
+  const allowedRoots = [path.resolve(config.factory.workspaceRoot), path.resolve('.')];
+  const inside = allowedRoots.some((root) => {
+    const relative = path.relative(root, resolved);
+    return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+  });
+  if (!inside) return fallback;
+  try { if (!statSync(resolved).isDirectory()) return fallback; } catch { return fallback; }
+  return resolved;
 }
 
 // node-pty's Windows/ConPTY internals are unstable on a headless server (no attached
@@ -71,15 +99,16 @@ export function attachTerminal() {
   });
   addWsRoute('/terminal', wss);
 
-  wss.on('connection', (socket: WebSocket) => {
+  wss.on('connection', (socket: WebSocket, request: IncomingMessage) => {
     const { file, args } = defaultShell();
+    const cwd = resolveSessionCwd(request.url);
     let term: pty.IPty;
     try {
       term = pty.spawn(file, args, {
         name: 'xterm-256color',
         cols: 80,
         rows: 24,
-        cwd: config.terminal.cwd,
+        cwd,
         env: { ...process.env, TERM: 'xterm-256color' } as Record<string, string>,
       });
     } catch (error) {
@@ -108,7 +137,7 @@ export function attachTerminal() {
     socket.on('close', cleanup);
     socket.on('error', cleanup);
 
-    socket.send(`\x1b[90mConnected · ${file} · ${config.terminal.cwd}\x1b[0m\r\n`);
+    socket.send(`\x1b[90mConnected · ${file} · ${cwd}\x1b[0m\r\n`);
   });
 
   wss.on('error', () => { /* keep the http server alive if the ws layer errors */ });

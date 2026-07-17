@@ -18,7 +18,9 @@ export type ProjectKind = 'section' | 'clone';
 export interface CloneProjectMeta { react_url: string; store_url: string; status: string; status_detail: string | null; last_score: number | null; }
 // shop_id is null for kind='clone' rows: a factory clone job may have no connected OAuth shop,
 // so clone-projects live in a shopless "local" scope (see migrations/003_clone_projects.sql).
-export interface ProjectRecord { id: string; shop_id: string | null; name: string; handle: string; description: string; manifest: SectionManifest; kind: ProjectKind; factory_job_id: string | null; clone_meta: CloneProjectMeta | null; created_at: string; updated_at: string; }
+// last_theme_id / last_deployed_at (004): the last theme this project successfully deployed
+// to — set by the deploy flow on success, null until the first successful deploy.
+export interface ProjectRecord { id: string; shop_id: string | null; name: string; handle: string; description: string; manifest: SectionManifest; kind: ProjectKind; factory_job_id: string | null; clone_meta: CloneProjectMeta | null; last_theme_id: string | null; last_deployed_at: string | null; created_at: string; updated_at: string; }
 export interface VersionRecord { id: string; project_id: string; version_number: number; manifest: SectionManifest; compiled_files: GeneratedFile[]; checksum: string; created_at: string; }
 export interface DeploymentRecord { id: string; shop_id: string; project_id: string | null; version_id: string | null; theme_id: string; theme_name: string; status: string; snapshot: unknown[]; installed_files: string[]; error: string | null; rolled_back_at: string | null; created_at: string; updated_at: string; }
 export interface ApiKeyRecord { id: string; shop_id: string; label: string; key_prefix: string; secret_hash: string; last_used_at: string | null; revoked_at: string | null; created_at: string; }
@@ -57,7 +59,8 @@ function hydrateFactoryMemory() {
     for (const setting of state.settings ?? []) memory.settings.set(setting.key, setting);
     // Clone-projects mirror factory jobs, so they ride the same persistence file (section
     // projects stay ephemeral in memory mode, matching pre-existing behavior).
-    for (const project of state.cloneProjects ?? []) if (project.kind === 'clone') memory.projects.set(project.id, project);
+    // Coalesce the 004 deploy-target fields so records persisted before 004 hydrate as null.
+    for (const project of state.cloneProjects ?? []) if (project.kind === 'clone') memory.projects.set(project.id, { ...project, last_theme_id: project.last_theme_id ?? null, last_deployed_at: project.last_deployed_at ?? null });
   } catch { /* first run or unreadable — start empty */ }
 }
 
@@ -178,7 +181,7 @@ class Repository {
 
   async createProject(shopId: string, manifest: SectionManifest) {
     const id = randomUUID(); const timestamp = now();
-    const record: ProjectRecord = { id, shop_id: shopId, name: manifest.name, handle: manifest.handle, description: manifest.description, manifest, kind: 'section', factory_job_id: null, clone_meta: null, created_at: timestamp, updated_at: timestamp };
+    const record: ProjectRecord = { id, shop_id: shopId, name: manifest.name, handle: manifest.handle, description: manifest.description, manifest, kind: 'section', factory_job_id: null, clone_meta: null, last_theme_id: null, last_deployed_at: null, created_at: timestamp, updated_at: timestamp };
     if (this.pool) return (await this.pool.query<ProjectRecord>('INSERT INTO projects (id,shop_id,name,handle,description,manifest) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *', [id,shopId,record.name,record.handle,record.description,manifest])).rows[0];
     if ([...memory.projects.values()].some((item) => item.shop_id === shopId && item.handle === manifest.handle)) throw new Error('A project with this handle already exists.');
     memory.projects.set(id, record); return record;
@@ -193,6 +196,18 @@ class Repository {
   async deleteProject(id: string, shopId: string) {
     if (this.pool) return Boolean((await this.pool.query('DELETE FROM projects WHERE id=$1 AND shop_id=$2', [id,shopId])).rowCount);
     const current = memory.projects.get(id); return current?.shop_id === shopId ? memory.projects.delete(id) : false;
+  }
+
+  /**
+   * Remember the last theme a project successfully deployed to (004). Called by the deploy
+   * flow AFTER a deployment succeeds; best-effort — deploy success never depends on it.
+   * Intentionally does not bump updated_at (a deploy is not a content edit).
+   */
+  async setProjectDeployTarget(id: string, themeId: string) {
+    if (this.pool) { await this.pool.query('UPDATE projects SET last_theme_id=$2, last_deployed_at=NOW() WHERE id=$1', [id, themeId]); return; }
+    const current = memory.projects.get(id); if (!current) return;
+    memory.projects.set(id, { ...current, last_theme_id: themeId, last_deployed_at: now() });
+    if (current.kind === 'clone') persistFactoryMemory();
   }
 
   /**
@@ -215,7 +230,7 @@ class Repository {
     const existing = [...memory.projects.values()].find((item) => item.factory_job_id === input.jobId);
     const record: ProjectRecord = existing
       ? { ...existing, name: input.name, handle: input.handle, description, clone_meta: cloneMeta, updated_at: now() }
-      : { id: randomUUID(), shop_id: null, name: input.name, handle: input.handle, description, manifest, kind: 'clone', factory_job_id: input.jobId, clone_meta: cloneMeta, created_at: now(), updated_at: now() };
+      : { id: randomUUID(), shop_id: null, name: input.name, handle: input.handle, description, manifest, kind: 'clone', factory_job_id: input.jobId, clone_meta: cloneMeta, last_theme_id: null, last_deployed_at: null, created_at: now(), updated_at: now() };
     memory.projects.set(record.id, record); persistFactoryMemory(); return record;
   }
 

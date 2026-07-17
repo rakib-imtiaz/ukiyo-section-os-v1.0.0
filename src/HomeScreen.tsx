@@ -4,7 +4,8 @@
 // deliberate departure from the app's strict monochrome (see home/home.css).
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import {
-  ArrowRight, BookOpen, Factory, FolderKanban, KeyRound, Layers3, Link2, Plus, Rocket, WandSparkles,
+  ArrowLeftRight, ArrowRight, BookOpen, Factory, FolderKanban, Globe, KeyRound, Layers3, Link2, Plus, Rocket,
+  TerminalSquare, WandSparkles,
 } from 'lucide-react';
 import './factory/theme.css';
 import './home/home.css';
@@ -12,7 +13,7 @@ import { SpotlightCard, useReducedMotion } from './factory/fx';
 import { useLiveFactory } from './home/useLiveFactory';
 import type { Iteration, Job, JobStatus } from './factory/types';
 
-export type HomeTarget = 'factory' | 'build' | 'projects' | 'contract' | 'deploy' | 'settings' | 'code';
+export type HomeTarget = 'factory' | 'build' | 'projects' | 'contract' | 'deploy' | 'settings' | 'code' | 'terminal' | 'browser';
 
 /** Follows the app-shell theme set by the theme toggle (localStorage + <html data-app-theme>). */
 function useFactoryTheme(): 'light' | 'dark' {
@@ -133,7 +134,9 @@ function IntroOverlay({ onDone }: { onDone: () => void }) {
 
 /* ————————————————————————— Main column ————————————————————————— */
 
-function HomeTopBar({ onNavigate }: { onNavigate: (view: HomeTarget) => void }) {
+function HomeTopBar({ onNavigate, workspaceName, onSwitchWorkspace }: {
+  onNavigate: (view: HomeTarget) => void; workspaceName: string | null; onSwitchWorkspace: () => void;
+}) {
   // Theme toggle lives once in the app shell topbar (consistent across every page) — not here.
   return (
     <div className="rise-in flex flex-wrap items-center gap-3">
@@ -142,6 +145,16 @@ function HomeTopBar({ onNavigate }: { onNavigate: (view: HomeTarget) => void }) 
         <span className="inline-block size-1.5 rounded-full bg-brand-blue" aria-hidden />
       </p>
       <div className="ml-auto flex items-center gap-2.5">
+        {workspaceName && (
+          <button
+            type="button" onClick={onSwitchWorkspace} title="Switch workspace"
+            className="inline-flex max-w-56 items-center gap-1.5 rounded-full border border-border bg-card px-3.5 py-1.5 text-[12px] font-bold text-foreground shadow-sm transition-colors hover:border-brand-blue/50"
+          >
+            <FolderKanban className="size-3.5 shrink-0 text-brand-blue" />
+            <span className="truncate">{workspaceName}</span>
+            <ArrowLeftRight className="size-3 shrink-0 text-muted-foreground" aria-hidden />
+          </button>
+        )}
         <button
           type="button" onClick={() => onNavigate('settings')}
           className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3.5 py-1.5 text-[12px] font-bold text-foreground shadow-sm transition-colors hover:border-brand-blue/50"
@@ -463,6 +476,33 @@ function FeatureGrid({ onNavigate, projectCount, deploymentCount }: {
   );
 }
 
+/** Compact entry tiles for the integrated tools (Terminal + Browser). */
+function ToolsRow({ onNavigate }: { onNavigate: (view: HomeTarget) => void }) {
+  const tools: Array<{ icon: typeof TerminalSquare; title: string; copy: string; target: HomeTarget }> = [
+    { icon: TerminalSquare, title: 'Terminal', copy: 'Real shells in the project directory — git, npm, and factory scripts.', target: 'terminal' },
+    { icon: Globe, title: 'Browser', copy: 'Managed multi-tab browser with QA, console, and split compare view.', target: 'browser' },
+  ];
+  return (
+    <section className="stagger grid grid-cols-1 gap-4 sm:grid-cols-2" aria-label="Integrated tools">
+      {tools.map(({ icon: Icon, title, copy, target }) => (
+        <button
+          key={target} type="button" onClick={() => onNavigate(target)}
+          className="home-card group flex items-center gap-3.5 rounded-2xl border border-border bg-card px-5 py-4 text-left transition-colors hover:border-brand-blue/50"
+        >
+          <span className="flex size-11 shrink-0 items-center justify-center rounded-xl border border-border bg-muted text-foreground transition-transform duration-300 ease-out group-hover:-rotate-3 group-hover:scale-110">
+            <Icon className="size-5" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <b className="block text-[14px] font-bold leading-snug">{title}</b>
+            <span className="block text-[13px] font-medium leading-snug text-muted-foreground">{copy}</span>
+          </span>
+          <ArrowRight className="size-4 shrink-0 text-muted-foreground transition-all duration-200 group-hover:translate-x-1 group-hover:text-brand-blue" />
+        </button>
+      ))}
+    </section>
+  );
+}
+
 const BANNERS = [
   { image: '/home-assets/glossy_blue_curly_braces_icon.png', title: 'Design-contract driven', sub: 'Every section follows a strict contract.' },
   { image: '/home-assets/minimalist_shopping_bag_icon.png', title: 'Native Shopify output', sub: 'Clean, production-ready Liquid & JSON.' },
@@ -702,7 +742,9 @@ function QuickActions({ onNavigate }: { onNavigate: (view: HomeTarget) => void }
 
 /* ————————————————————————— Screen ————————————————————————— */
 
-export default function HomeScreen({ onNavigate }: { onNavigate: (view: HomeTarget) => void }) {
+export default function HomeScreen({ onNavigate, workspaceName, onSwitchWorkspace }: {
+  onNavigate: (view: HomeTarget) => void; workspaceName?: string | null; onSwitchWorkspace?: () => void;
+}) {
   const theme = useFactoryTheme();
   const reduced = useReducedMotion();
   const stats = useDashboardStats();
@@ -733,13 +775,19 @@ export default function HomeScreen({ onNavigate }: { onNavigate: (view: HomeTarg
           <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_300px]">
             {/* MAIN COLUMN */}
             <div className="flex min-w-0 flex-col gap-6">
-              <HomeTopBar onNavigate={onNavigate} />
+              <HomeTopBar
+                onNavigate={onNavigate}
+                workspaceName={workspace.name ?? workspaceName ?? null}
+                // The real switch-workspace flow when the shell wired it up; Connections otherwise.
+                onSwitchWorkspace={onSwitchWorkspace ?? (() => onNavigate('settings'))}
+              />
               <div className="stagger grid gap-5 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
                 <Hero />
                 <TerminalCard job={activeJob} lines={lines} reduced={reduced} bootLines={boot.busy || boot.lines.length ? boot.lines : undefined} />
               </div>
               <StatsRow stats={mergedStats} />
               <FeatureGrid onNavigate={onNavigate} projectCount={mergedStats.projects} deploymentCount={mergedStats.deployments} />
+              <ToolsRow onNavigate={onNavigate} />
               <BannerRow />
             </div>
 

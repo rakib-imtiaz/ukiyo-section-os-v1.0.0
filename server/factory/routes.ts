@@ -6,7 +6,7 @@ import { Router } from 'express';
 import { config } from '../config';
 import { db, type FactoryJobRecord } from '../db';
 import { decrypt, encrypt, normalizeShop, rateLimit, secureEqual } from '../security';
-import { derivePrefix, mintKeyFor, resolveWorkspacePath, scaffoldWorkspace, slugify } from './scaffolder';
+import { TEMPLATES_ROOT, containsPackageJson, derivePrefix, isZipPath, mintKeyFor, resolveWorkspacePath, scaffoldWorkspace, slugify } from './scaffolder';
 import { factoryScheduler } from './scheduler';
 import { getFactorySettings, lockedFields, updateFactorySettings } from './settings';
 import { scrubSecrets } from './runner';
@@ -56,22 +56,61 @@ async function tailFile(target: string, lines: number) {
   }
 }
 
-async function containsPackageJson(root: string, depth = 3): Promise<boolean> {
-  if (await fileExists(path.join(root, 'package.json'))) return true;
-  if (depth === 0) return false;
-  try {
-    for (const entry of await readdir(root, { withFileTypes: true })) {
-      if (!entry.isDirectory() || entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
-      if (await containsPackageJson(path.join(root, entry.name), depth - 1)) return true;
-    }
-  } catch { /* unreadable dir */ }
-  return false;
-}
-
 const REQUIRED_SCOPES = ['write_themes', 'read_themes'];
 const RECOMMENDED_SCOPES = ['write_online_store_navigation', 'write_content'];
 
 let browserInstalling = false;
+let qaSelftestRunning = false;
+
+// --- QA calibration self-test (templates/factory/qa/calibrate.mjs) ---
+
+const QA_SELFTEST_TIMEOUT_MS = 5 * 60_000;
+
+interface CalibrationOutcome {
+  ok: boolean;
+  score: number | null;
+  subscores: { presence: number | null; text: number | null; interaction: number | null } | null;
+  log: string;
+  error?: string;
+}
+
+/** Kill the calibration node process and its Chromium children (plain kill orphans them on Windows). */
+function killSelftestTree(child: ReturnType<typeof spawn>) {
+  if (child.pid == null || child.exitCode !== null) return;
+  if (process.platform === 'win32') spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { shell: false, windowsHide: true });
+  else child.kill('SIGKILL');
+}
+
+/** Run calibrate.mjs (bounded) and parse its trailing `CALIBRATE_RESULT <json>` line. */
+function runCalibration(script: string): Promise<CalibrationOutcome> {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [script], {
+      shell: false, windowsHide: true, cwd: path.dirname(script),
+      env: { ...process.env, PW_ROOT: config.factory.playwrightRoot },
+    });
+    let output = '';
+    const append = (chunk: Buffer) => { if (output.length < 64 * 1024) output += chunk.toString('utf8'); };
+    child.stdout?.on('data', append);
+    child.stderr?.on('data', append);
+    let settled = false;
+    const finish = (outcome: CalibrationOutcome) => { if (!settled) { settled = true; clearTimeout(timer); resolve({ ...outcome, log: scrubSecrets(outcome.log) }); } };
+    const timer = setTimeout(() => {
+      killSelftestTree(child);
+      finish({ ok: false, score: null, subscores: null, log: output, error: `QA self-test exceeded ${QA_SELFTEST_TIMEOUT_MS / 60_000} minutes — Playwright/Chromium may not be installed (check GET /api/factory/browser).` });
+    }, QA_SELFTEST_TIMEOUT_MS);
+    child.on('error', (error) => finish({ ok: false, score: null, subscores: null, log: output, error: `Could not launch the calibration script: ${error.message}` }));
+    child.on('exit', (code) => {
+      const line = output.split(/\r?\n/).reverse().find((entry) => entry.startsWith('CALIBRATE_RESULT '));
+      if (!line) { finish({ ok: false, score: null, subscores: null, log: output, error: `calibrate.mjs exited ${code ?? 'n/a'} without a result line — see log.` }); return; }
+      try {
+        const parsed = JSON.parse(line.slice('CALIBRATE_RESULT '.length)) as { ok?: boolean; score?: number; subscores?: CalibrationOutcome['subscores']; error?: string };
+        finish({ ok: Boolean(parsed.ok) && code === 0, score: parsed.score ?? null, subscores: parsed.subscores ?? null, log: output, ...(parsed.ok && code === 0 ? {} : { error: parsed.error ?? 'Calibration score fell below the 0.95 threshold — the QA scoring pipeline is not trustworthy on this machine.' }) });
+      } catch {
+        finish({ ok: false, score: null, subscores: null, log: output, error: 'Could not parse the calibration result line.' });
+      }
+    });
+  });
+}
 
 export function createFactoryRouter() {
   const router = Router();
@@ -96,8 +135,15 @@ export function createFactoryRouter() {
     const duplicate = await db.findActiveFactoryJobByStore(storeUrl);
     if (duplicate) { response.status(409).json({ error: `Another active job ("${duplicate.name}") already targets ${shop}. Two clones writing one store would corrupt it.` }); return; }
     if (body.reactFilesPath) {
-      if (!(await fileExists(body.reactFilesPath))) { response.status(422).json({ error: `react_files source not found: ${body.reactFilesPath}` }); return; }
-      if (!(await containsPackageJson(body.reactFilesPath))) { response.status(422).json({ error: 'The react_files folder does not contain a package.json (searched 3 levels deep).' }); return; }
+      const source = String(body.reactFilesPath);
+      if (!(await fileExists(source))) { response.status(422).json({ error: `react_files source not found: ${source}` }); return; }
+      if (isZipPath(source)) {
+        // Zip intake: extraction (and the package.json check) happens during scaffolding —
+        // here we only verify it's actually a file.
+        if (!(await stat(source)).isFile()) { response.status(422).json({ error: `react_files source ends in .zip but is not a file: ${source}` }); return; }
+      } else if (!(await containsPackageJson(source))) {
+        response.status(422).json({ error: 'The react_files folder does not contain a package.json (searched 3 levels deep).' }); return;
+      }
     }
 
     const settings = await getFactorySettings();
@@ -311,6 +357,23 @@ export function createFactoryRouter() {
     response.json({ installing: true, detail: 'Downloading Chromium for QA — this can take a minute. Re-check status shortly.' });
   }));
 
+  // Sanity-check the QA scoring pipeline (Playwright + segmentation + alignment + scoring)
+  // against a known-good pair BEFORE trusting job scores. Localhost-only like mint-token:
+  // it spawns a local browser process, which has no business being reachable off-box.
+  router.post('/qa-selftest', handle(async (request, response) => {
+    if (!isLoopback(request)) { response.status(403).json({ error: 'The QA self-test is available on localhost only.' }); return; }
+    if (qaSelftestRunning) { response.status(409).json({ error: 'A QA self-test is already running — wait for it to finish.' }); return; }
+    const script = path.join(TEMPLATES_ROOT, 'qa', 'calibrate.mjs');
+    if (!(await fileExists(script))) { response.status(500).json({ error: `Calibration script not found: ${script}` }); return; }
+    qaSelftestRunning = true;
+    try {
+      const result = await runCalibration(script);
+      response.json(result);
+    } finally {
+      qaSelftestRunning = false;
+    }
+  }));
+
   router.post('/queue/pause', handle(async (_request, response) => { factoryScheduler.setQueuePaused(true, 'Paused by user'); response.json({ scheduler: factoryScheduler.status }); }));
   router.post('/queue/resume', handle(async (_request, response) => { factoryScheduler.setQueuePaused(false); response.json({ scheduler: factoryScheduler.status }); }));
 
@@ -319,7 +382,12 @@ export function createFactoryRouter() {
     const kind = String(request.body?.kind ?? '');
     const value = String(request.body?.value ?? '');
     if (kind === 'reactFiles') {
-      if (!(await fileExists(value))) { response.json({ ok: false, detail: 'Folder not found.' }); return; }
+      if (!(await fileExists(value))) { response.json({ ok: false, detail: 'Folder or .zip not found.' }); return; }
+      if (isZipPath(value)) {
+        const isFile = (await stat(value)).isFile();
+        response.json({ ok: isFile, detail: isFile ? 'Zip archive detected — it will be extracted into react_files/ during scaffolding.' : 'Path ends in .zip but is not a file.' });
+        return;
+      }
       const hasPackage = await containsPackageJson(value);
       response.json({ ok: hasPackage, detail: hasPackage ? 'React source detected.' : 'No package.json found within 3 levels.' });
       return;

@@ -207,14 +207,42 @@ export async function installFiles(shop: string, themeId: string, files: Generat
   return { theme: prepared.theme, files: installed, snapshot: prepared.snapshot };
 }
 
+/** The single filter deciding which compiled files a deploy actually writes to the theme. */
+export function isInstallablePath(filePath: string) {
+  return filePath.startsWith('sections/') || filePath.startsWith('assets/');
+}
+
 export async function prepareInstallation(shop: string, themeId: string, files: GeneratedFile[]) {
   const themes = await listThemes(shop);
   const target = themes.find((theme) => theme.id === themeId);
   if (!target) throw new Error('The selected theme could not be found.');
   if (target.role === 'MAIN') throw new Error('Section OS will not write directly to the published theme. Select an unpublished duplicate.');
-  const themeFiles = files.filter((file) => file.path.startsWith('sections/') || file.path.startsWith('assets/'));
+  const themeFiles = files.filter((file) => isInstallablePath(file.path));
   const snapshot = await readThemeFiles(shop, themeId, themeFiles.map((file) => file.path));
   return { theme: target, themeFiles, snapshot };
+}
+
+export interface InstallDiffEntry { path: string; status: 'new' | 'changed' | 'same'; bytes: number; }
+
+/**
+ * Dry-run deploy diff: compare compiled output against the CURRENT theme contents for
+ * exactly the paths a real install would write (same sections/assets filter). Read-only —
+ * never mutates the theme, so it works against any theme including the published one.
+ */
+export async function diffInstallation(shop: string, themeId: string, files: GeneratedFile[]): Promise<InstallDiffEntry[]> {
+  const themeFiles = files.filter((file) => isInstallablePath(file.path));
+  const current = await readThemeFiles(shop, themeId, themeFiles.map((file) => file.path));
+  const byPath = new Map(current.map((snapshot) => [snapshot.filename, snapshot]));
+  return themeFiles.map((file) => {
+    const snapshot = byPath.get(file.path);
+    let status: InstallDiffEntry['status'];
+    if (!snapshot?.existed) status = 'new';
+    else {
+      const existing = snapshot.bodyType === 'BASE64' ? Buffer.from(snapshot.value ?? '', 'base64').toString('utf8') : snapshot.value ?? '';
+      status = existing === file.content ? 'same' : 'changed';
+    }
+    return { path: file.path, status, bytes: Buffer.byteLength(file.content, 'utf8') };
+  });
 }
 
 export async function applyInstallation(shop:string,themeId:string,themeFiles:GeneratedFile[]){

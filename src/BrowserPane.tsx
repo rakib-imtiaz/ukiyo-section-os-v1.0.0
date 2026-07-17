@@ -19,6 +19,28 @@ interface NetworkEntry { at: number; method: string; url: string; status: number
 interface QaPage { url: string; title: string; loadMs: number; nodeCount: number; consoleErrors: ConsoleEntry[]; failedRequests: NetworkEntry[]; screenshot: string }
 interface QaReport { ok: boolean; checkedAt: number; pages: QaPage[]; issues: string[] }
 
+/** Cross-surface handoff: a factory job can request a React-vs-Shopify side-by-side
+ * comparison. The request is stashed module-level so it survives until BrowserPane
+ * mounts, and also dispatched as a window event so an already mounted pane reacts
+ * immediately. Event name: 'themebot:browser-compare'. */
+export interface BrowserCompareRequest { reactUrl: string; shopifyUrl: string }
+const BROWSER_COMPARE_EVENT = 'themebot:browser-compare';
+let pendingCompareRequest: BrowserCompareRequest | null = null;
+export function openBrowserCompare(request: BrowserCompareRequest) {
+  pendingCompareRequest = request;
+  window.dispatchEvent(new CustomEvent<BrowserCompareRequest>(BROWSER_COMPARE_EVENT, { detail: request }));
+}
+
+/** Loose URL match for pairing a compare target with the tab that loaded it (the page may
+ * append a query string or trailing slash after navigation). */
+function urlMatches(tabUrl: string, target: string): boolean {
+  if (!tabUrl || tabUrl === 'about:blank' || !target) return false;
+  const clean = (value: string) => value.replace(/\/+$/, '');
+  const tab = clean(tabUrl);
+  const wanted = clean(target);
+  return tab === wanted || tab.startsWith(`${wanted}/`) || tab.startsWith(`${wanted}?`);
+}
+
 const CAP = 250;
 const ZOOMS = [0.5, 0.67, 0.8, 1, 1.25, 1.5, 2];
 type PanelTab = 'console' | 'network' | 'qa';
@@ -90,6 +112,10 @@ export default function BrowserPane({ onActivity }: { onActivity?: () => void })
   const [qaRunning, setQaRunning] = useState(false);
   const [qaReport, setQaReport] = useState<QaReport | null>(null);
   const [extMenuOpen, setExtMenuOpen] = useState(false);
+  // Pending React-vs-Shopify comparison (see openBrowserCompare). started → engine start sent;
+  // opened → both tab-new sent; baseline → tab ids that existed before the compare tabs opened.
+  const compareRef = useRef<(BrowserCompareRequest & { started: boolean; opened: boolean; baseline: Set<number> }) | null>(null);
+  const [compareTick, setCompareTick] = useState(0);
 
   const flagActivity = useCallback(() => { if (!onActivity) return; window.clearTimeout(activityTimer.current); activityTimer.current = window.setTimeout(onActivity, 1200); }, [onActivity]);
   const send = useCallback((message: unknown) => { const socket = socketRef.current; if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message)); }, []);
@@ -141,6 +167,8 @@ export default function BrowserPane({ onActivity }: { onActivity?: () => void })
             setFocusedId(0); setSecondaryId(0); setSplit(false);
             setConsoleByTab(new Map()); setNetworkByTab(new Map());
             canvasRefs.current.clear();
+            // an in-flight compare that already opened its tabs can't survive a stop
+            if (compareRef.current?.opened) compareRef.current = null;
           }
           break;
         }
@@ -178,6 +206,57 @@ export default function BrowserPane({ onActivity }: { onActivity?: () => void })
   useEffect(() => { if (!addressDirty) setAddress(focusedTab && focusedTab.url !== 'about:blank' ? focusedTab.url : ''); }, [focusedTab?.url, addressDirty]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const running = status?.running ?? false;
+
+  // ---- React vs Shopify comparison handoff ----
+  // Adopt a compare request: one stashed before this pane mounted, or a live event.
+  useEffect(() => {
+    const adopt = (request: BrowserCompareRequest) => {
+      compareRef.current = { ...request, started: false, opened: false, baseline: new Set() };
+      setCompareTick((tick) => tick + 1);
+    };
+    if (pendingCompareRequest) { const request = pendingCompareRequest; pendingCompareRequest = null; adopt(request); }
+    const onCompare = (event: Event) => {
+      const detail = (event as CustomEvent<BrowserCompareRequest>).detail;
+      pendingCompareRequest = null; // this pane handles it now — don't replay on a future remount
+      if (detail?.reactUrl && detail?.shopifyUrl) adopt(detail);
+    };
+    window.addEventListener(BROWSER_COMPARE_EVENT, onCompare);
+    return () => window.removeEventListener(BROWSER_COMPARE_EVENT, onCompare);
+  }, []);
+
+  // Drive the compare: auto-start the engine if it's off, then (once running) open both URLs.
+  useEffect(() => {
+    const request = compareRef.current;
+    if (!request || !connected || !status) return;
+    if (!status.running) {
+      if (!request.started) { request.started = true; setError(''); setLaunching(true); send({ type: 'start' }); }
+      return; // wait for a running status before opening tabs
+    }
+    if (!request.opened) {
+      request.opened = true;
+      request.baseline = new Set(tabs.map((t) => t.id));
+      send({ type: 'tab-new', url: request.reactUrl });
+      send({ type: 'tab-new', url: request.shopifyUrl });
+    }
+    // compareTick re-runs this after a request is adopted mid-session
+  }, [connected, status, tabs, compareTick, send]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Once both compare tabs exist, put them side by side (React left/primary, Shopify right).
+  useEffect(() => {
+    const request = compareRef.current;
+    if (!request?.opened) return;
+    const appeared = tabs.filter((t) => !request.baseline.has(t.id));
+    if (appeared.length < 2) return;
+    const primary = appeared.find((t) => urlMatches(t.url, request.reactUrl)) ?? appeared[0];
+    const secondary = appeared.find((t) => t.id !== primary.id && urlMatches(t.url, request.shopifyUrl))
+      ?? appeared.find((t) => t.id !== primary.id);
+    if (!secondary) return;
+    compareRef.current = null;
+    setFocusedId(primary.id);
+    setSecondaryId(secondary.id);
+    setSplit(true);
+    send({ type: 'tab-activate', id: primary.id });
+  }, [tabs, send]);
 
   // play a short boot-in animation on the stage whenever the engine flips off → on
   useEffect(() => {

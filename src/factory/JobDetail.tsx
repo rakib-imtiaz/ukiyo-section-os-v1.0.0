@@ -1,9 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowRight, CheckCircle2, CircleDashed, FileText, Hammer, ScanSearch, XCircle } from 'lucide-react';
-import { Badge, Progress, Select, Separator, Sheet, Skeleton, Tabs } from './ui';
+import { ArrowRight, CheckCircle2, CircleDashed, Columns2, FileText, Hammer, ScanSearch, TerminalSquare, XCircle } from 'lucide-react';
+import { Badge, Button, Progress, Select, Separator, Sheet, Skeleton, Tabs } from './ui';
 import { ScoreRing, Sparkline } from './fx';
 import { api, usePoll } from './api';
 import { STATUS_META, type Iteration, type Job } from './types';
+import { openTerminalSession } from '../TerminalPane';
+import { openBrowserCompare } from '../BrowserPane';
+
+/** Best-available Shopify preview URL for a job: prefer an explicit preview URL or dev theme id
+ * if the job detail payload carries one (backend-dependent), else the store URL as-is. */
+function shopifyPreviewUrl(job: Job): string {
+  const extras = job as Job & Partial<{ preview_url: string; dev_theme_id: number | string; preview_theme_id: number | string }>;
+  if (typeof extras.preview_url === 'string' && extras.preview_url) return extras.preview_url;
+  const devThemeId = extras.dev_theme_id ?? extras.preview_theme_id;
+  if (devThemeId == null || devThemeId === '') return job.store_url;
+  return `${job.store_url.replace(/\/+$/, '')}/?preview_theme_id=${encodeURIComponent(String(devThemeId))}`;
+}
 
 function iterationIcon(iteration: Iteration) {
   if (iteration.status === 'running') return <CircleDashed className="size-4.5 animate-spin text-foreground" />;
@@ -141,7 +153,7 @@ function Screenshots({ jobId }: { jobId: string }) {
   );
 }
 
-export function JobDetail({ jobId, onClose }: { jobId: string | null; onClose: () => void }) {
+export function JobDetail({ jobId, onClose, onNavigate }: { jobId: string | null; onClose: () => void; onNavigate?: (view: 'terminal' | 'browser') => void }) {
   const { data } = usePoll(() => jobId ? api.getJob(jobId) : Promise.resolve(null), 3000, [jobId]);
   const [tab, setTab] = useState('timeline');
   useEffect(() => { setTab('timeline'); }, [jobId]);
@@ -168,6 +180,22 @@ export function JobDetail({ jobId, onClose }: { jobId: string | null; onClose: (
             </p>
             <p className="mt-1">{job.status_detail ?? '—'}</p>
             <p className="mt-1 truncate">workspace: <code className="rounded bg-muted px-1 py-0.5 text-[12px]">{job.workspace_path}</code></p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button
+                size="sm" variant="outline"
+                title={`Open a shell in ${job.workspace_path}`}
+                onClick={() => { openTerminalSession({ cwd: job.workspace_path, label: job.slug }); onNavigate?.('terminal'); }}
+              >
+                <TerminalSquare className="size-4" /> Open terminal here
+              </Button>
+              <Button
+                size="sm" variant="outline"
+                title="Open the React source and the Shopify clone side by side in the integrated browser"
+                onClick={() => { openBrowserCompare({ reactUrl: job.react_url, shopifyUrl: shopifyPreviewUrl(job) }); onNavigate?.('browser'); }}
+              >
+                <Columns2 className="size-4" /> Compare in Browser
+              </Button>
+            </div>
           </div>
 
           {['failed', 'blocked', 'aborted'].includes(job.status) && job.status_detail && (

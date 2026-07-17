@@ -6,7 +6,7 @@ import type { SectionManifest } from '../src/shared/types';
 import { config } from './config';
 import { db } from './db';
 import { createSubscription, getBillingStatus } from './billing';
-import { applyInstallation, listThemes, prepareInstallation, rollbackFiles, shopifyStatus, themeDuplicate, type ThemeSnapshot } from './shopify';
+import { applyInstallation, diffInstallation, listThemes, prepareInstallation, rollbackFiles, shopifyGraphql, shopifyStatus, themeDuplicate, type ThemeSnapshot } from './shopify';
 import { currentShop, newSecret, rateLimit, requireSession, sha256 } from './security';
 import { getClaudeStatusQuick } from './claude-connect';
 import { getWorkspaceState } from './workspace';
@@ -50,6 +50,8 @@ export async function deployManifest(domain:string,shopId:string,manifest:Sectio
   try{
     const installed=await applyInstallation(domain,themeId,prepared.themeFiles);
     const complete=await db.finishDeployment(pending.id,'succeeded',installed);
+    // Remember the project's deploy target (004) — best-effort, never fails the deploy.
+    if(projectId)await db.setProjectDeployTarget(projectId,themeId).catch(()=>{});
     await db.audit(shopId,'section.deployed','merchant',{deploymentId:pending.id,themeId,files:installed});
     return {...complete,snapshot:undefined,theme:prepared.theme};
   }catch(error){await db.finishDeployment(pending.id,'failed',[],error instanceof Error?error.message:'Deployment failed');throw error;}
@@ -75,6 +77,31 @@ export function createApiRouter(){
   router.get('/schema',(_request,response)=>response.json(contractJsonSchema()));
   router.use(requireSession);
   router.get('/shopify/themes',handle(async(_request,response)=>response.json({themes:await listThemes(response.locals.shop)})));
+  // Live connection test: mints/refreshes the access token and round-trips the Admin API.
+  // Returns granted scopes + token expiry; never echoes tokens or ciphers.
+  router.get('/shopify/test',handle(async(_request,response)=>{
+    const {domain}=await shopContext(response);
+    try{
+      const data=await shopifyGraphql<{shop:{name:string};currentAppInstallation:{accessScopes:Array<{handle:string}>}|null}>(domain,`#graphql
+        query SectionOsConnectionTest { shop { name } currentAppInstallation { accessScopes { handle } } }`);
+      const fresh=await db.getShop(domain); // re-read: the call above may have refreshed the token
+      const scopes=data.currentAppInstallation?.accessScopes.map((scope)=>scope.handle)
+        ??(fresh?.scopes?fresh.scopes.split(',').map((scope)=>scope.trim()).filter(Boolean):[]);
+      response.json({ok:true,shop:domain,shopName:data.shop.name,scopes,expiresAt:fresh?.token_expires_at??null});
+    }catch(error){
+      response.status(502).json({ok:false,error:error instanceof Error?error.message:'Shopify connection test failed.',code:'SHOPIFY_TEST_FAILED'});
+    }
+  }));
+  // Deploy dry-run: compile + compare against the CURRENT theme file contents for exactly the
+  // paths install would write. Read-only — writes nothing to the theme.
+  router.post('/shopify/diff',handle(async(request,response)=>{
+    const {domain}=await shopContext(response);
+    const themeId=typeof request.body?.themeId==='string'?request.body.themeId:'';
+    if(!themeId){response.status(400).json({error:'themeId is required.'});return;}
+    const result=compileSection(request.body.manifest);
+    if(!result.valid){response.status(422).json(result);return;}
+    response.json({files:await diffInstallation(domain,themeId,result.files)});
+  }));
   router.post('/shopify/themes/:id/duplicate',handle(async(request,response)=>{const domain=response.locals.shop as string;const sourceId=String(request.params.id);const source=(await listThemes(domain)).find((item)=>item.id===sourceId);if(!source){response.status(404).json({error:'Theme not found.'});return;}const requested=typeof request.body?.name==='string'?request.body.name.trim():'';const name=requested||`${source.name} (Section OS draft)`;const theme=await themeDuplicate(domain,sourceId,name);response.status(201).json({theme});}));
 
   // Merged library: the shop's section projects PLUS clone-kind projects (factory clones are
