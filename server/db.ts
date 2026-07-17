@@ -13,7 +13,12 @@ export interface ShopRecord {
   id: string; shop_domain: string; access_token_cipher: string; refresh_token_cipher: string | null;
   token_expires_at: string | null; refresh_token_expires_at: string | null; scopes: string; status: string;
 }
-export interface ProjectRecord { id: string; shop_id: string; name: string; handle: string; description: string; manifest: SectionManifest; created_at: string; updated_at: string; }
+export type ProjectKind = 'section' | 'clone';
+/** Badge-friendly clone payload mirrored from the factory job. Never contains ciphers/secrets. */
+export interface CloneProjectMeta { react_url: string; store_url: string; status: string; status_detail: string | null; last_score: number | null; }
+// shop_id is null for kind='clone' rows: a factory clone job may have no connected OAuth shop,
+// so clone-projects live in a shopless "local" scope (see migrations/003_clone_projects.sql).
+export interface ProjectRecord { id: string; shop_id: string | null; name: string; handle: string; description: string; manifest: SectionManifest; kind: ProjectKind; factory_job_id: string | null; clone_meta: CloneProjectMeta | null; created_at: string; updated_at: string; }
 export interface VersionRecord { id: string; project_id: string; version_number: number; manifest: SectionManifest; compiled_files: GeneratedFile[]; checksum: string; created_at: string; }
 export interface DeploymentRecord { id: string; shop_id: string; project_id: string | null; version_id: string | null; theme_id: string; theme_name: string; status: string; snapshot: unknown[]; installed_files: string[]; error: string | null; rolled_back_at: string | null; created_at: string; updated_at: string; }
 export interface ApiKeyRecord { id: string; shop_id: string; label: string; key_prefix: string; secret_hash: string; last_used_at: string | null; revoked_at: string | null; created_at: string; }
@@ -46,15 +51,18 @@ const factoryStatePath = path.join(config.factory.workspaceRoot, '.factory', 'st
 function hydrateFactoryMemory() {
   if (!factoryStatePersistence) return;
   try {
-    const state = JSON.parse(readFileSync(factoryStatePath, 'utf8')) as { jobs?: FactoryJobRecord[]; iterations?: FactoryIterationRecord[]; settings?: AppSettingRecord[] };
+    const state = JSON.parse(readFileSync(factoryStatePath, 'utf8')) as { jobs?: FactoryJobRecord[]; iterations?: FactoryIterationRecord[]; settings?: AppSettingRecord[]; cloneProjects?: ProjectRecord[] };
     for (const job of state.jobs ?? []) memory.factoryJobs.set(job.id, job);
     for (const iteration of state.iterations ?? []) memory.factoryIterations.set(iteration.id, iteration);
     for (const setting of state.settings ?? []) memory.settings.set(setting.key, setting);
+    // Clone-projects mirror factory jobs, so they ride the same persistence file (section
+    // projects stay ephemeral in memory mode, matching pre-existing behavior).
+    for (const project of state.cloneProjects ?? []) if (project.kind === 'clone') memory.projects.set(project.id, project);
   } catch { /* first run or unreadable — start empty */ }
 }
 
 function writeFactoryState() {
-  const state = JSON.stringify({ jobs: [...memory.factoryJobs.values()], iterations: [...memory.factoryIterations.values()], settings: [...memory.settings.values()] });
+  const state = JSON.stringify({ jobs: [...memory.factoryJobs.values()], iterations: [...memory.factoryIterations.values()], settings: [...memory.settings.values()], cloneProjects: [...memory.projects.values()].filter((project) => project.kind === 'clone') });
   mkdirSync(path.dirname(factoryStatePath), { recursive: true });
   // Atomic write: a crash mid-write must not corrupt the file and wipe all job history.
   const tmp = `${factoryStatePath}.${randomUUID().slice(0, 8)}.tmp`;
@@ -153,19 +161,24 @@ class Repository {
     const state = memory.states.get(hash); memory.states.delete(hash); return Boolean(state && state.shop === shop && state.expires > Date.now());
   }
 
-  async listProjects(shopId: string) {
-    if (this.pool) return (await this.pool.query<ProjectRecord>('SELECT * FROM projects WHERE shop_id=$1 ORDER BY updated_at DESC', [shopId])).rows;
-    return [...memory.projects.values()].filter((item) => item.shop_id === shopId).sort((a,b) => b.updated_at.localeCompare(a.updated_at));
+  /** Shop-scoped section projects; pass includeClones to also return shopless clone-kind projects. */
+  async listProjects(shopId: string, options: { includeClones?: boolean } = {}) {
+    const includeClones = Boolean(options.includeClones);
+    if (this.pool) return (await this.pool.query<ProjectRecord>("SELECT * FROM projects WHERE shop_id=$1 OR ($2::boolean AND kind='clone' AND shop_id IS NULL) ORDER BY updated_at DESC", [shopId, includeClones])).rows;
+    return [...memory.projects.values()].filter((item) => item.shop_id === shopId || (includeClones && item.kind === 'clone' && item.shop_id === null)).sort((a,b) => String(b.updated_at).localeCompare(String(a.updated_at)));
   }
 
+  // Read access covers the shop's own projects plus shopless clone-projects (clones have no
+  // shop scope by nature). Writes (update/delete below) stay strictly shop-scoped, so clone
+  // rows remain read-only through the section CRUD — the factory owns their lifecycle.
   async getProject(id: string, shopId: string) {
-    if (this.pool) return (await this.pool.query<ProjectRecord>('SELECT * FROM projects WHERE id=$1 AND shop_id=$2', [id, shopId])).rows[0] ?? null;
-    const project = memory.projects.get(id); return project?.shop_id === shopId ? project : null;
+    if (this.pool) return (await this.pool.query<ProjectRecord>("SELECT * FROM projects WHERE id=$1 AND (shop_id=$2 OR (kind='clone' AND shop_id IS NULL))", [id, shopId])).rows[0] ?? null;
+    const project = memory.projects.get(id); return project && (project.shop_id === shopId || (project.kind === 'clone' && project.shop_id === null)) ? project : null;
   }
 
   async createProject(shopId: string, manifest: SectionManifest) {
     const id = randomUUID(); const timestamp = now();
-    const record: ProjectRecord = { id, shop_id: shopId, name: manifest.name, handle: manifest.handle, description: manifest.description, manifest, created_at: timestamp, updated_at: timestamp };
+    const record: ProjectRecord = { id, shop_id: shopId, name: manifest.name, handle: manifest.handle, description: manifest.description, manifest, kind: 'section', factory_job_id: null, clone_meta: null, created_at: timestamp, updated_at: timestamp };
     if (this.pool) return (await this.pool.query<ProjectRecord>('INSERT INTO projects (id,shop_id,name,handle,description,manifest) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *', [id,shopId,record.name,record.handle,record.description,manifest])).rows[0];
     if ([...memory.projects.values()].some((item) => item.shop_id === shopId && item.handle === manifest.handle)) throw new Error('A project with this handle already exists.');
     memory.projects.set(id, record); return record;
@@ -173,13 +186,47 @@ class Repository {
 
   async updateProject(id: string, shopId: string, manifest: SectionManifest) {
     if (this.pool) return (await this.pool.query<ProjectRecord>('UPDATE projects SET name=$3,handle=$4,description=$5,manifest=$6,updated_at=NOW() WHERE id=$1 AND shop_id=$2 RETURNING *', [id,shopId,manifest.name,manifest.handle,manifest.description,manifest])).rows[0] ?? null;
-    const current = await this.getProject(id, shopId); if (!current) return null;
+    const current = memory.projects.get(id); if (!current || current.shop_id !== shopId) return null;
     const next = { ...current, name: manifest.name, handle: manifest.handle, description: manifest.description, manifest, updated_at: now() }; memory.projects.set(id,next); return next;
   }
 
   async deleteProject(id: string, shopId: string) {
     if (this.pool) return Boolean((await this.pool.query('DELETE FROM projects WHERE id=$1 AND shop_id=$2', [id,shopId])).rowCount);
-    const current = await this.getProject(id,shopId); return current ? memory.projects.delete(id) : false;
+    const current = memory.projects.get(id); return current?.shop_id === shopId ? memory.projects.delete(id) : false;
+  }
+
+  /**
+   * Register/update the clone-project mirror for a factory job (kind='clone', shop_id=NULL,
+   * linked by factory_job_id). Idempotent upsert keyed on factory_job_id, safe to call on
+   * every job status change. The manifest is a minimal valid stub so section tooling that
+   * reads it never explodes; the clone payload lives in clone_meta.
+   */
+  async upsertCloneProject(input: { jobId: string; name: string; handle: string; description?: string; reactUrl: string; storeUrl: string; status: string; statusDetail?: string | null; lastScore?: number | null }) {
+    const cloneMeta: CloneProjectMeta = { react_url: input.reactUrl, store_url: input.storeUrl, status: input.status, status_detail: input.statusDetail ?? null, last_score: input.lastScore ?? null };
+    const description = input.description ?? `Cloned store — ${input.storeUrl}`;
+    const manifest: SectionManifest = { contractVersion: 1, name: input.name, handle: input.handle, description, settings: [], blocks: [], presets: [], source: { liquid: '', css: '' } };
+    if (this.pool) {
+      return (await this.pool.query<ProjectRecord>(`INSERT INTO projects (id,shop_id,name,handle,description,manifest,kind,factory_job_id,clone_meta)
+        VALUES ($1,NULL,$2,$3,$4,$5,'clone',$6,$7)
+        ON CONFLICT (factory_job_id) WHERE factory_job_id IS NOT NULL
+        DO UPDATE SET name=EXCLUDED.name, handle=EXCLUDED.handle, description=EXCLUDED.description, clone_meta=EXCLUDED.clone_meta, updated_at=NOW() RETURNING *`,
+      [randomUUID(), input.name, input.handle, description, manifest, input.jobId, cloneMeta])).rows[0];
+    }
+    const existing = [...memory.projects.values()].find((item) => item.factory_job_id === input.jobId);
+    const record: ProjectRecord = existing
+      ? { ...existing, name: input.name, handle: input.handle, description, clone_meta: cloneMeta, updated_at: now() }
+      : { id: randomUUID(), shop_id: null, name: input.name, handle: input.handle, description, manifest, kind: 'clone', factory_job_id: input.jobId, clone_meta: cloneMeta, created_at: now(), updated_at: now() };
+    memory.projects.set(record.id, record); persistFactoryMemory(); return record;
+  }
+
+  /** Canonical FactoryJobRecord → clone-project mapping (single place both routes and convergence use). */
+  async syncCloneProjectFromJob(job: FactoryJobRecord) {
+    return this.upsertCloneProject({ jobId: job.id, name: job.name, handle: job.slug, reactUrl: job.react_url, storeUrl: job.store_url, status: job.status, statusDetail: job.status_detail, lastScore: job.last_score });
+  }
+
+  async getProjectByFactoryJob(jobId: string) {
+    if (this.pool) return (await this.pool.query<ProjectRecord>('SELECT * FROM projects WHERE factory_job_id=$1', [jobId])).rows[0] ?? null;
+    return [...memory.projects.values()].find((item) => item.factory_job_id === jobId) ?? null;
   }
 
   async createVersion(projectId: string, manifest: SectionManifest, files: GeneratedFile[], checksum: string) {
@@ -270,9 +317,11 @@ class Repository {
   }
 
   async deleteFactoryJob(id: string) {
-    if (this.pool) return Boolean((await this.pool.query('DELETE FROM factory_jobs WHERE id=$1', [id])).rowCount);
+    if (this.pool) return Boolean((await this.pool.query('DELETE FROM factory_jobs WHERE id=$1', [id])).rowCount); // clone-project mirror cascades (003)
     if (!memory.factoryJobs.delete(id)) return false;
     for (const [iterId, item] of memory.factoryIterations) if (item.job_id === id) memory.factoryIterations.delete(iterId);
+    // Mirror the pg ON DELETE CASCADE: remove the job's clone-project row too.
+    for (const [projectId, item] of memory.projects) if (item.factory_job_id === id) memory.projects.delete(projectId);
     persistFactoryMemory();
     return true;
   }

@@ -1061,3 +1061,60 @@ html[data-app-theme='dark'] .browser-qa-issue { color: #fca5a5; }
 .browser-empty__hints button { display: inline-flex; align-items: center; gap: 10px; padding: 6px 14px 6px 8px; border: 0; border-radius: 8px; color: #c4c4cd; background: none; cursor: pointer; font-size: 12px; font-weight: 600; transition: background .15s ease, color .15s ease; }
 .browser-empty__hints button:hover { background: #17171d; color: #fff; }
 .browser-empty__hints kbd { display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 6px; border: 1px solid #2c2c38; border-bottom-width: 2px; border-radius: 6px; background: #16161c; color: #8ab4ff; font-family: ui-monospace, Consolas, monospace; font-size: 11px; font-weight: 700; }
+
+/* ===== Wave 2 — template registry builder, block authoring, unified projects ===== */
+/* Template picker (builder controls panel) */
+.template-picker { padding: 0 24px 18px; }
+.field input[type="color"] { width: 100%; height: 38px; padding: 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); cursor: pointer; }
+
+/* Contract-authored sections (no matching template) get an explanatory note instead of controls */
+.contract-only-note { display: grid; gap: 12px; justify-items: start; margin: 0 22px 24px; padding: 16px; border: 1px dashed var(--line-strong); border-radius: 12px; background: var(--panel-2); }
+.contract-only-note svg { color: var(--blue); }
+.contract-only-note p { margin: 0; color: var(--muted); font-size: 12px; font-weight: 500; line-height: 1.6; }
+.contract-only-note p b { color: var(--text); }
+
+/* Block authoring */
+.block-list { display: grid; gap: 10px; }
+.block-list__empty { margin: 0; color: var(--muted-2); font-size: 11px; font-weight: 500; line-height: 1.55; }
+.block-card { border: 1px solid var(--line); border-radius: 11px; background: var(--panel-2); overflow: hidden; }
+.block-card summary { display: flex; min-height: 42px; align-items: center; justify-content: space-between; gap: 8px; padding: 0 12px; cursor: pointer; list-style: none; font-size: 12px; font-weight: 700; }
+.block-card summary::-webkit-details-marker { display: none; }
+.block-card summary > span:first-child { display: flex; align-items: center; gap: 9px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.block-card summary em { color: var(--muted-2); font-family: 'DM Mono', monospace; font-size: 9px; font-style: normal; }
+.block-card[open] summary { border-bottom: 1px solid var(--line); }
+.block-card[open] summary em { color: var(--blue); }
+.block-card__tools { display: inline-flex; flex: 0 0 auto; gap: 2px; }
+.block-card__tools button { display: grid; place-items: center; width: 24px; height: 24px; border: 0; border-radius: 6px; color: var(--muted-2); background: none; cursor: pointer; transition: color .18s ease, background .18s ease; }
+.block-card__tools button:hover:not(:disabled) { color: var(--text); background: var(--panel); }
+.block-card__tools button:last-child:hover:not(:disabled) { color: var(--red); }
+.block-card__tools button:disabled { opacity: .35; cursor: default; }
+.block-card__body { display: grid; gap: 12px; padding: 12px; }
+.block-add { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.block-add .button { min-height: 32px; padding: 0 11px; font-size: 11px; }
+.block-add small { color: var(--muted-2); font-size: 10.5px; font-weight: 600; }
+
+/* Generic preview for templates without a bespoke React preview */
+.generic-preview { display: grid; justify-items: center; gap: 6px; padding: 64px 34px 58px; background: var(--panel); text-align: center; }
+.generic-preview > span { color: var(--muted-2); font-size: 10px; font-weight: 700; letter-spacing: .16em; }
+.generic-preview h2 { margin: 2px 0 0; font-size: 27px; font-weight: 700; letter-spacing: -.02em; }
+.generic-preview > p { max-width: 52ch; margin: 4px 0 0; color: var(--muted); font-size: 12.5px; font-weight: 500; line-height: 1.6; }
+.generic-preview__facts { display: flex; gap: 12px; margin: 18px 0 6px; }
+.generic-preview__facts > div { display: grid; gap: 2px; min-width: 88px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-2); }
+.generic-preview__facts b { font-size: 18px; font-weight: 700; }
+.generic-preview__facts span { color: var(--muted-2); font-size: 9.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+.generic-preview__hint { max-width: 46ch; margin: 4px 0 14px; color: var(--muted-2); font-size: 11px; font-weight: 500; line-height: 1.55; }
+
+/* Projects: section/clone kind filter + badges */
+.kind-filter { display: flex; flex: 0 0 auto; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); box-shadow: var(--card-shadow); }
+.kind-filter button { min-height: 28px; padding: 0 13px; border: 0; border-radius: 999px; color: var(--muted); background: none; cursor: pointer; font-size: 11px; font-weight: 700; transition: color .18s ease, background .18s ease; }
+.kind-filter button:hover { color: var(--text); }
+.kind-filter button.is-active { color: #ffffff; background: var(--blue-grad); box-shadow: var(--blue-glow); }
+.kind-badge--clone { display: inline-flex; align-items: center; gap: 5px; color: var(--blue); }
+.kind-badge--clone svg { flex: 0 0 auto; }
+.project-card--clone .project-card__visual { color: var(--blue); background: radial-gradient(circle at 30% 20%, var(--blue-bg), transparent 46%), linear-gradient(135deg, var(--panel-2), var(--panel)); }
+
+/* New-section card now offers one entry per registered template */
+.new-project-card--menu { cursor: default; padding: 22px 18px; }
+.new-project-card__templates { display: flex; flex-wrap: wrap; justify-content: center; gap: 7px; margin-top: 12px; }
+.new-project-card__templates button { min-height: 30px; padding: 0 13px; border: 1px solid var(--line); border-radius: 999px; color: var(--text); background: var(--panel); cursor: pointer; font-size: 11px; font-weight: 700; transition: border-color .18s ease, color .18s ease, background .18s ease, transform .18s ease; }
+.new-project-card__templates button:hover { border-color: var(--blue-line); color: var(--blue); background: var(--blue-bg); transform: translateY(-1px); }

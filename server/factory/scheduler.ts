@@ -21,6 +21,12 @@ export class FactoryScheduler {
 
   constructor(private driver: Driver = driveJob) {}
 
+  /** Best-effort clone-project mirror update for statuses set outside the driver (pause/cancel/retry/boot). */
+  private async syncMirror(jobId: string) {
+    const job = await db.getFactoryJob(jobId).catch(() => null);
+    if (job) await db.syncCloneProjectFromJob(job).catch(() => {});
+  }
+
   get status() {
     return { running: [...this.running.keys()], queuePaused: this.queuePaused, queuePausedReason: this.queuePausedReason };
   }
@@ -30,6 +36,7 @@ export class FactoryScheduler {
     for (const job of await db.listFactoryJobs()) {
       if (ACTIVE_STATUSES.includes(job.status as typeof ACTIVE_STATUSES[number])) {
         await db.updateFactoryJob(job.id, { status: 'blocked', status_detail: 'Interrupted by server restart — press Retry to resume' });
+        await this.syncMirror(job.id);
       }
     }
     void this.tick();
@@ -103,6 +110,7 @@ export class FactoryScheduler {
       status, status_detail: status === 'paused' ? 'Paused by user — press Retry to resume' : 'Canceled by user',
       ...(status === 'canceled' ? { finished_at: new Date().toISOString() } : {}),
     });
+    await this.syncMirror(jobId);
     void this.tick();
   }
 
@@ -113,6 +121,7 @@ export class FactoryScheduler {
     if (this.running.has(jobId)) throw new Error('Job is currently running.');
     if (!['blocked', 'paused', 'exhausted', 'failed', 'aborted'].includes(job.status)) throw new Error(`Cannot retry a job in status '${job.status}'.`);
     await db.updateFactoryJob(jobId, { status: 'queued', status_detail: 'Re-queued', error: null, finished_at: null });
+    await this.syncMirror(jobId);
     void this.tick();
   }
 
@@ -121,6 +130,7 @@ export class FactoryScheduler {
     for (const [jobId, slot] of this.running) {
       slot.abort.abort(); slot.kill?.('killed');
       await db.updateFactoryJob(jobId, { status: 'blocked', status_detail: 'Interrupted by server shutdown — press Retry to resume' });
+      await this.syncMirror(jobId);
     }
     this.running.clear();
   }

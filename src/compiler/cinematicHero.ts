@@ -1,4 +1,11 @@
-import type { HeroBuilderState, SectionManifest } from '../shared/types';
+import type { BlockInstance, HeroBuilderState, SectionManifest } from '../shared/types';
+import { blocksFromManifest, cloneBlocks } from './blocks';
+
+/** Preset blocks emitted when the builder state carries no authored blocks. */
+export const defaultHeroBlocks: BlockInstance[] = [
+  { type: 'stat', settings: { value: '01', label: 'Modular by default' } },
+  { type: 'stat', settings: { value: '02', label: 'Motion ready' } },
+];
 
 export const defaultHeroState: HeroBuilderState = {
   name: 'Cinematic Product Hero',
@@ -291,10 +298,12 @@ export function createCinematicHeroManifest(state: HeroBuilderState = defaultHer
     presets: [{
       name: state.name,
       category: 'ThemeBot',
-      blocks: [
-        { type: 'stat', settings: { value: '01', label: 'Modular by default' } },
-        { type: 'stat', settings: { value: '02', label: 'Motion ready' } },
-      ],
+      // Authored block instances from the builder flow into the preset so the
+      // section installs with the merchant's blocks pre-populated. Only the
+      // declared 'stat' type is accepted; anything else would fail validation.
+      blocks: (state.blocks && state.blocks.length > 0 ? state.blocks : defaultHeroBlocks)
+        .filter((block) => block.type === 'stat')
+        .map((block) => ({ type: block.type, settings: { ...block.settings } })),
     }],
     source: { liquid: instanceLiquid, css, javascript: instanceJavascript },
   };
@@ -343,5 +352,6 @@ export function heroStateFromManifest(manifest: SectionManifest, fallback: HeroB
     animation: str('animation', fallback.animation) as HeroBuilderState['animation'],
     animationDuration: num('animation_duration', fallback.animationDuration),
     parallax: bool('enable_parallax', fallback.parallax),
+    blocks: blocksFromManifest(manifest) ?? (fallback.blocks ? cloneBlocks(fallback.blocks) : cloneBlocks(defaultHeroBlocks)),
   };
 }

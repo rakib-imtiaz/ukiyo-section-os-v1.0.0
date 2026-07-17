@@ -117,7 +117,21 @@ export interface CompileResult {
   };
 }
 
-export interface HeroBuilderState {
+/**
+ * A concrete block instance authored in the builder UI: which declared block
+ * type it is, plus the setting values for this instance. Template builders fold
+ * these into the manifest's preset blocks, and stateFromManifest reads them
+ * back, so the frontend can add/remove/reorder blocks generically.
+ */
+export interface BlockInstance {
+  type: string;
+  settings: Record<string, string | number | boolean>;
+}
+
+// NOTE: builder-state shapes are `type` aliases (not interfaces) on purpose —
+// type aliases get an implicit index signature, so each state satisfies the
+// registry's generic `Record<string, unknown>` bound (see src/compiler/templates.ts).
+export type HeroBuilderState = {
   name: string;
   handle: string;
   eyebrow: string;
@@ -146,4 +160,35 @@ export interface HeroBuilderState {
   animation: 'none' | 'fade-up' | 'reveal' | 'blur-in';
   animationDuration: number;
   parallax: boolean;
-}
+  /** Authored statistic blocks; when omitted the template's default stats are used. */
+  blocks?: BlockInstance[];
+};
+
+/** Builder state for the Feature Grid template (src/compiler/featureGrid.ts). */
+export type FeatureGridState = {
+  name: string;
+  handle: string;
+  eyebrow: string;
+  heading: string;
+  intro: string;
+  columnsDesktop: number;
+  columnsMobile: number;
+  gap: number;
+  maxWidth: number;
+  paddingX: number;
+  paddingY: number;
+  textAlignment: 'left' | 'center';
+  sectionBackground: string;
+  cardBackground: string;
+  textColor: string;
+  accentColor: string;
+  cardRadius: number;
+  cardPadding: number;
+  iconSize: number;
+  headingSize: number;
+  showIndex: boolean;
+  hoverLift: boolean;
+  animation: 'none' | 'fade-up' | 'stagger';
+  /** Authored feature cards, rendered as repeatable Shopify blocks. */
+  blocks: BlockInstance[];
+};

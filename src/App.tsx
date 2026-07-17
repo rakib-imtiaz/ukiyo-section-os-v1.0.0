@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Braces, Check, ChevronDown, CircleAlert, Code2, Copy, Download, ExternalLink,
+  ArrowDown, ArrowUp, Braces, Check, ChevronDown, CircleAlert, Code2, Copy, Download, ExternalLink,
   Factory, FileCode2, FolderKanban, Globe, History, House, KeyRound, Layers3, Link2, LoaderCircle, LogOut,
   Monitor, Moon, PackageCheck, PanelLeftClose, Play, Plus, RefreshCw, Rocket, RotateCcw,
   Save, Search, ShieldCheck, SlidersHorizontal, Smartphone, Sparkles, Store, Sun, TerminalSquare, Trash2,
   Upload, WandSparkles,
 } from 'lucide-react';
-import { createCinematicHeroManifest, defaultHeroState, heroStateFromManifest } from './compiler/cinematicHero';
+import { createCinematicHeroManifest, defaultHeroState } from './compiler/cinematicHero';
+import { getTemplate, templateForManifest, templates } from './compiler/templates';
+import type { ControlDef, TemplateDef } from './compiler/templates';
 import FactoryApp, { applyFactoryTheme } from './factory/FactoryApp';
 import HomeScreen from './HomeScreen';
 import Sidebar from './Sidebar';
@@ -23,7 +25,14 @@ type View = 'home' | 'projects' | 'build' | 'contract' | 'code' | 'deploy' | 'se
 type Device = 'desktop' | 'mobile';
 
 interface AppSession { authenticated:boolean; shop:string|null; persistent:boolean; shopify:{configured:boolean;apiVersion:string}; billing:null|{enabled:boolean;active:boolean;mode:string;subscriptions:unknown[]}; claude?:{connected:boolean;method:string|null}; workspace?:{path:string|null;name:string|null;ready:boolean;projectCount:number}; }
-interface SavedProject { id:string; name:string; handle:string; description:string; manifest:SectionManifest; created_at:string; updated_at:string; }
+/**
+ * Project records now come in two kinds (backend Wave 2 data-model unification):
+ * hand-built sections (`kind: 'section'`, the historic shape) and factory clone jobs
+ * surfaced as projects (`kind: 'clone'`). Both `kind` and `manifest` are treated as
+ * optional so the UI degrades gracefully if the listing predates the unification.
+ */
+interface CloneMeta { react_url?:string; store_url?:string; status?:string; status_detail?:string|null; last_score?:number|null; }
+interface SavedProject { id:string; name:string; handle:string; description:string; kind?:'section'|'clone'|string; status?:string; clone_meta?:CloneMeta|null; factory_job_id?:string|null; manifest:SectionManifest|null; created_at:string; updated_at:string; }
 interface SavedApiKey { id:string; label:string; key_prefix:string; last_used_at:string|null; created_at:string; revoked_at:string|null; }
 interface SavedDeployment { id:string; theme_name:string; theme_id:string; status:string; installed_files:string[]; rolled_back_at:string|null; created_at:string; }
 interface ProjectVersion { id:string; project_id:string; version_number:number; manifest:SectionManifest; compiled_files?:GeneratedFile[]; checksum:string; created_at:string; }
@@ -88,6 +97,164 @@ function Slider({ label, value, min, max, step = 1, unit = '', onChange }: {
 
 function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) {
   return <label className="toggle-row"><span>{label}</span><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} /><i /></label>;
+}
+
+/* ===== Registry-driven builder plumbing (Wave 2) =====================================
+ * The builder no longer hardcodes the Cinematic Hero: it renders whatever controls the
+ * selected TemplateDef declares and keeps a generic per-template state object. */
+
+type TemplateState = Record<string, unknown>;
+interface BlockInstance { type: string; settings: Record<string, unknown> }
+
+const cloneDeep = <T,>(value: T): T => JSON.parse(JSON.stringify(value ?? {})) as T;
+const asTemplateState = (value: unknown): TemplateState => (value && typeof value === 'object' ? { ...(value as TemplateState) } : {});
+
+/** Call the registry's buildManifest without depending on how it types its state param. */
+const buildTemplateManifest = (template: TemplateDef, state: TemplateState): SectionManifest =>
+  (template.buildManifest as unknown as (state: TemplateState) => SectionManifest)(state);
+
+/** Recover a template state from a saved manifest; null when the template can't represent it. */
+const templateStateFromManifest = (template: TemplateDef, manifest: SectionManifest): TemplateState | null => {
+  const recovered = (template.stateFromManifest as unknown as (manifest: SectionManifest) => unknown)(manifest);
+  return recovered && typeof recovered === 'object' ? { ...(recovered as TemplateState) } : null;
+};
+
+const blocksOf = (state: TemplateState): BlockInstance[] => (Array.isArray(state.blocks) ? (state.blocks as BlockInstance[]) : []);
+
+function normalizeOptions(options: ControlDef['options']): Array<{ value: string; label: string }> {
+  if (!Array.isArray(options)) return [];
+  return (options as unknown[]).map((option) => {
+    if (typeof option === 'string') return { value: option, label: option };
+    const item = option as { value?: unknown; label?: unknown };
+    return { value: String(item.value ?? ''), label: String(item.label ?? item.value ?? '') };
+  });
+}
+
+function emptyControlValue(control: ControlDef): unknown {
+  switch (control.type) {
+    case 'range': return control.min ?? 0;
+    case 'toggle': return false;
+    case 'color': return '#111111';
+    case 'select': return normalizeOptions(control.options)[0]?.value ?? '';
+    default: return '';
+  }
+}
+
+/** Preserve first-appearance order of `control.group` so templates control their own panel layout. */
+function groupControls(controls: ControlDef[]): Array<{ group: string; controls: ControlDef[] }> {
+  const grouped: Array<{ group: string; controls: ControlDef[] }> = [];
+  for (const control of controls) {
+    const bucket = grouped.find((entry) => entry.group === control.group);
+    if (bucket) bucket.controls.push(control);
+    else grouped.push({ group: control.group || 'Settings', controls: [control] });
+  }
+  return grouped;
+}
+
+/** Maps a ControlDef to the input primitives the builder already uses. */
+function ControlInput({ control, value, onChange }: { control: ControlDef; value: unknown; onChange: (value: unknown) => void }) {
+  switch (control.type) {
+    case 'textarea':
+      return <Field label={control.label} hint={control.help}><textarea rows={3} value={String(value ?? '')} onChange={(event) => onChange(event.target.value)} /></Field>;
+    case 'select':
+      return <Field label={control.label} hint={control.help}><select value={String(value ?? '')} onChange={(event) => onChange(event.target.value)}>{normalizeOptions(control.options).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></Field>;
+    case 'color':
+      return <Field label={control.label} hint={control.help}><input type="color" value={typeof value === 'string' && value.startsWith('#') ? value : '#111111'} onChange={(event) => onChange(event.target.value)} /></Field>;
+    case 'range':
+      return <Slider label={control.label} value={typeof value === 'number' ? value : Number(value ?? control.min ?? 0) || (control.min ?? 0)} min={control.min ?? 0} max={control.max ?? 100} step={control.step ?? 1} unit={control.unit ?? ''} onChange={(next) => onChange(next)} />;
+    case 'toggle':
+      return <Toggle label={control.label} checked={Boolean(value)} onChange={(next) => onChange(next)} />;
+    case 'url':
+      return <Field label={control.label} hint={control.help}><input placeholder="https://… or /path" value={String(value ?? '')} onChange={(event) => onChange(event.target.value)} /></Field>;
+    default: // text
+      return <Field label={control.label} hint={control.help}><input value={String(value ?? '')} onChange={(event) => onChange(control.id === 'handle' ? event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-') : event.target.value)} /></Field>;
+  }
+}
+
+/** Block authoring: add / remove / reorder / duplicate block instances against template.blockTypes. */
+function BlockEditor({ template, blocks, maxBlocks, onChange }: { template: TemplateDef; blocks: BlockInstance[]; maxBlocks?: number; onChange: (blocks: BlockInstance[]) => void }) {
+  const blockTypes = template.blockTypes ?? [];
+  const typeDef = (type: string) => blockTypes.find((entry) => entry.type === type);
+  const atLimit = typeof maxBlocks === 'number' && blocks.length >= maxBlocks;
+  const addBlock = (type: string) => {
+    const definition = typeDef(type);
+    if (!definition || atLimit) return;
+    const settings: Record<string, unknown> = {};
+    definition.fields.forEach((field) => { settings[field.id] = emptyControlValue(field); });
+    onChange([...blocks, { type, settings }]);
+  };
+  const move = (index: number, delta: number) => {
+    const target = index + delta;
+    if (target < 0 || target >= blocks.length) return;
+    const next = [...blocks];
+    [next[index], next[target]] = [next[target], next[index]];
+    onChange(next);
+  };
+  const duplicate = (index: number) => { if (!atLimit) onChange([...blocks.slice(0, index + 1), cloneDeep(blocks[index]), ...blocks.slice(index + 1)]); };
+  const remove = (index: number) => onChange(blocks.filter((_, at) => at !== index));
+  const setSetting = (index: number, id: string, value: unknown) =>
+    onChange(blocks.map((block, at) => (at === index ? { ...block, settings: { ...block.settings, [id]: value } } : block)));
+  return (
+    <div className="block-list">
+      {blocks.length === 0 && <p className="block-list__empty">No blocks yet — add one below. Blocks become repeatable elements the merchant manages in the theme editor.</p>}
+      {blocks.map((block, index) => {
+        const definition = typeDef(block.type);
+        return (
+          <details className="block-card" key={`${block.type}-${index}`} open={blocks.length <= 3}>
+            <summary>
+              <span><em>{String(index + 1).padStart(2, '0')}</em>{definition?.name ?? block.type}</span>
+              <span className="block-card__tools" onClick={(event) => event.preventDefault()}>
+                <button type="button" title="Move up" disabled={index === 0} onClick={() => move(index, -1)}><ArrowUp size={12} /></button>
+                <button type="button" title="Move down" disabled={index === blocks.length - 1} onClick={() => move(index, 1)}><ArrowDown size={12} /></button>
+                <button type="button" title="Duplicate block" disabled={atLimit} onClick={() => duplicate(index)}><Copy size={12} /></button>
+                <button type="button" title="Remove block" onClick={() => remove(index)}><Trash2 size={12} /></button>
+              </span>
+            </summary>
+            <div className="block-card__body">
+              {(definition?.fields ?? []).map((field) => (
+                <ControlInput key={field.id} control={field} value={block.settings[field.id]} onChange={(value) => setSetting(index, field.id, value)} />
+              ))}
+              {!definition && <p className="block-list__empty">Unknown block type “{block.type}” — it will pass through to the manifest unchanged.</p>}
+            </div>
+          </details>
+        );
+      })}
+      <div className="block-add">
+        {blockTypes.map((entry) => (
+          <button type="button" key={entry.type} className="button button--quiet" disabled={atLimit} onClick={() => addBlock(entry.type)}><Plus size={13} />{entry.name}</button>
+        ))}
+        {atLimit && <small>Block limit reached ({maxBlocks}).</small>}
+      </div>
+    </div>
+  );
+}
+
+/** True when a generic template state carries the fields the hero's React preview needs. */
+function isHeroLikeState(state: TemplateState): boolean {
+  return typeof state.heading === 'string' && typeof state.overlayOpacity === 'number' && typeof state.animation === 'string'
+    && typeof state.contentPosition === 'string' && typeof state.backgroundType === 'string' && typeof state.sectionHeight === 'number';
+}
+
+/** Fallback preview for templates without a bespoke React preview — points at the compiled output path. */
+function GenericPreview({ manifest, device, onCompile }: { manifest: SectionManifest; device: Device; onCompile: () => void }) {
+  const settingCount = (manifest.settings ?? []).filter((entry) => 'id' in entry).length;
+  return (
+    <div className={`preview-shell preview-shell--${device}`}>
+      <div className="preview-browserbar"><span /><span /><span /><div>preview.theme / {manifest.handle}</div></div>
+      <div className="generic-preview">
+        <span>SECTION PREVIEW</span>
+        <h2>{manifest.name}</h2>
+        <p>{manifest.description}</p>
+        <div className="generic-preview__facts">
+          <div><b>{settingCount}</b><span>Settings</span></div>
+          <div><b>{(manifest.blocks ?? []).length}</b><span>Block types</span></div>
+          <div><b>{(manifest.presets ?? []).length}</b><span>Presets</span></div>
+        </div>
+        <p className="generic-preview__hint">This template renders through its compiled Shopify output. Compile the section to inspect the generated Liquid, CSS, and JavaScript.</p>
+        <button className="button button--accent" onClick={onCompile}><Play size={14} />Compile section</button>
+      </div>
+    </div>
+  );
 }
 
 function LivePreview({ state, device, replayKey }: { state: HeroBuilderState; device: Device; replayKey: number }) {
@@ -307,12 +474,35 @@ export default function App() {
   useEffect(() => { localStorage.setItem('sidebar-collapsed', sidebarCollapsed ? '1' : '0'); }, [sidebarCollapsed]);
   const [dark, setDark] = useState(() => localStorage.getItem('factory-theme') === 'dark');
   useEffect(() => { applyFactoryTheme(dark); }, [dark]);
-  const [state, setState] = useState<HeroBuilderState>(defaultHeroState);
+  // Registry-driven builder: which template is being authored + its generic control state.
+  const [templateId, setTemplateId] = useState<string>(() => templates[0]?.id ?? '');
+  const template: TemplateDef | null = useMemo(() => getTemplate(templateId) ?? templates[0] ?? null, [templateId]);
+  const [builderState, setBuilderState] = useState<TemplateState>(() => asTemplateState(templates[0]?.defaultState));
   const [device, setDevice] = useState<Device>('desktop');
   const [replayKey, setReplayKey] = useState(0);
   const [customManifest, setCustomManifest] = useState<SectionManifest | null>(null);
-  const generatedManifest = useMemo(() => createCinematicHeroManifest(state), [state]);
+  const generatedManifest = useMemo<SectionManifest>(() => {
+    if (template) { try { return buildTemplateManifest(template, builderState); } catch { /* fall through to the hero fallback */ } }
+    return createCinematicHeroManifest(defaultHeroState);
+  }, [template, builderState]);
   const manifest = customManifest ?? generatedManifest;
+  // A contract-authored manifest that no template can round-trip stays authoritative: the
+  // builder shows no controls for it, so nothing can silently regenerate (and discard) it.
+  const contractOnly = useMemo(() => {
+    if (!customManifest) return false;
+    const match = templateForManifest(customManifest);
+    if (!match) return true;
+    return templateStateFromManifest(match, customManifest) === null;
+  }, [customManifest]);
+  const groupedControls = useMemo(() => (template ? groupControls(template.controls) : []), [template]);
+  // The hero keeps its bespoke React preview; any state carrying the hero fields can use it.
+  const heroPreviewState = useMemo<HeroBuilderState | null>(
+    () => (!contractOnly && isHeroLikeState(builderState) ? (builderState as unknown as HeroBuilderState) : null),
+    [builderState, contractOnly],
+  );
+  const builderControlCount = contractOnly || !template
+    ? (manifest.settings ?? []).filter((entry) => 'id' in entry).length
+    : template.controls.length;
   const [contractText, setContractText] = useState(JSON.stringify(manifest, null, 2));
   const [contractError, setContractError] = useState('');
   const [compileResult, setCompileResult] = useState<CompileResult | null>(null);
@@ -331,6 +521,7 @@ export default function App() {
   const [projectsLoading, setProjectsLoading] = useState(false);
   const [projectsError, setProjectsError] = useState('');
   const [projectQuery, setProjectQuery] = useState('');
+  const [projectKindFilter, setProjectKindFilter] = useState<'all' | 'section' | 'clone'>('all');
   const [contractIssues, setContractIssues] = useState<CompileResult['issues']>([]);
   const [contractChecking, setContractChecking] = useState(false);
   const [keyLabel, setKeyLabel] = useState('');
@@ -341,10 +532,32 @@ export default function App() {
   const [versionsLoading, setVersionsLoading] = useState(false);
   const [versionsError, setVersionsError] = useState('');
 
-  const update = <K extends keyof HeroBuilderState>(key: K, value: HeroBuilderState[K]) => {
+  // Editing a control regenerates the manifest from the CURRENT template's state (never the
+  // hero's), so a non-hero section survives control edits — the old customManifest-nuking bug.
+  const updateControl = (id: string, value: unknown) => {
     setCustomManifest(null);
     setDirty(true);
-    setState((current) => ({ ...current, [key]: value }));
+    setBuilderState((current) => ({ ...current, [id]: value }));
+  };
+  const updateBlocks = (blocks: BlockInstance[]) => {
+    setCustomManifest(null);
+    setDirty(true);
+    setBuilderState((current) => ({ ...current, blocks }));
+  };
+
+  const selectTemplate = async (id: string) => {
+    const next = getTemplate(id);
+    if (!next || id === templateId) return;
+    if (dirty || customManifest) {
+      const ok = await confirm({ title: `Switch to ${next.name}?`, body: 'The builder resets to the selected template’s defaults. Unsaved edits to the current section are discarded.', confirmLabel: 'Switch template', danger: true });
+      if (!ok) return;
+    }
+    setTemplateId(id);
+    setBuilderState(asTemplateState(next.defaultState));
+    setCustomManifest(null);
+    setCompileResult(null);
+    setDirty(false);
+    setNotice(`${next.name} template loaded.`);
   };
 
   useEffect(() => {
@@ -436,7 +649,15 @@ export default function App() {
       }
       const result = await response.json() as CompileResult;
       setContractIssues(result.issues ?? []);
-      if (result.valid) { setCustomManifest(parsed); setDirty(false); setNotice('Contract validated and applied.'); }
+      if (result.valid) {
+        setCustomManifest(parsed);
+        // Re-hydrate the builder when a registered template can round-trip this contract.
+        const match = templateForManifest(parsed);
+        const recovered = match ? templateStateFromManifest(match, parsed) : null;
+        if (match && recovered) { setTemplateId(match.id); setBuilderState(recovered); }
+        setDirty(false);
+        setNotice(match && recovered ? `Contract validated and applied — editable as ${match.name}.` : 'Contract validated and applied.');
+      }
       else setNotice(`Contract has ${result.issues.length} validation issue(s) — see below.`);
     } catch { setContractError('Validation service is unreachable.'); }
     finally { setContractChecking(false); }
@@ -468,24 +689,31 @@ export default function App() {
     await loadSession();
   };
 
-  const loadPreset = async () => {
-    try {
-      const response = await fetch('/api/presets/cinematic-hero');
-      if (!response.ok) throw new Error('Preset unavailable');
-      const data = await response.json();
-      if (data.state) { setState(data.state as HeroBuilderState); setCustomManifest(null); setDirty(false); setNotice('Loaded the cinematic hero preset.'); }
-    } catch { setNotice('The preset could not be loaded.'); }
+  const resetTemplate = () => {
+    if (!template) return;
+    setBuilderState(asTemplateState(template.defaultState));
+    setCustomManifest(null);
+    setDirty(false);
+    setNotice(`Reset to the ${template.name} defaults.`);
   };
 
-  const newProject=()=>{
-    setState(defaultHeroState);setCustomManifest(null);setProjectId(null);setCompileResult(null);setDirty(false);setView('build');setNotice('New section workspace ready.');
+  const newProject=(withTemplateId?:string)=>{
+    const chosen=(withTemplateId?getTemplate(withTemplateId):null)??template??templates[0]??null;
+    if(chosen){setTemplateId(chosen.id);setBuilderState(asTemplateState(chosen.defaultState));}
+    setCustomManifest(null);setProjectId(null);setCompileResult(null);setDirty(false);setView('build');setNotice(chosen?`New ${chosen.name} workspace ready.`:'New section workspace ready.');
   };
 
   const openProject=(project:SavedProject)=>{
-    // Hydrate BOTH the builder state and the custom manifest so editing a control doesn't
-    // discard the opened project (update() nulls customManifest and regenerates from state).
-    setState(heroStateFromManifest(project.manifest, defaultHeroState));
-    setProjectId(project.id);setCustomManifest(project.manifest);setContractText(JSON.stringify(project.manifest,null,2));setContractIssues([]);setCompileResult(null);setDirty(false);setView('contract');setNotice(`${project.name} opened — editable in the builder.`);
+    // Factory clone jobs surfaced as projects have no section manifest — they live in the Factory.
+    if(project.kind==='clone'||!project.manifest){setView('factory');setNotice(`${project.name} is a factory clone job — opening the Factory.`);return;}
+    // Pick the template that authored this manifest and hydrate BOTH the per-template builder
+    // state and the custom manifest, so a control edit regenerates via the RIGHT template
+    // instead of discarding the section (the old hero-only nuking bug).
+    const match=templateForManifest(project.manifest);
+    const recovered=match?templateStateFromManifest(match,project.manifest):null;
+    if(match&&recovered){setTemplateId(match.id);setBuilderState(recovered);}
+    setProjectId(project.id);setCustomManifest(project.manifest);setContractText(JSON.stringify(project.manifest,null,2));setContractIssues([]);setCompileResult(null);setDirty(false);setView('contract');
+    setNotice(match&&recovered?`${project.name} opened — editable in the builder as ${match.name}.`:`${project.name} opened — no matching template, edit it as a design contract.`);
   };
 
   const saveProject=async()=>{
@@ -511,6 +739,7 @@ export default function App() {
   };
 
   const cloneProject=async(project:SavedProject)=>{
+    if(!project.manifest){setNotice('Factory clone jobs are duplicated from the Factory, not the section library.');return;}
     setWorking(true);
     try{
       const copy={...project.manifest,name:`${project.manifest.name} copy`,handle:`${project.manifest.handle}-copy`.slice(0,64)};
@@ -596,13 +825,19 @@ export default function App() {
     finally { setWorking(false); }
   };
 
+  // Clone jobs are projects too now, but only real section projects carry an installable manifest.
+  const projectKindOf = (project: SavedProject): 'section' | 'clone' => (project.kind === 'clone' ? 'clone' : 'section');
+  const sectionProjects = projects.filter((project) => projectKindOf(project) === 'section' && project.manifest);
+  const cloneCount = projects.length - sectionProjects.length;
   // Install either the live builder section or a chosen saved project's manifest.
-  const installManifest = (() => { const chosen = projects.find((project) => project.id === deployProjectId); return chosen ? chosen.manifest : manifest; })();
+  const installManifest = (() => { const chosen = sectionProjects.find((project) => project.id === deployProjectId); return chosen?.manifest ?? manifest; })();
   // The compile result reflects the builder `manifest`, so it only mirrors what installs when the
   // builder section is the install target (no saved project chosen). Otherwise the server recompiles
   // the chosen project's stored version on install, so we can't preview its exact files here.
   const installFiles: GeneratedFile[] | null = (!deployProjectId && compileResult && compileResult.files.length > 0) ? compileResult.files : null;
-  const filteredProjects = projects.filter((project) => `${project.name} ${project.handle} ${project.description}`.toLowerCase().includes(projectQuery.trim().toLowerCase()));
+  const filteredProjects = projects.filter((project) =>
+    (projectKindFilter === 'all' || projectKindOf(project) === projectKindFilter)
+    && `${project.name} ${project.handle} ${project.description ?? ''}`.toLowerCase().includes(projectQuery.trim().toLowerCase()));
 
   const install = async () => {
     if (!themeId) return;
@@ -646,17 +881,43 @@ export default function App() {
         {view === 'home' && <HomeScreen onNavigate={(target) => setView(target)} />}
 
         {view === 'projects' && <section className="page-pad projects-page">
-          <div className="page-heading"><div><span>YOUR MODULAR SECTION LIBRARY</span><h2>Section projects</h2><p>Create once, version every change, and deploy the same design system across connected Shopify stores and unpublished themes.</p></div><button className="button button--accent" onClick={newProject}><Plus size={15}/>New section</button></div>
+          <div className="page-heading"><div><span>YOUR MODULAR SECTION LIBRARY</span><h2>Section projects</h2><p>Create once, version every change, and deploy the same design system across connected Shopify stores and unpublished themes.</p></div><button className="button button--accent" onClick={()=>newProject()}><Plus size={15}/>New section</button></div>
           {!session?.authenticated&&<div className="connect-hero">
             <div className="connect-hero__mark"><Link2 size={27}/></div><div><span>CONNECT YOUR FIRST STORE</span><h3>{session?.shopify.configured?'Turn ThemeBot into your Shopify workspace.':'Production credentials are not configured yet.'}</h3><p>{session?.shopify.configured?'Authorize the app to save projects, create versions, install sections, and roll back deployments.':'The full builder remains available in demo mode. Add the Shopify credentials from .env.example when you are ready to connect a store.'}</p></div>
             {session?.shopify.configured&&<form onSubmit={(event)=>{event.preventDefault();window.location.href=`/auth/shopify?shop=${encodeURIComponent(shopInput)}`;}}><input value={shopInput} onChange={(event)=>setShopInput(event.target.value)} placeholder="your-store.myshopify.com" required/><button className="button button--accent" type="submit"><Store size={15}/>Connect Shopify</button></form>}
           </div>}
           {session?.authenticated&&<>
             {projectsError&&<div className="error-line"><CircleAlert size={15}/>{projectsError}<button className="button button--quiet" onClick={()=>void loadProjects()}><RefreshCw size={13}/>Retry</button></div>}
-            {projects.length>0&&<div className="projects-toolbar"><div className="projects-search"><Search size={14}/><input value={projectQuery} onChange={(event)=>setProjectQuery(event.target.value)} placeholder="Search projects by name or handle…"/></div><span>{filteredProjects.length} of {projects.length}</span></div>}
+            {projects.length>0&&<div className="projects-toolbar">
+              <div className="projects-search"><Search size={14}/><input value={projectQuery} onChange={(event)=>setProjectQuery(event.target.value)} placeholder="Search projects by name or handle…"/></div>
+              {cloneCount>0&&<div className="kind-filter" role="tablist" aria-label="Filter projects by kind">
+                {([['all',`All · ${projects.length}`],['section',`Sections · ${sectionProjects.length}`],['clone',`Clones · ${cloneCount}`]] as const).map(([value,label])=>
+                  <button key={value} className={projectKindFilter===value?'is-active':''} onClick={()=>setProjectKindFilter(value)}>{label}</button>)}
+              </div>}
+              <span>{filteredProjects.length} of {projects.length}</span>
+            </div>}
             <div className="project-grid">
-              <button className="new-project-card" onClick={newProject}><span><Plus size={21}/></span><b>Create new section</b><small>Start with the cinematic modular system</small></button>
-              {filteredProjects.map((project)=><article className="project-card" key={project.id}><div className="project-card__top"><span>SECTION PROJECT</span><div className="project-card__tools"><button title="Version history" onClick={()=>openHistory(project)}><History size={14}/></button><button title="Duplicate project" onClick={()=>cloneProject(project)}><Copy size={13}/></button><button title="Delete project" onClick={()=>deleteProject(project.id)}><Trash2 size={14}/></button></div></div><div className="project-card__visual"><Layers3 size={29}/><i/></div><h3>{project.name}</h3><code>{project.handle}</code><p>{project.description}</p><footer><span>Updated {new Date(project.updated_at).toLocaleDateString()}</span><button onClick={()=>openProject(project)}>Open <ExternalLink size={13}/></button></footer></article>)}
+              <div className="new-project-card new-project-card--menu" role="group" aria-label="Create new section">
+                <span><Plus size={21}/></span><b>Create new section</b><small>{templates.length>1?'Pick a section template':'Start with the cinematic modular system'}</small>
+                {templates.length>0
+                  ?<div className="new-project-card__templates">{templates.map((entry)=><button key={entry.id} title={entry.description} onClick={()=>newProject(entry.id)}>{entry.name}</button>)}</div>
+                  :<div className="new-project-card__templates"><button onClick={()=>newProject()}>Open the builder</button></div>}
+              </div>
+              {filteredProjects.map((project)=>{const isClone=projectKindOf(project)==='clone';return <article className={`project-card${isClone?' project-card--clone':''}`} key={project.id}>
+                <div className="project-card__top"><span className={isClone?'kind-badge kind-badge--clone':undefined}>{isClone?<><Factory size={11}/>CLONE PROJECT</>:'SECTION PROJECT'}</span>
+                  <div className="project-card__tools">
+                    {!isClone&&<button title="Version history" onClick={()=>openHistory(project)}><History size={14}/></button>}
+                    {!isClone&&<button title="Duplicate project" onClick={()=>cloneProject(project)}><Copy size={13}/></button>}
+                    {!isClone&&<button title="Delete project" onClick={()=>deleteProject(project.id)}><Trash2 size={14}/></button>}
+                  </div>
+                </div>
+                <div className="project-card__visual">{isClone?<Factory size={29}/>:<Layers3 size={29}/>}<i/></div>
+                <h3>{project.name}</h3><code>{project.handle}</code><p>{project.description}</p>
+                <footer>
+                  <span>{(()=>{const cloneStatus=project.clone_meta?.status??project.status;return isClone&&cloneStatus?`${cloneStatus.replace(/_/g,' ')} · `:'';})()}Updated {new Date(project.updated_at).toLocaleDateString()}</span>
+                  <button onClick={()=>openProject(project)}>{isClone?'Open in Factory':'Open'} <ExternalLink size={13}/></button>
+                </footer>
+              </article>;})}
             </div>
             {projectsLoading&&projects.length===0&&<div className="project-empty"><LoaderCircle className="spin" size={22}/><p>Loading your projects…</p></div>}
             {!projectsLoading&&projects.length===0&&!projectsError&&<div className="project-empty"><FolderKanban size={25}/><h3>Your section library is ready.</h3><p>Create your first modular Shopify section to begin.</p></div>}
@@ -666,47 +927,47 @@ export default function App() {
 
         {view === 'build' && <div className="builder-layout">
           <aside className="controls-panel">
-            <div className="panel-intro"><div><span>MODULAR CONTROLS</span><p>Everything configured here becomes a native Shopify theme setting.</p></div><button className="button button--quiet button--icon" title="Reset to the cinematic hero preset" onClick={loadPreset}><RotateCcw size={14} /></button></div>
-            <Group title="Content" number="01" open>
-              <Field label="Section name"><input value={state.name} onChange={(e) => update('name', e.target.value)} /></Field>
-              <Field label="File handle" hint="Lowercase letters, numbers, and hyphens"><input value={state.handle} onChange={(e) => update('handle', e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-'))} /></Field>
-              <Field label="Eyebrow"><input value={state.eyebrow} onChange={(e) => update('eyebrow', e.target.value)} /></Field>
-              <Field label="Heading"><textarea rows={3} value={state.heading} onChange={(e) => update('heading', e.target.value)} /></Field>
-              <Field label="Body"><textarea rows={4} value={state.body} onChange={(e) => update('body', e.target.value)} /></Field>
-              <div className="two-col"><Field label="Primary label"><input value={state.primaryLabel} onChange={(e) => update('primaryLabel', e.target.value)} /></Field><Field label="Primary URL"><input value={state.primaryUrl} onChange={(e) => update('primaryUrl', e.target.value)} /></Field></div>
-              <div className="two-col"><Field label="Secondary label"><input value={state.secondaryLabel} onChange={(e) => update('secondaryLabel', e.target.value)} /></Field><Field label="Secondary URL"><input value={state.secondaryUrl} onChange={(e) => update('secondaryUrl', e.target.value)} /></Field></div>
-            </Group>
-            <Group title="Background & overlay" number="02">
-              <Field label="Preview image URL" hint="The Shopify section uses a native image picker."><input placeholder="https://…" value={state.previewImageUrl} onChange={(e) => update('previewImageUrl', e.target.value)} /></Field>
-              <Field label="Background type"><select value={state.backgroundType} onChange={(e) => update('backgroundType', e.target.value as HeroBuilderState['backgroundType'])}><option value="gradient">Gradient</option><option value="color">Solid color</option><option value="image">Image</option><option value="video">Shopify video</option></select></Field>
-              <Field label="Gradient"><input value={state.gradient} onChange={(e) => update('gradient', e.target.value)} /></Field>
-              <div className="color-grid"><Field label="Background"><input type="color" value={state.backgroundColor} onChange={(e) => update('backgroundColor', e.target.value)} /></Field><Field label="Overlay"><input type="color" value={state.overlayColor} onChange={(e) => update('overlayColor', e.target.value)} /></Field></div>
-              <Slider label="Overlay opacity" value={state.overlayOpacity} min={0} max={90} unit="%" onChange={(v) => update('overlayOpacity', v)} />
-            </Group>
-            <Group title="Layout & responsive" number="03">
-              <Field label="Content position"><select value={state.contentPosition} onChange={(e) => update('contentPosition', e.target.value as HeroBuilderState['contentPosition'])}>{['top-left','top-center','center-left','center','bottom-left','bottom-center'].map((value) => <option key={value}>{value}</option>)}</select></Field>
-              <Field label="Text alignment"><select value={state.textAlignment} onChange={(e) => update('textAlignment', e.target.value as HeroBuilderState['textAlignment'])}><option>left</option><option>center</option><option>right</option></select></Field>
-              <Slider label="Section height" value={state.sectionHeight} min={50} max={100} unit="vh" onChange={(v) => update('sectionHeight', v)} />
-              <Slider label="Content width" value={state.contentWidth} min={360} max={1000} step={10} unit="px" onChange={(v) => update('contentWidth', v)} />
-              <Slider label="Horizontal padding" value={state.paddingX} min={0} max={120} step={4} unit="px" onChange={(v) => update('paddingX', v)} />
-              <Slider label="Vertical padding" value={state.paddingY} min={0} max={160} step={4} unit="px" onChange={(v) => update('paddingY', v)} />
-            </Group>
-            <Group title="Typography & color" number="04">
-              <div className="color-grid"><Field label="Text"><input type="color" value={state.textColor} onChange={(e) => update('textColor', e.target.value)} /></Field><Field label="Accent"><input type="color" value={state.accentColor} onChange={(e) => update('accentColor', e.target.value)} /></Field></div>
-              <Slider label="Desktop heading" value={state.headingSize} min={36} max={120} step={2} unit="px" onChange={(v) => update('headingSize', v)} />
-              <Slider label="Mobile heading" value={state.mobileHeadingSize} min={28} max={72} step={2} unit="px" onChange={(v) => update('mobileHeadingSize', v)} />
-            </Group>
-            <Group title="Motion" number="05">
-              <Field label="Entrance animation"><select value={state.animation} onChange={(e) => update('animation', e.target.value as HeroBuilderState['animation'])}><option value="none">None</option><option value="fade-up">Fade up</option><option value="reveal">Editorial reveal</option><option value="blur-in">Blur in</option></select></Field>
-              <Slider label="Duration" value={state.animationDuration} min={200} max={2000} step={50} unit="ms" onChange={(v) => update('animationDuration', v)} />
-              <Toggle label="Subtle scroll parallax" checked={state.parallax} onChange={(v) => update('parallax', v)} />
-            </Group>
+            <div className="panel-intro"><div><span>MODULAR CONTROLS</span><p>Everything configured here becomes a native Shopify theme setting.</p></div><button className="button button--quiet button--icon" title="Reset to template defaults" onClick={resetTemplate}><RotateCcw size={14} /></button></div>
+            <div className="template-picker">
+              <Field label="Section template" hint={template?.description}>
+                <select value={template?.id ?? ''} onChange={(event) => void selectTemplate(event.target.value)} disabled={templates.length === 0}>
+                  {templates.length === 0 && <option value="">No templates registered</option>}
+                  {templates.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
+                </select>
+              </Field>
+            </div>
+            {contractOnly ? (
+              <div className="contract-only-note">
+                <Braces size={16} />
+                <p><b>Contract-authored section.</b><br />No registered template matches this manifest, so visual controls are unavailable — and the builder will never overwrite it. Edit it in the Design contract view.</p>
+                <button className="button button--quiet" onClick={() => void requestView('contract')}>Open design contract</button>
+              </div>
+            ) : template ? (<>
+              {groupedControls.map((entry, index) => (
+                <Group key={entry.group} title={entry.group} number={String(index + 1).padStart(2, '0')} open={index === 0}>
+                  {entry.controls.map((control) => (
+                    <ControlInput key={control.id} control={control} value={builderState[control.id]} onChange={(value) => updateControl(control.id, value)} />
+                  ))}
+                </Group>
+              ))}
+              {(template.blockTypes?.length ?? 0) > 0 && (
+                <Group title="Blocks" number={String(groupedControls.length + 1).padStart(2, '0')}>
+                  <BlockEditor template={template} blocks={blocksOf(builderState)} maxBlocks={manifest.maxBlocks} onChange={updateBlocks} />
+                </Group>
+              )}
+            </>) : (
+              <div className="contract-only-note"><CircleAlert size={16} /><p><b>No templates registered.</b><br />The template registry is empty — the builder falls back to the cinematic hero manifest.</p></div>
+            )}
           </aside>
 
           <section className="preview-area">
             <div className="preview-toolbar"><div><span className="status-dot" />LIVE PREVIEW</div><div className="device-switch"><button className={device === 'desktop' ? 'is-active' : ''} onClick={() => setDevice('desktop')}><Monitor size={15} /></button><button className={device === 'mobile' ? 'is-active' : ''} onClick={() => setDevice('mobile')}><Smartphone size={15} /></button></div><button onClick={() => setReplayKey((key) => key + 1)}><RefreshCw size={14} />Replay motion</button></div>
-            <div className="preview-stage"><LivePreview state={state} device={device} replayKey={replayKey} /></div>
-            <div className="preview-summary"><div><SlidersHorizontal size={15} /><span><b>26</b> section controls</span></div><div><Layers3 size={15} /><span><b>1</b> repeatable block type</span></div><div><Sparkles size={15} /><span>Reduced-motion safe</span></div></div>
+            <div className="preview-stage">
+              {heroPreviewState
+                ? <LivePreview state={heroPreviewState} device={device} replayKey={replayKey} />
+                : <GenericPreview manifest={manifest} device={device} onCompile={() => void compile(true)} />}
+            </div>
+            <div className="preview-summary"><div><SlidersHorizontal size={15} /><span><b>{builderControlCount}</b> section controls</span></div><div><Layers3 size={15} /><span><b>{(manifest.blocks ?? []).length}</b> repeatable block type{(manifest.blocks ?? []).length === 1 ? '' : 's'}</span></div><div><Sparkles size={15} /><span>Reduced-motion safe</span></div></div>
           </section>
         </div>}
 
@@ -737,7 +998,7 @@ export default function App() {
           <div className="page-heading"><div><span>SAFE THEME INSTALLATION</span><h2>Install to an unpublished theme</h2><p>ThemeBot refuses to modify the published theme. Connect a Shopify store, select a duplicated theme, and install the generated files.</p></div></div>
           <div className="deploy-grid">
             <div className="connection-card"><div className="connection-card__icon"><Store size={23} /></div><span>SHOPIFY CONNECTION</span><h3>{session?.authenticated ? session.shop : 'Store not connected'}</h3><p>{session?.authenticated ? `Secure OAuth session · Admin API ${session.shopify.apiVersion}.` : 'Connect a Shopify store from Projects before installing section files.'}</p><div className={`connection-state ${session?.authenticated ? 'is-connected' : ''}`}><i />{session?.authenticated ? 'Connected securely' : 'Connection required'}</div><button className="button button--quiet button--full" onClick={loadThemes} disabled={!session?.authenticated || working}>{working ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}Load unpublished themes</button></div>
-            <div className="install-card"><span>INSTALL TARGET</span><h3>{installManifest.name}</h3><Field label="Section to install" hint={deployProjectId ? 'Installing a saved project version.' : 'Installing the section currently open in the builder.'}><select value={deployProjectId} onChange={(event) => setDeployProjectId(event.target.value)}><option value="">Current builder section</option>{projects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}</select></Field><div className="install-files">{installFiles ? installFiles.map((file) => <div key={file.path}><FileCode2 size={15} /><span>{file.path}</span><Check size={14} /></div>) : <div className="install-files__hint"><FileCode2 size={15} /><span>{deployProjectId ? 'This saved version is compiled on the server at install time.' : 'Compile the section to preview the exact files that will install.'}</span></div>}</div><Field label="Unpublished theme"><select value={themeId} onChange={(event) => setThemeId(event.target.value)} disabled={!themes.length}><option value="">{themes.length ? 'Select a theme' : 'Load connected themes first'}</option>{themes.map((theme) => <option value={theme.id} key={theme.id}>{theme.name} · {theme.role.toLowerCase()}</option>)}</select></Field><div className="safety-note"><PanelLeftClose size={16} /><p><b>Published-theme lock is active.</b><br />Installation is only allowed on an unpublished theme.</p></div><button className="button button--accent button--full" onClick={install} disabled={!themeId || working}>{working ? <LoaderCircle className="spin" size={15} /> : <PackageCheck size={15} />}Install section package</button></div>
+            <div className="install-card"><span>INSTALL TARGET</span><h3>{installManifest.name}</h3><Field label="Section to install" hint={deployProjectId ? 'Installing a saved project version.' : 'Installing the section currently open in the builder.'}><select value={deployProjectId} onChange={(event) => setDeployProjectId(event.target.value)}><option value="">Current builder section</option>{sectionProjects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}</select></Field><div className="install-files">{installFiles ? installFiles.map((file) => <div key={file.path}><FileCode2 size={15} /><span>{file.path}</span><Check size={14} /></div>) : <div className="install-files__hint"><FileCode2 size={15} /><span>{deployProjectId ? 'This saved version is compiled on the server at install time.' : 'Compile the section to preview the exact files that will install.'}</span></div>}</div><Field label="Unpublished theme"><select value={themeId} onChange={(event) => setThemeId(event.target.value)} disabled={!themes.length}><option value="">{themes.length ? 'Select a theme' : 'Load connected themes first'}</option>{themes.map((theme) => <option value={theme.id} key={theme.id}>{theme.name} · {theme.role.toLowerCase()}</option>)}</select></Field><div className="safety-note"><PanelLeftClose size={16} /><p><b>Published-theme lock is active.</b><br />Installation is only allowed on an unpublished theme.</p></div><button className="button button--accent button--full" onClick={install} disabled={!themeId || working}>{working ? <LoaderCircle className="spin" size={15} /> : <PackageCheck size={15} />}Install section package</button></div>
           </div>
           {session?.authenticated&&<div className="deployment-history"><div className="history-heading"><div><History size={17}/><div><span>DEPLOYMENT LEDGER</span><h3>Installation history</h3></div></div><button onClick={()=>fetch('/api/deployments').then((item)=>item.json()).then((data)=>setDeployments(data.deployments??[]))}><RefreshCw size={14}/>Refresh</button></div>{deployments.length===0?<div className="history-empty">No deployments have been made from this store yet.</div>:<div className="history-table">{deployments.map((deployment)=><div key={deployment.id}><span className={`deployment-status deployment-status--${deployment.status}`}>{deployment.status.replace('_',' ')}</span><div><b>{deployment.theme_name}</b><small>{deployment.installed_files.length} files · {new Date(deployment.created_at).toLocaleString()}</small></div><code>{deployment.theme_id.split('/').pop()}</code><button onClick={()=>rollback(deployment.id)} disabled={deployment.status!=='succeeded'||working}><RotateCcw size={13}/>Rollback</button></div>)}</div>}</div>}
         </section>}

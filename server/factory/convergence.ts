@@ -105,7 +105,12 @@ async function firstLines(target: string, count = 6) {
 export interface DriveControl { signal: AbortSignal; registerKill: (kill: ((reason?: string) => void) | null) => void; onUsageLimit?: () => void; }
 
 async function transition(jobId: string, status: string, detail: string | null = null, extra: Partial<FactoryJobRecord> = {}) {
-  return db.updateFactoryJob(jobId, { status, status_detail: detail, ...extra });
+  const job = await db.updateFactoryJob(jobId, { status, status_detail: detail, ...extra });
+  // Keep the clone-project mirror (kind='clone', linked by factory_job_id) in step with the
+  // job on every lifecycle transition — cloning/qa/fixing/converged/exhausted/blocked/failed.
+  // Best-effort: a mirror hiccup must never break the convergence loop itself.
+  if (job) await db.syncCloneProjectFromJob(job).catch(() => {});
+  return job;
 }
 
 async function awaitRun(handle: RunHandle, control: DriveControl) {
@@ -263,7 +268,9 @@ async function runConvergenceLoop(job: FactoryJobRecord, settings: FactorySettin
     regressionStreak = regressed ? regressionStreak + 1 : 0;
     history.push({ iter: iteration, score: qa.score, at: new Date().toISOString() });
     await db.finishFactoryIteration(qaRow.id, regressed ? 'regressed' : 'succeeded', { score: qa.score, breakdown: qa.breakdown, report_path: qa.summaryPath });
-    await db.updateFactoryJob(job.id, { last_score: qa.score, score_history: history });
+    const scored = await db.updateFactoryJob(job.id, { last_score: qa.score, score_history: history });
+    if (scored) await db.syncCloneProjectFromJob(scored).catch(() => {}); // mirror the fresh score immediately
+
 
     // Bound disk growth: drop artifacts for iterations older than the keep window.
     await pruneIterationArtifacts(job, settings.keepIterations, iteration);

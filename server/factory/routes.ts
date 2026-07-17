@@ -115,13 +115,19 @@ export function createFactoryRouter() {
     // Born 'draft' (not launchable) so a concurrent scheduler tick can't grab it and spawn
     // the CLI in a workspace that doesn't exist yet. Promoted to 'queued' only after scaffold.
     }, 'draft');
+    // Register the clone as a first-class project right away (kind='clone', shop_id NULL,
+    // linked by factory_job_id) so it appears in the library from the moment it exists.
+    // Best-effort: the project mirror must never block job intake.
+    await db.syncCloneProjectFromJob(job).catch(() => {});
 
     try {
       await db.updateFactoryJob(job.id, { status: 'scaffolding', status_detail: 'Preparing workspace' });
       await scaffoldWorkspace({ job, clientId, clientSecret, reactFilesPath: body.reactFilesPath, storefrontPassword: body.storefrontPassword, extraAllow: settings.extraAllow });
-      await db.updateFactoryJob(job.id, { status: 'queued', status_detail: 'Waiting for a free slot' });
+      const queued = await db.updateFactoryJob(job.id, { status: 'queued', status_detail: 'Waiting for a free slot' });
+      if (queued) await db.syncCloneProjectFromJob(queued).catch(() => {});
     } catch (error) {
-      await db.updateFactoryJob(job.id, { status: 'failed', status_detail: 'Scaffolding failed', error: error instanceof Error ? error.message : String(error) });
+      const failed = await db.updateFactoryJob(job.id, { status: 'failed', status_detail: 'Scaffolding failed', error: error instanceof Error ? error.message : String(error) });
+      if (failed) await db.syncCloneProjectFromJob(failed).catch(() => {});
       response.status(500).json({ error: `Workspace scaffolding failed: ${error instanceof Error ? error.message : 'unknown error'}`, job: publicJob((await db.getFactoryJob(job.id))!) });
       return;
     }
