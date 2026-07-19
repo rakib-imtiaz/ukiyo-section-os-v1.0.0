@@ -4,8 +4,8 @@
 // deliberate departure from the app's strict monochrome (see home/home.css).
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import {
-  ArrowLeftRight, ArrowRight, Factory, FolderKanban, Globe, KeyRound, Layers3, Link2, Plus, Rocket,
-  TerminalSquare, WandSparkles,
+  ArrowLeftRight, ArrowRight, Factory, FolderKanban, Globe, KeyRound, Layers3, Link2, Plus,
+  TerminalSquare,
 } from 'lucide-react';
 import './factory/theme.css';
 import './home/home.css';
@@ -13,7 +13,7 @@ import { SpotlightCard, useReducedMotion } from './factory/fx';
 import { useLiveFactory } from './home/useLiveFactory';
 import type { Iteration, Job, JobStatus } from './factory/types';
 
-export type HomeTarget = 'factory' | 'build' | 'projects' | 'contract' | 'deploy' | 'settings' | 'code' | 'terminal' | 'browser';
+export type HomeTarget = 'factory' | 'projects' | 'settings' | 'terminal' | 'browser';
 
 /** Follows the app-shell theme set by the theme toggle (localStorage + <html data-app-theme>). */
 function useFactoryTheme(): 'light' | 'dark' {
@@ -29,7 +29,7 @@ function useFactoryTheme(): 'light' | 'dark' {
   return theme;
 }
 
-interface DashStats { authenticated: boolean | null; projects: number | null; sections: number | null; deployments: number | null; apis: number | null; storage: string | null; uptimeSec: number | null }
+interface DashStats { authenticated: boolean | null; projects: number | null; storage: string | null; uptimeSec: number | null }
 
 interface WorkspaceProject { name: string; path: string; reactUrl: string; storeUrl: string; status: string; summary: string; sectionsCount: number }
 
@@ -71,21 +71,21 @@ function useOnboardingProgress(): { lines: string[]; busy: boolean } {
 /** Live control-plane stats. Counts stay null (rendered as "—") until real data loads or when
  *  no store is connected — never fabricated placeholder numbers. */
 function useDashboardStats(): DashStats {
-  const [stats, setStats] = useState<DashStats>({ authenticated: null, projects: null, sections: null, deployments: null, apis: null, storage: null, uptimeSec: null });
+  const [stats, setStats] = useState<DashStats>({ authenticated: null, projects: null, storage: null, uptimeSec: null });
   useEffect(() => {
     let alive = true;
     const json = async (url: string) => { try { const response = await fetch(url); return response.ok ? await response.json() : null; } catch { return null; } };
     (async () => {
       const [session, health] = await Promise.all([json('/api/session'), json('/api/health')]);
       const authenticated = !!session?.authenticated;
-      let projects: number | null = null, deployments: number | null = null, apis: number | null = null;
+      let projects: number | null = null;
       if (authenticated) {
-        const [projectData, deployData, keyData] = await Promise.all([json('/api/projects'), json('/api/deployments'), json('/api/api-keys')]);
-        projects = Array.isArray(projectData?.projects) ? projectData.projects.length : null;
-        deployments = Array.isArray(deployData?.deployments) ? deployData.deployments.length : null;
-        apis = Array.isArray(keyData?.keys) ? keyData.keys.filter((key: { revoked_at?: string | null }) => !key.revoked_at).length : null;
+        const projectData = await json('/api/projects');
+        // Connected store → a real count, falling back to 0 (connected-but-empty), never '—'.
+        // '—' is reserved for the loading/disconnected states handled above.
+        projects = Array.isArray(projectData?.projects) ? projectData.projects.length : 0;
       }
-      if (alive) setStats({ authenticated, projects, sections: projects, deployments, apis, storage: health?.database ?? null, uptimeSec: typeof health?.uptimeSec === 'number' ? health.uptimeSec : null });
+      if (alive) setStats({ authenticated, projects, storage: health?.database ?? null, uptimeSec: typeof health?.uptimeSec === 'number' ? health.uptimeSec : null });
     })();
     return () => { alive = false; };
   }, []);
@@ -177,8 +177,8 @@ function Hero() {
         What are you <em className="home-serif">building</em> today?
       </h1>
       <p className="max-w-xl text-[15px] font-medium leading-relaxed text-muted-foreground">
-        Clone entire React sites into Shopify stores autonomously, design modular sections visually, and ship them to
-        themes — all from one monochrome cockpit.
+        Clone entire React sites into Shopify stores autonomously — real-browser QA, auto-fix loops, and native theme
+        output, all from one monochrome cockpit.
       </p>
     </section>
   );
@@ -258,9 +258,15 @@ function TerminalCard({ job, lines, reduced, bootLines }: { job: Job | null; lin
         <span className="min-w-0 truncate text-[10px] font-bold uppercase tracking-[0.22em] text-zinc-400">
           {booting ? 'Workspace indexing' : job ? job.name : 'ThemeBot · Factory pipeline'}
         </span>
-        <span className="inline-flex shrink-0 items-center gap-2 text-[10px] font-bold uppercase tracking-[0.16em] text-success">
-          Live <span className="pulse-dot relative inline-flex size-1.5 rounded-full bg-success" aria-hidden />
-        </span>
+        {live ? (
+          <span className="inline-flex shrink-0 items-center gap-2 text-[10px] font-bold uppercase tracking-[0.16em] text-success">
+            Live <span className="pulse-dot relative inline-flex size-1.5 rounded-full bg-success" aria-hidden />
+          </span>
+        ) : (
+          <span className="inline-flex shrink-0 items-center gap-2 text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">
+            Idle · demo <span className="relative inline-flex size-1.5 rounded-full bg-zinc-500" aria-hidden />
+          </span>
+        )}
       </header>
       {live ? (
         <div className="mt-4 grid content-end gap-[7px] font-mono text-[12px] leading-relaxed min-h-[344px]">
@@ -311,31 +317,6 @@ function TerminalCard({ job, lines, reduced, bootLines }: { job: Job | null; lin
   );
 }
 
-function StatsRow({ stats: data }: { stats: DashStats }) {
-  const show = (value: number | null) => (value == null ? '—' : value);
-  const stats = [
-    { icon: FolderKanban, value: show(data.projects), label: 'Projects' },
-    { icon: Layers3, value: show(data.sections), label: 'Sections' },
-    { icon: Rocket, value: show(data.deployments), label: 'Deployments' },
-    { icon: KeyRound, value: show(data.apis), label: 'APIs Connected' },
-  ];
-  return (
-    <section className="rise-in home-card grid grid-cols-2 gap-y-2 rounded-2xl border border-border bg-card p-2 sm:grid-cols-4" style={{ animationDelay: '0.2s' }}>
-      {stats.map(({ icon: Icon, value, label }) => (
-        <div key={label} className="flex items-center gap-3 rounded-xl px-4 py-3">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-brand-blue/10 text-brand-blue">
-            <Icon className="size-4" />
-          </span>
-          <span className="min-w-0">
-            <b className="block text-[17px] font-bold leading-tight tabular-nums">{value}</b>
-            <span className="block truncate text-[11.5px] font-semibold text-muted-foreground">{label}</span>
-          </span>
-        </div>
-      ))}
-    </section>
-  );
-}
-
 function FeatureCard({ icon, title, chip, copy, cta, onClick, image, tall, children }: {
   icon: React.ReactNode; title: string; chip?: string; copy: string; cta: string; onClick: () => void;
   image?: string; tall?: boolean; children?: React.ReactNode;
@@ -376,55 +357,11 @@ function FeatureCard({ icon, title, chip, copy, cta, onClick, image, tall, child
   );
 }
 
-/** Embedded mini-mock of the visual builder: layer rows + chair-image preview. */
-function BuilderMiniPreview() {
-  const layers = ['Hero/Banner', 'Container', 'Headline', 'Text', 'Button', 'Media'];
-  return (
-    <div className="grid gap-3 rounded-xl border border-border bg-muted/60 p-3 sm:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-      <div className="flex flex-col gap-1 rounded-lg border border-border bg-card p-2 shadow-sm">
-        <span className="px-2 pb-1 pt-0.5 text-[9px] font-bold uppercase tracking-[0.16em] text-muted-foreground">Layers</span>
-        {layers.map((layer, index) => (
-          <span
-            key={layer}
-            className={`flex items-center gap-2 rounded-md px-2 py-[5px] text-[11px] font-semibold ${index === 0 ? 'bg-brand-blue/10 text-brand-blue' : 'text-muted-foreground'}`}
-          >
-            <i className={`size-1.5 shrink-0 rounded-[2px] ${index === 0 ? 'bg-brand-blue' : 'bg-current opacity-50'}`} />
-            {layer}
-          </span>
-        ))}
-      </div>
-      <div className="relative min-h-[178px] overflow-hidden rounded-lg shadow-sm">
-        <img src="/home-assets/modern_gray_armchair_in_minimalist_studio.png" alt="" aria-hidden loading="lazy" className="absolute inset-0 h-full w-full object-cover" />
-        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/10 to-transparent" aria-hidden />
-        <div className="relative flex h-full flex-col justify-end gap-1.5 p-3.5 text-white">
-          <span className="text-[8px] font-bold uppercase tracking-[0.26em] opacity-80">ThemeBot</span>
-          <span className="text-[16px] leading-tight" style={{ fontFamily: 'Newsreader, Georgia, serif', fontWeight: 400 }}>Built for performance</span>
-          <span className="mt-1 flex gap-1.5">
-            <i className="rounded-[3px] bg-white px-2 py-1 text-[8px] font-bold uppercase not-italic tracking-[0.08em] text-black">Shop now</i>
-            <i className="rounded-[3px] border border-white/60 px-2 py-1 text-[8px] font-bold uppercase not-italic tracking-[0.08em]">Learn more</i>
-          </span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function FeatureGrid({ onNavigate, projectCount, deploymentCount }: {
-  onNavigate: (view: HomeTarget) => void; projectCount: number | null; deploymentCount: number | null;
+function FeatureGrid({ onNavigate, projectCount }: {
+  onNavigate: (view: HomeTarget) => void; projectCount: number | null;
 }) {
   return (
     <div className="stagger grid items-stretch gap-5 lg:grid-cols-2">
-      <FeatureCard
-        tall
-        icon={<WandSparkles />}
-        title="Visual Section Builder"
-        chip="26 controls"
-        copy="Design cinematic hero sections with 26 native theme controls and a live desktop + mobile preview."
-        cta="Start designing"
-        onClick={() => onNavigate('build')}
-      >
-        <BuilderMiniPreview />
-      </FeatureCard>
       <FeatureCard
         icon={<Factory />}
         title="Clone Factory"
@@ -438,35 +375,18 @@ function FeatureGrid({ onNavigate, projectCount, deploymentCount }: {
         icon={<FolderKanban />}
         title="Projects Library"
         chip={projectCount != null ? `${projectCount} projects` : undefined}
-        copy="Every saved section project, versioned on each change and ready to reopen or redeploy."
+        copy="Every clone project the factory manages — status, summaries, and store targets in one place."
         cta="Browse projects"
         onClick={() => onNavigate('projects')}
         image="/home-assets/frosted_glass_folder_stack_icon.png"
       />
       <FeatureCard
-        icon={<Rocket />}
-        title="Deployments"
-        chip={deploymentCount != null ? `${deploymentCount} active` : undefined}
-        copy="Install compiled section packages to unpublished themes, with a full ledger and one-click rollback."
-        cta="View deployments"
-        onClick={() => onNavigate('deploy')}
-        image="/home-assets/glowing_status_icons_on_transparent_background.png"
-      />
-      <FeatureCard
         icon={<KeyRound />}
-        title="Connections & API Keys"
-        copy="Connect Shopify stores and mint scoped keys for Claude, Kimi, Bolt, or any outside coding agent."
-        cta="Manage access"
+        title="Connections"
+        copy="Connect the Shopify stores your clone jobs target, with encrypted per-job credentials."
+        cta="Manage connections"
         onClick={() => onNavigate('settings')}
         image="/home-assets/futuristic_security_lock_in_cube.png"
-      />
-      <FeatureCard
-        icon={<Layers3 />}
-        title="Generated Files"
-        copy="All assets: theme liquid, section schemas, snippets, and assets — organized and versioned."
-        cta="Open files"
-        onClick={() => onNavigate('code')}
-        image="/home-assets/frosted_glass_cube_with_warm_glow.png"
       />
     </div>
   );
@@ -500,7 +420,7 @@ function ToolsRow({ onNavigate }: { onNavigate: (view: HomeTarget) => void }) {
 }
 
 const BANNERS = [
-  { image: '/home-assets/glossy_blue_curly_braces_icon.png', title: 'Design-contract driven', sub: 'Every section follows a strict contract.' },
+  { image: '/home-assets/glossy_blue_curly_braces_icon.png', title: 'Real-browser QA loops', sub: 'Every clone is scored until it converges.' },
   { image: '/home-assets/minimalist_shopping_bag_icon.png', title: 'Native Shopify output', sub: 'Clean, production-ready Liquid & JSON.' },
   { image: '/home-assets/glossy_blue_shield_with_checkmark.png', title: 'Version-controlled everything', sub: 'Traceable, rollback-safe, audit-ready.' },
 ];
@@ -723,7 +643,7 @@ function QuickActions({ onNavigate }: { onNavigate: (view: HomeTarget) => void }
           type="button" onClick={() => onNavigate('projects')}
           className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-border bg-muted/60 text-[13px] font-bold transition-all hover:-translate-y-0.5 hover:border-brand-blue/50 active:translate-y-0"
         >
-          <Plus className="size-4" /> Create new project
+          <Plus className="size-4" /> Browse projects
         </button>
         <button
           type="button" onClick={() => onNavigate('settings')}
@@ -750,7 +670,7 @@ export default function HomeScreen({ onNavigate, workspaceName, onSwitchWorkspac
   const targetJob = activeJob ?? jobs?.[0] ?? null;
   // When a workspace is active its discovered projects are the meaningful counts.
   const mergedStats: DashStats = workspace.projects.length
-    ? { ...stats, projects: workspace.projects.length, sections: workspace.projects.reduce((sum, project) => sum + (project.sectionsCount || 0), 0) }
+    ? { ...stats, projects: workspace.projects.length }
     : stats;
   const [showIntro, setShowIntro] = useState(() => {
     if (typeof window === 'undefined') return false;
@@ -780,8 +700,7 @@ export default function HomeScreen({ onNavigate, workspaceName, onSwitchWorkspac
                 <Hero />
                 <TerminalCard job={activeJob} lines={lines} reduced={reduced} bootLines={boot.busy || boot.lines.length ? boot.lines : undefined} />
               </div>
-              <StatsRow stats={mergedStats} />
-              <FeatureGrid onNavigate={onNavigate} projectCount={mergedStats.projects} deploymentCount={mergedStats.deployments} />
+              <FeatureGrid onNavigate={onNavigate} projectCount={mergedStats.projects} />
               <ToolsRow onNavigate={onNavigate} />
               <BannerRow />
             </div>

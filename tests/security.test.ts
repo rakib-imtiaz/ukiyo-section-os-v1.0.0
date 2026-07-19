@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { apiKeyHash } from '../server/api';
 import { createSessionCookie, decrypt, encrypt, normalizeShop, parseSessionCookie, secureEqual } from '../server/security';
 
 describe('production security primitives', () => {
@@ -24,10 +23,9 @@ describe('production security primitives', () => {
     expect(parseSessionCookie(`${cookie}tampered`)).toBeNull();
   });
 
-  it('hashes API keys without storing their plaintext value', () => {
-    const key = 'vso_live_example_secret';
-    expect(apiKeyHash(key)).not.toContain(key);
-    expect(apiKeyHash(key)).toBe(apiKeyHash(key));
-    expect(secureEqual(apiKeyHash(key), apiKeyHash(key))).toBe(true);
+  it('compares secrets in constant time', () => {
+    const hash = encrypt('vso_secret');
+    expect(secureEqual(hash, hash)).toBe(true);
+    expect(secureEqual(hash, `${hash}x`)).toBe(false);
   });
 });

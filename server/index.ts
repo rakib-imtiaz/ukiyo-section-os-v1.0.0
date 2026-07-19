@@ -2,20 +2,16 @@ import 'dotenv/config';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import archiver from 'archiver';
-import { compileSection } from '../src/compiler/compile';
-import { createCinematicHeroManifest, defaultHeroState } from '../src/compiler/cinematicHero';
-import { createApiRouter, createV1Router, requireApiKey } from './api';
+import { createApiRouter } from './api';
 import { beginShopifyAuth, completeShopifyAuth } from './auth';
 import { config, validateProductionConfig } from './config';
 import { db, flushFactoryState } from './db';
 import { createFactoryRouter } from './factory/routes';
 import { ensureWorkspaceRoot } from './factory/scaffolder';
 import { factoryScheduler } from './factory/scheduler';
-import { handleMcp, rejectMcpMethod } from './mcp';
 import { handleLocalMcp, requireLocalMcp } from './browser-mcp';
 import { createOnboardingRouter } from './onboarding-routes';
-import { currentShop, normalizeShop, verifyWebhook } from './security';
+import { normalizeShop, verifyWebhook } from './security';
 import { storeTokens } from './shopify';
 import { attachTerminal } from './terminal';
 import { attachBrowser } from './browser';
@@ -59,23 +55,11 @@ app.get('/auth/shopify/callback',completeShopifyAuth);
 app.post('/auth/logout',(request,response)=>{response.clearCookie('vso_session',{path:'/'});response.status(204).end();});
 
 app.get('/api/health',(_request,response)=>response.json({ok:true,name:'ThemeBot',version:'1.0.0',database:db.persistent?'postgres':'memory',uptimeSec:Math.round(process.uptime())}));
-app.get('/api/presets/cinematic-hero',(_request,response)=>response.json({state:defaultHeroState,manifest:createCinematicHeroManifest()}));
-app.post('/api/compile',(request,response)=>{
-  if(config.production&&!currentShop(request)){response.status(401).json({error:'Connect a Shopify store to compile sections.'});return;}
-  const result=compileSection(request.body.manifest);response.status(result.valid?200:422).json(result);
-});
-app.post('/api/export',(request,response)=>{
-  if(config.production&&!currentShop(request)){response.status(401).json({error:'Connect a Shopify store to export sections.'});return;}
-  const result=compileSection(request.body.manifest);if(!result.valid){response.status(422).json(result);return;}
-  response.attachment(`${request.body.manifest.handle}.zip`);const archive=archiver('zip',{zlib:{level:9}});archive.on('error',(error)=>response.destroy(error));archive.pipe(response);result.files.forEach((file)=>archive.append(file.content,{name:file.path}));void archive.finalize();
-});
 app.use('/api',createOnboardingRouter()); // claude/workspace/onboarding — localhost-only, before the session-gated router
 app.use('/api/factory',createFactoryRouter());
 app.use('/api',createApiRouter());
-app.use('/v1',createV1Router());
-app.post('/mcp',requireApiKey,handleMcp);
-app.get('/mcp',rejectMcpMethod);app.delete('/mcp',rejectMcpMethod);
 // Local MCP browser tools — localhost-only, no API key (see browser-mcp.ts).
+const rejectMcpMethod=(_request:express.Request,response:express.Response)=>{response.status(405).json({jsonrpc:'2.0',error:{code:-32000,message:'Method not allowed.'},id:null});};
 app.post('/mcp-local',requireLocalMcp,handleLocalMcp);
 app.get('/mcp-local',rejectMcpMethod);app.delete('/mcp-local',rejectMcpMethod);
 
