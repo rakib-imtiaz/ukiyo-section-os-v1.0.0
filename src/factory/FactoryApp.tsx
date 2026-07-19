@@ -73,7 +73,7 @@ function FactoryInner({ onNavigate }: { onNavigate?: FactoryNavigate }) {
             </span>
           )}
           {data?.scheduler && (
-            <Button size="sm" variant="outline" onClick={() => { const paused = data.scheduler.queuePaused; void (paused ? api.resumeQueue() : api.pauseQueue()).then(() => { toast.push({ title: paused ? 'Queue resumed' : 'Queue paused', variant: 'default' }); void refresh(); }).catch((error) => toast.push({ title: 'Queue action failed', detail: error instanceof Error ? error.message : undefined, variant: 'destructive' })); }}>
+            <Button size="sm" variant="outline" disabled={jobs.length === 0} aria-pressed={data.scheduler.queuePaused} title={jobs.length === 0 ? 'No clone jobs in the fleet yet' : undefined} onClick={() => { const paused = data.scheduler.queuePaused; void (paused ? api.resumeQueue() : api.pauseQueue()).then(() => { toast.push({ title: paused ? 'Queue resumed' : 'Queue paused', variant: 'default' }); void refresh(); }).catch((error) => toast.push({ title: 'Queue action failed', detail: error instanceof Error ? error.message : undefined, variant: 'destructive' })); }}>
               {data.scheduler.queuePaused ? <><Play className="size-3.5" /> Resume queue</> : <><Pause className="size-3.5" /> Pause queue</>}
             </Button>
           )}
@@ -85,7 +85,7 @@ function FactoryInner({ onNavigate }: { onNavigate?: FactoryNavigate }) {
         {tab === 'dashboard' && (
           <Dashboard jobs={jobs} scheduler={data?.scheduler ?? null} loading={loading} refresh={refresh} onOpen={setOpenJobId} onNew={() => setTab('new')} />
         )}
-        {tab === 'new' && <NewJobWizard defaults={defaults} onCreated={() => { setTab('dashboard'); refresh(); }} />}
+        {tab === 'new' && <NewJobWizard defaults={defaults} onCreated={() => { setTab('dashboard'); refresh(); }} onCancel={() => setTab('dashboard')} />}
         {tab === 'settings' && <SettingsPanel jobs={jobs} refreshFleet={refresh} />}
       </div>
 
@@ -107,7 +107,7 @@ export function applyFactoryTheme(dark: boolean) {
   document.querySelectorAll('.factory-root').forEach((root) => root.setAttribute('data-theme', dark ? 'dark' : 'light'));
   // The whole app shell (sidebar + topbar) follows the toggle too.
   html.setAttribute('data-app-theme', dark ? 'dark' : 'light');
-  localStorage.setItem('factory-theme', dark ? 'dark' : 'light');
+  // Persistence lives in App.tsx's toggleTheme — the single writer of 'factory-theme'.
 }
 
 export function ThemeToggle() {

@@ -12,6 +12,18 @@ const derivePrefix = (name: string) => {
 
 type ScopeCheck = { scope: string; granted: boolean };
 
+/** Wizard draft persisted to localStorage so tab switches / reloads don't lose entries.
+ *  Secrets (clientSecret, storefrontPassword) are intentionally NEVER persisted. */
+const DRAFT_KEY = 'factory-wizard-draft';
+type WizardDraft = {
+  step: number; name: string; reactUrl: string; storeUrl: string; reactFilesPath: string; clientId: string;
+  prefix: string; prefixTouched: boolean; devThemeName: string; autoswap: boolean;
+  autoQa: boolean; qaMode: string; qaEngine: string; maxIterations: number; threshold: number;
+};
+const loadDraft = (): Partial<WizardDraft> | null => {
+  try { const raw = localStorage.getItem(DRAFT_KEY); return raw ? JSON.parse(raw) as Partial<WizardDraft> : null; } catch { return null; }
+};
+
 const STEPS = [
   { label: 'Sources', icon: <Globe className="size-4" /> },
   { label: 'Credentials', icon: <KeyRound className="size-4" /> },
@@ -29,10 +41,10 @@ function Stepper({ step, onJump }: { step: number; onJump: (index: number) => vo
             </div>
           )}
           <button
-            type="button" onClick={() => { if (index < step) onJump(index); }} disabled={index > step}
+            type="button" onClick={() => { if (index < step) onJump(index); }} aria-disabled={index > step || undefined}
             aria-current={index === step ? 'step' : undefined}
-            className={`flex items-center gap-2.5 rounded-lg px-1 py-0.5 transition-opacity ${index < step ? 'cursor-pointer hover:opacity-75' : 'cursor-default'}`}
-            title={index < step ? `Back to ${entry.label}` : undefined}
+            className={`flex items-center gap-2.5 rounded-lg px-1 py-0.5 transition-opacity ${index < step ? 'cursor-pointer hover:opacity-75' : index > step ? 'cursor-not-allowed' : 'cursor-default'}`}
+            title={index < step ? `Back to ${entry.label}` : index > step ? 'Locked — complete the current step to unlock' : undefined}
           >
             <span className={`flex size-9 items-center justify-center rounded-full text-[14px] font-bold transition-all duration-300 ${
               index < step ? 'bg-primary text-primary-foreground'
@@ -49,38 +61,47 @@ function Stepper({ step, onJump }: { step: number; onJump: (index: number) => vo
   );
 }
 
-export function NewJobWizard({ defaults, onCreated }: { defaults: FactorySettings | null; onCreated: () => void }) {
+export function NewJobWizard({ defaults, onCreated, onCancel }: { defaults: FactorySettings | null; onCreated: () => void; onCancel?: () => void }) {
   const toast = useToast();
-  const [step, setStep] = useState(0);
+  const [stored] = useState(loadDraft);
+  const [step, setStep] = useState(stored?.step ?? 0);
   const [busy, setBusy] = useState(false);
+  const [attempted, setAttempted] = useState(false);
+  const [discardConfirm, setDiscardConfirm] = useState(false);
 
   // Step 1 — sources
-  const [name, setName] = useState('');
-  const [reactUrl, setReactUrl] = useState('');
-  const [storeUrl, setStoreUrl] = useState('');
+  const [name, setName] = useState(stored?.name ?? '');
+  const [reactUrl, setReactUrl] = useState(stored?.reactUrl ?? '');
+  const [storeUrl, setStoreUrl] = useState(stored?.storeUrl ?? '');
   const [storefrontPassword, setStorefrontPassword] = useState('');
-  const [reactFilesPath, setReactFilesPath] = useState('');
+  const [reactFilesPath, setReactFilesPath] = useState(stored?.reactFilesPath ?? '');
   const [reactFilesCheck, setReactFilesCheck] = useState<{ ok: boolean; detail?: string } | null>(null);
 
   // Step 2 — credentials
-  const [clientId, setClientId] = useState('');
+  const [clientId, setClientId] = useState(stored?.clientId ?? '');
   const [clientSecret, setClientSecret] = useState('');
   const [showSecret, setShowSecret] = useState(false);
   const [testing, setTesting] = useState(false);
   const [credCheck, setCredCheck] = useState<{ ok: boolean; detail?: string; shopName?: string | null; scopes?: { required: ScopeCheck[]; recommended: ScopeCheck[] } } | null>(null);
 
   // Step 3 — options
-  const [prefix, setPrefix] = useState('');
-  const [prefixTouched, setPrefixTouched] = useState(false);
-  const [devThemeName, setDevThemeName] = useState('');
-  const [autoswap, setAutoswap] = useState(false);
+  const [prefix, setPrefix] = useState(stored?.prefix ?? '');
+  const [prefixTouched, setPrefixTouched] = useState(stored?.prefixTouched ?? false);
+  const [devThemeName, setDevThemeName] = useState(stored?.devThemeName ?? '');
+  const [autoswap, setAutoswap] = useState(stored?.autoswap ?? false);
   const [autoswapConfirm, setAutoswapConfirm] = useState(false);
-  const [autoQa, setAutoQa] = useState(true);
-  const [qaMode, setQaMode] = useState('both');
-  const [qaEngine, setQaEngine] = useState('playwright');
+  const [autoQa, setAutoQa] = useState(stored?.autoQa ?? true);
+  const [qaMode, setQaMode] = useState(stored?.qaMode ?? 'both');
+  const [qaEngine, setQaEngine] = useState(stored?.qaEngine ?? 'playwright');
   const [browser, setBrowser] = useState<{ ready: boolean; hasChromium: boolean; installing: boolean } | null>(null);
-  const [maxIterations, setMaxIterations] = useState(defaults?.defaultMaxIterations ?? 5);
-  const [threshold, setThreshold] = useState(defaults?.defaultScoreThreshold ?? 0.92);
+  const [maxIterations, setMaxIterations] = useState(stored?.maxIterations ?? defaults?.defaultMaxIterations ?? 5);
+  const [threshold, setThreshold] = useState(stored?.threshold ?? defaults?.defaultScoreThreshold ?? 0.92);
+
+  // Persist the draft on every change (cleared on successful queue or explicit discard).
+  useEffect(() => {
+    const draft: WizardDraft = { step, name, reactUrl, storeUrl, reactFilesPath, clientId, prefix, prefixTouched, devThemeName, autoswap, autoQa, qaMode, qaEngine, maxIterations, threshold };
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+  }, [step, name, reactUrl, storeUrl, reactFilesPath, clientId, prefix, prefixTouched, devThemeName, autoswap, autoQa, qaMode, qaEngine, maxIterations, threshold]);
 
   useEffect(() => { if (!prefixTouched) setPrefix(derivePrefix(name)); }, [name, prefixTouched]);
   useEffect(() => { if (!devThemeName && name) setDevThemeName(`${name} Clone (dev)`); }, [name, devThemeName]);
@@ -111,6 +132,28 @@ export function NewJobWizard({ defaults, onCreated }: { defaults: FactorySetting
     finally { setTesting(false); }
   };
 
+  // Next/Queue never fail silently: an invalid attempt flags empty required fields inline.
+  const goNext = () => {
+    if (step === 0 ? !step1Ready : !step2Ready) { setAttempted(true); return; }
+    setAttempted(false);
+    setStep((value) => value + 1);
+  };
+  const trySubmit = () => {
+    if (!step1Ready || !step2Ready || !step3Ready) { setAttempted(true); return; }
+    void submit();
+  };
+
+  const dirty = !!(name || reactUrl || storeUrl || storefrontPassword || reactFilesPath || clientId || clientSecret || devThemeName || prefixTouched || autoswap || autoQa !== true || step > 0);
+  const resetWizard = () => {
+    localStorage.removeItem(DRAFT_KEY);
+    setStep(0); setAttempted(false);
+    setName(''); setReactUrl(''); setStoreUrl(''); setStorefrontPassword(''); setReactFilesPath(''); setReactFilesCheck(null);
+    setClientId(''); setClientSecret(''); setCredCheck(null);
+    setPrefix(''); setPrefixTouched(false); setDevThemeName(''); setAutoswap(false);
+    setAutoQa(true); setQaMode('both'); setQaEngine('playwright');
+    setMaxIterations(defaults?.defaultMaxIterations ?? 5); setThreshold(defaults?.defaultScoreThreshold ?? 0.92);
+  };
+
   const submit = async () => {
     setBusy(true);
     try {
@@ -122,6 +165,7 @@ export function NewJobWizard({ defaults, onCreated }: { defaults: FactorySetting
         prefix, devThemeName: devThemeName.trim(), autoswap, autoQa, qaMode, qaEngine,
         maxIterations, scoreThreshold: threshold,
       });
+      localStorage.removeItem(DRAFT_KEY);
       setClientId(''); setClientSecret(''); setStorefrontPassword(''); // never keep secrets in form state
       toast.push({ title: 'Clone job queued', detail: `"${name.trim()}" starts as soon as a slot is free.`, variant: 'success' });
       onCreated();
@@ -146,14 +190,14 @@ export function NewJobWizard({ defaults, onCreated }: { defaults: FactorySetting
             <CardDescription>The React site is the source of truth. The factory clones it into the Shopify store's dev theme.</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-5">
-            <Field label="Project name" help={name ? `Workspace folder: ${slugify(name) || '—'}` : 'Used for the workspace folder and dev theme name.'}>
-              <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Wild & Sacred" autoFocus />
+            <Field label="Project name" error={attempted && !name.trim() ? 'Required' : null} help={name ? `Workspace folder: ${slugify(name) || '—'}` : 'Used for the workspace folder and dev theme name.'}>
+              <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Wild & Sacred" autoFocus aria-invalid={attempted && !name.trim() || undefined} />
             </Field>
-            <Field label="React site URL (source of truth)" error={reactUrl && !urlValid ? 'Enter a full http(s):// URL.' : null}>
-              <Input value={reactUrl} onChange={(event) => setReactUrl(event.target.value)} placeholder="https://wild-sacred.vercel.app" inputMode="url" />
+            <Field label="React site URL (source of truth)" error={reactUrl && !urlValid ? 'Enter a full http(s):// URL.' : attempted && !reactUrl.trim() ? 'Required' : null}>
+              <Input value={reactUrl} onChange={(event) => setReactUrl(event.target.value)} placeholder="https://wild-sacred.vercel.app" inputMode="url" aria-invalid={(attempted && !reactUrl.trim()) || (!!reactUrl && !urlValid) || undefined} />
             </Field>
-            <Field label="Shopify store" error={storeUrl && !shopValid ? 'Must be a *.myshopify.com domain.' : null} ok={shopValid ? `Targets ${normalizedShop}` : null}>
-              <Input value={storeUrl} onChange={(event) => setStoreUrl(event.target.value)} placeholder="wild-sacred.myshopify.com" />
+            <Field label="Shopify store" error={storeUrl && !shopValid ? 'Must be a *.myshopify.com domain.' : attempted && !storeUrl.trim() ? 'Required' : null} ok={shopValid ? `Targets ${normalizedShop}` : null}>
+              <Input value={storeUrl} onChange={(event) => setStoreUrl(event.target.value)} placeholder="wild-sacred.myshopify.com" aria-invalid={(attempted && !storeUrl.trim()) || (!!storeUrl && !shopValid) || undefined} />
             </Field>
             <Field label="Storefront password (optional)" help="Only needed when the store's online storefront is password-protected — QA uses it to get past the wall.">
               <Input type="password" value={storefrontPassword} onChange={(event) => setStorefrontPassword(event.target.value)} placeholder="•••••" autoComplete="off" />
@@ -177,12 +221,12 @@ export function NewJobWizard({ defaults, onCreated }: { defaults: FactorySetting
             <CardDescription>From the store admin: Settings → Apps → Develop apps → your app → API credentials. The factory mints short-lived tokens from these; they are stored encrypted.</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-5">
-            <Field label="Client ID" error={clientId && !idValid ? 'Expected a 32-character hex string.' : null}>
-              <Input value={clientId} onChange={(event) => { setClientId(event.target.value); setCredCheck(null); }} placeholder="186c0a1b…" spellCheck={false} autoComplete="off" />
+            <Field label="Client ID" error={clientId && !idValid ? 'Expected a 32-character hex string.' : attempted && !clientId.trim() ? 'Required' : null}>
+              <Input value={clientId} onChange={(event) => { setClientId(event.target.value); setCredCheck(null); }} placeholder="186c0a1b…" spellCheck={false} autoComplete="off" aria-invalid={(attempted && !clientId.trim()) || (!!clientId && !idValid) || undefined} />
             </Field>
-            <Field label="Client Secret" error={clientSecret && !secretValid ? 'Expected a value starting with shpss_.' : null}>
+            <Field label="Client Secret" error={clientSecret && !secretValid ? 'Expected a value starting with shpss_.' : attempted && !clientSecret.trim() ? 'Required' : null}>
               <div className="relative">
-                <Input type={showSecret ? 'text' : 'password'} value={clientSecret} onChange={(event) => { setClientSecret(event.target.value); setCredCheck(null); }} placeholder="shpss_…" spellCheck={false} autoComplete="off" className="pr-11" />
+                <Input type={showSecret ? 'text' : 'password'} value={clientSecret} onChange={(event) => { setClientSecret(event.target.value); setCredCheck(null); }} placeholder="shpss_…" spellCheck={false} autoComplete="off" className="pr-11" aria-invalid={(attempted && !clientSecret.trim()) || (!!clientSecret && !secretValid) || undefined} />
                 <button
                   type="button" onClick={() => setShowSecret((value) => !value)}
                   className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
@@ -226,11 +270,11 @@ export function NewJobWizard({ defaults, onCreated }: { defaults: FactorySetting
           </CardHeader>
           <CardContent className="flex flex-col gap-5">
             <div className="grid gap-5 sm:grid-cols-2">
-              <Field label="Section prefix (2-3 chars)" error={prefix && !prefixValid ? 'Lowercase, 2-3 chars, starts with a letter.' : null}>
-                <Input value={prefix} onChange={(event) => { setPrefix(event.target.value.toLowerCase()); setPrefixTouched(true); }} maxLength={3} spellCheck={false} />
+              <Field label="Section prefix (2-3 chars)" error={prefix && !prefixValid ? 'Lowercase, 2-3 chars, starts with a letter.' : attempted && !prefix.trim() ? 'Required' : null}>
+                <Input value={prefix} onChange={(event) => { setPrefix(event.target.value.toLowerCase()); setPrefixTouched(true); }} maxLength={3} spellCheck={false} aria-invalid={(attempted && !prefix.trim()) || (!!prefix && !prefixValid) || undefined} />
               </Field>
-              <Field label="Dev theme name">
-                <Input value={devThemeName} onChange={(event) => setDevThemeName(event.target.value)} />
+              <Field label="Dev theme name" error={attempted && !devThemeName.trim() ? 'Required' : null}>
+                <Input value={devThemeName} onChange={(event) => setDevThemeName(event.target.value)} aria-invalid={attempted && !devThemeName.trim() || undefined} />
               </Field>
             </div>
             <Separator />
@@ -239,7 +283,7 @@ export function NewJobWizard({ defaults, onCreated }: { defaults: FactorySetting
                 <p className="text-[15px] font-bold">Auto-QA convergence loop</p>
                 <p className="mt-0.5 text-[13px] font-medium leading-relaxed text-muted-foreground">After the clone, compare both sites and auto-fix until they match.</p>
               </div>
-              <Switch checked={autoQa} onCheckedChange={setAutoQa} />
+              <Switch checked={autoQa} onCheckedChange={setAutoQa} aria-label="Auto-QA convergence loop" />
             </div>
             {autoQa && (
               <div className="rise-in flex flex-col gap-5">
@@ -280,7 +324,7 @@ export function NewJobWizard({ defaults, onCreated }: { defaults: FactorySetting
                 <p className="text-[15px] font-bold">Auto-swap to live theme</p>
                 <p className="mt-0.5 text-[13px] font-medium leading-relaxed text-muted-foreground">After passing checks, push to the PUBLISHED theme. Off = everything stays on the dev theme.</p>
               </div>
-              <Switch checked={autoswap} onCheckedChange={(value) => value ? setAutoswapConfirm(true) : setAutoswap(false)} />
+              <Switch checked={autoswap} onCheckedChange={(value) => value ? setAutoswapConfirm(true) : setAutoswap(false)} aria-label="Auto-swap to live theme" />
             </div>
 
             <Separator />
@@ -294,11 +338,23 @@ export function NewJobWizard({ defaults, onCreated }: { defaults: FactorySetting
       )}
 
       <div className="flex items-center justify-between">
-        <Button variant="ghost" onClick={() => setStep((value) => Math.max(0, value - 1))} disabled={step === 0 || busy}><ArrowLeft /> Back</Button>
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" onClick={() => { if (dirty) setDiscardConfirm(true); else { resetWizard(); onCancel?.(); } }} disabled={busy}>Cancel</Button>
+          <Button variant="ghost" onClick={() => setStep((value) => Math.max(0, value - 1))} disabled={step === 0 || busy}><ArrowLeft /> Back</Button>
+        </div>
         {step < 2
-          ? <Button onClick={() => setStep((value) => value + 1)} disabled={step === 0 ? !step1Ready : !step2Ready}>Next <ArrowRight /></Button>
-          : <Button size="lg" onClick={submit} disabled={!step1Ready || !step2Ready || !step3Ready || busy}>{busy ? <Spinner className="text-primary-foreground" /> : <Rocket />} Queue clone job</Button>}
+          ? <Button onClick={goNext}>Next <ArrowRight /></Button>
+          : <Button size="lg" onClick={trySubmit} disabled={busy}>{busy ? <Spinner className="text-primary-foreground" /> : <Rocket />} Queue clone job</Button>}
       </div>
+
+      <ConfirmDialog
+        open={discardConfirm}
+        title="Discard this clone draft?"
+        description="Everything you've entered is cleared and the saved draft is removed — this can't be undone."
+        confirmLabel="Discard draft" destructive
+        onCancel={() => setDiscardConfirm(false)}
+        onConfirm={() => { setDiscardConfirm(false); resetWizard(); onCancel?.(); }}
+      />
 
       <ConfirmDialog
         open={autoswapConfirm}
