@@ -66,6 +66,9 @@ export function issueKindMeta(kind: string): { label: string; tone: 'destructive
 
 export type BotModel = 'opus' | 'sonnet' | 'haiku';
 
+/** How the wizard collects the Shopify app's Client ID + Secret. */
+export type CollectionMethod = 'llm' | 'scripted' | 'bookmarklet' | 'partnerapi' | 'manual';
+
 export interface FactorySettings {
   cloneModel: BotModel; collectorModel: BotModel;
   concurrency: number; launchStaggerSec: number; inactivityTimeoutMin: number; cloneTimeoutMin: number;

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Job, Iteration, SchedulerStatus, SettingsResponse, FactorySettings, QaSelftestResult, CredCheckResult, FactoryStore } from './types';
+import type { Job, Iteration, SchedulerStatus, SettingsResponse, FactorySettings, QaSelftestResult, CredCheckResult, FactoryStore, CollectionMethod } from './types';
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api/factory${path}`, {
@@ -43,10 +43,14 @@ export const api = {
   chromeStatus: () => request<{ chrome: { installed: boolean }; edge: { installed: boolean }; claudeExtension: { installed: boolean } }>('/chrome-status'),
   /** Open a Shopify admin/accounts page in the user's real Chrome/Edge (their profile, their logins). */
   openInChrome: (url: string) => request<{ ok: boolean; opened: string; browser: string }>('/open-in-chrome', { method: 'POST', body: JSON.stringify({ url }) }),
-  // "Lazy mode" key collector: a spawned Claude agent drives the user's Chrome to fetch app credentials.
-  collectKeysStart: (storeUrl: string, projectName?: string) => request<{ started: boolean }>('/collect-keys/start', { method: 'POST', body: JSON.stringify({ storeUrl, projectName }) }),
-  collectKeysStatus: (take = false) => request<{ status: 'idle' | 'working' | 'delivered' | 'partial' | 'failed'; running: boolean; elapsedSec: number | null; finishedAgoSec: number | null; note: string | null; log: Array<{ at: number; text: string }>; clientId: string | null; clientSecret: string | null; hasSecret: boolean }>(`/collect-keys/status${take ? '?take=1' : ''}`),
+  // Key collectors: 'llm' (Claude agent drives Chrome), 'scripted' (deterministic Playwright),
+  // 'partnerapi' (headless GraphQL secret-read). All report through the same status endpoint.
+  collectKeysStart: (storeUrl: string, projectName?: string, method: CollectionMethod = 'llm', extra?: { partnerToken?: string; orgId?: string; clientId?: string }) =>
+    request<{ started: boolean }>('/collect-keys/start', { method: 'POST', body: JSON.stringify({ storeUrl, projectName, method, ...extra }) }),
+  collectKeysStatus: (take = false) => request<{ status: 'idle' | 'working' | 'delivered' | 'partial' | 'failed'; method: CollectionMethod | null; running: boolean; elapsedSec: number | null; finishedAgoSec: number | null; note: string | null; log: Array<{ at: number; text: string }>; clientId: string | null; clientSecret: string | null; hasSecret: boolean }>(`/collect-keys/status${take ? '?take=1' : ''}`),
   collectKeysStop: () => request<{ stopped: boolean }>('/collect-keys/stop', { method: 'POST' }),
+  /** Persist keys the user obtained themselves (manual paste or bookmarklet): encrypted saved store + wizard hand-off. */
+  saveKeys: (body: { storeUrl: string; projectName?: string; clientId: string; clientSecret: string }) => request<{ ok: boolean }>('/keys/save', { method: 'POST', body: JSON.stringify(body) }),
   /** Remove a store's credentials from everywhere: saved stores, job ciphers, API.txt, collector memory. */
   purgeKeys: (storeUrl: string) => request<{ ok: boolean; stores: number; jobs: number; files: number }>('/keys/purge', { method: 'POST', body: JSON.stringify({ storeUrl }) }),
   installBrowser: () => request<{ installing: boolean; detail?: string }>('/browser/install', { method: 'POST' }),

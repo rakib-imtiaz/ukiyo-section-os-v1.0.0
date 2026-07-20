@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { Bot, Check, CheckCircle2, ChevronDown, Chrome, Copy, ExternalLink, Loader2, PartyPopper, Play, Sparkles, Square, X, XCircle } from 'lucide-react';
+import { Bookmark, Bot, Check, CheckCircle2, ChevronDown, Chrome, ClipboardPaste, Copy, Cpu, ExternalLink, Globe, Hand, Loader2, PartyPopper, Play, Sparkles, Square, X, XCircle } from 'lucide-react';
 import { api } from './api';
+import { BOOKMARKLET_HREF, parsePastedKeys } from './bookmarklet';
+import type { CollectionMethod } from './types';
 
 /** Guided "no credit card, ever" store-setup checklist for the wizard's Credentials step.
  *  Progress persists to localStorage so it survives closing the wizard / reloading. */
@@ -70,6 +72,14 @@ export function ChromeKeysCard({ storeUrl, projectName, keysOnFile, onKeys, onCh
   // "Lazy mode" bot: one click → running (poll) → done/error. No confirm step: the bot
   // waits out the Shopify login itself, so there's nothing to "come back and start".
   const [botPhase, setBotPhase] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
+  // Which collection method the wizard is showing. 'llm' + 'scripted' + 'partnerapi' are server
+  // runs that stream through the shared poll loop; 'bookmarklet' + 'manual' are client-only paste.
+  const [method, setMethod] = useState<CollectionMethod>('llm');
+  const [pasted, setPasted] = useState('');
+  const [pasteMsg, setPasteMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [partnerToken, setPartnerToken] = useState('');
+  const [orgId, setOrgId] = useState('');
+  const [copiedMarklet, setCopiedMarklet] = useState(false);
   const [botNote, setBotNote] = useState('');
   const [botElapsed, setBotElapsed] = useState(0);
   const [botLog, setBotLog] = useState<Array<{ at: number; text: string }>>([]);
@@ -154,13 +164,14 @@ export function ChromeKeysCard({ storeUrl, projectName, keysOnFile, onKeys, onCh
 
   // One click does it all: start the bot AND pop the user's Chrome. If Shopify wants a login,
   // the bot just waits for the user to finish it and then continues by itself.
-  const startBot = async () => {
+  const startBot = async (runMethod: CollectionMethod = method) => {
     if (!storeUrl) return;
     setBotNote('');
     try { if ('Notification' in window && Notification.permission === 'default') void Notification.requestPermission(); } catch { /* optional */ }
     loginNotified.current = false;
+    const extra = runMethod === 'partnerapi' ? { partnerToken: partnerToken.trim(), orgId: orgId.trim() } : undefined;
     try {
-      await api.collectKeysStart(storeUrl, projectName);
+      await api.collectKeysStart(storeUrl, projectName, runMethod, extra);
       setBotPhase('running');
       // No extra tab here on purpose: the bot opens its own Dev Dashboard tab.
     } catch (error) {
@@ -174,6 +185,19 @@ export function ChromeKeysCard({ storeUrl, projectName, keysOnFile, onKeys, onCh
   };
 
   const stopBot = async () => { try { await api.collectKeysStop(); } catch { /* already stopped */ } setBotPhase('idle'); };
+
+  // Bookmarklet / manual paste: parse whatever the user pasted, fill the wizard fields, and persist
+  // an encrypted saved store — no server run, no LLM, instant.
+  const applyPaste = async () => {
+    const { clientId, clientSecret } = parsePastedKeys(pasted);
+    if (!clientId || !clientSecret) {
+      setPasteMsg({ ok: false, text: !clientId ? 'No 32-character Client ID found in what you pasted.' : 'Found the Client ID but no shpss_ Secret — reveal the Secret and copy again.' });
+      return;
+    }
+    onKeys?.({ clientId, clientSecret });
+    setPasteMsg({ ok: true, text: 'Keys filled into the fields below — hit Test connection.' });
+    if (storeUrl) await api.saveKeys({ storeUrl, projectName, clientId, clientSecret }).catch(() => { /* fields are filled regardless */ });
+  };
 
   // Poll while the bot works; when it finishes, take the keys (one-time handoff) into the form.
   useEffect(() => {
@@ -219,10 +243,95 @@ export function ChromeKeysCard({ storeUrl, projectName, keysOnFile, onKeys, onCh
       <div className="flex items-start gap-3">
         <Chrome className="mt-0.5 size-4.5 shrink-0 text-success" />
         <div className="min-w-0 flex-1">
-          <p className="text-[14px] font-bold text-foreground">Fastest: collect the keys with your own Chrome</p>
+          <p className="text-[14px] font-bold text-foreground">Get your Shopify app credentials</p>
           <p className="mt-0.5 text-[12.5px] font-medium leading-relaxed text-muted-foreground">
-            Shopify's login blocks automated browsers (hCaptcha bot-check), so the built-in browser can't fetch keys for you.
-            Your own Chrome has no such wall — it's already signed in and trusted by Shopify.
+            Pick how you want to grab the Client ID + Secret. All methods land the keys in the fields below — the fast ones skip the copy-paste.
+          </p>
+
+          {/* Inline method chooser. 'llm'/'scripted'/'partnerapi' run on the server (shared live feed
+              below); 'bookmarklet'/'manual' fill the fields client-side from a paste. */}
+          <div className="mt-2.5 flex flex-wrap gap-1.5" role="radiogroup" aria-label="Credential collection method">
+            {([
+              { id: 'manual', label: 'Manual paste', icon: <Hand className="size-3.5" /> },
+              { id: 'bookmarklet', label: 'Bookmarklet', icon: <Bookmark className="size-3.5" /> },
+              { id: 'scripted', label: 'Scripted bot', icon: <Cpu className="size-3.5" /> },
+              { id: 'llm', label: 'AI bot', icon: <Bot className="size-3.5" /> },
+              { id: 'partnerapi', label: 'Partner API', icon: <Globe className="size-3.5" /> },
+            ] as { id: CollectionMethod; label: string; icon: React.ReactNode }[]).map((m) => (
+              <button
+                key={m.id} type="button" role="radio" aria-checked={method === m.id}
+                onClick={() => { setMethod(m.id); setPasteMsg(null); }}
+                disabled={botPhase === 'running'}
+                className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12.5px] font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${method === m.id ? 'border-success bg-success/10 text-success' : 'border-border bg-card text-muted-foreground hover:border-success/40'}`}
+              >
+                {m.icon}{m.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Bookmarklet — drag once, click on the app Settings page, paste back here. */}
+          {method === 'bookmarklet' && (
+            <div className="mt-3 rounded-xl border border-border bg-card p-4">
+              <p className="text-[13px] font-bold text-foreground">One-click grabber — instant, no login/captcha issues</p>
+              <ol className="mt-2 flex list-decimal flex-col gap-1 pl-4 text-[12.5px] font-medium leading-relaxed text-muted-foreground">
+                <li>Drag this button to your bookmarks bar: <a href={BOOKMARKLET_HREF} onClick={(e) => e.preventDefault()} className="mx-1 inline-flex items-center gap-1 rounded-md border border-success/50 bg-success/10 px-2 py-0.5 text-[12px] font-bold text-success" title="Drag me to your bookmarks bar"><Bookmark className="size-3" /> Grab keys → ThemeBot</a> <button type="button" onClick={() => { void navigator.clipboard?.writeText(BOOKMARKLET_HREF).then(() => { setCopiedMarklet(true); setTimeout(() => setCopiedMarklet(false), 1500); }); }} className="text-[11.5px] font-bold text-muted-foreground underline hover:text-foreground">{copiedMarklet ? 'copied!' : 'or copy the code'}</button></li>
+                <li>Create the app (use the checklist below) and open its <b className="text-foreground">Settings / API credentials</b> page — you're signed in, so no captcha.</li>
+                <li>Click the bookmarklet, then come back and paste:</li>
+              </ol>
+              <textarea value={pasted} onChange={(e) => { setPasted(e.target.value); setPasteMsg(null); }} rows={2} spellCheck={false} placeholder="Paste here (themebot|clientId|secret, or the raw values)"
+                className="mt-2 w-full rounded-lg border border-input bg-card px-3 py-2 font-mono text-[12.5px] text-foreground shadow-sm focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40" />
+              <div className="mt-2 flex items-center gap-2.5">
+                <button type="button" onClick={() => void applyPaste()} disabled={!pasted.trim() || !storeUrl} className="inline-flex items-center gap-2 rounded-lg bg-success px-3.5 py-2 text-[13px] font-bold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"><ClipboardPaste className="size-4" /> Fill the fields</button>
+                {pasteMsg && <span className={`text-[12.5px] font-semibold ${pasteMsg.ok ? 'text-success' : 'text-destructive'}`}>{pasteMsg.text}</span>}
+              </div>
+            </div>
+          )}
+
+          {/* Manual paste — you already have the two values. */}
+          {method === 'manual' && (
+            <div className="mt-3 rounded-xl border border-border bg-card p-4">
+              <p className="text-[13px] font-bold text-foreground">Paste the Client ID + Secret you already have</p>
+              <p className="mt-1 text-[12.5px] font-medium leading-relaxed text-muted-foreground">From the app's Settings page (dev.shopify.com). Paste both — order doesn't matter, extra text is ignored.</p>
+              <textarea value={pasted} onChange={(e) => { setPasted(e.target.value); setPasteMsg(null); }} rows={2} spellCheck={false} placeholder="Client ID (32 hex) and Secret (shpss_…)"
+                className="mt-2 w-full rounded-lg border border-input bg-card px-3 py-2 font-mono text-[12.5px] text-foreground shadow-sm focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40" />
+              <div className="mt-2 flex items-center gap-2.5">
+                <button type="button" onClick={() => void applyPaste()} disabled={!pasted.trim() || !storeUrl} className="inline-flex items-center gap-2 rounded-lg bg-success px-3.5 py-2 text-[13px] font-bold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"><ClipboardPaste className="size-4" /> Fill the fields</button>
+                {pasteMsg && <span className={`text-[12.5px] font-semibold ${pasteMsg.ok ? 'text-success' : 'text-destructive'}`}>{pasteMsg.text}</span>}
+              </div>
+            </div>
+          )}
+
+          {/* Scripted bot — deterministic Playwright, no LLM. */}
+          {method === 'scripted' && (
+            <div className="mt-3 rounded-xl border border-border bg-card p-4">
+              <p className="text-[13px] font-bold text-foreground">Deterministic scripted bot — no AI, faster, free</p>
+              <p className="mt-1 text-[12.5px] font-medium leading-relaxed text-muted-foreground">
+                Opens a dedicated ThemeBot browser and clicks through create → scopes → install → harvest itself. First run: log into Shopify once in that window (you solve the captcha); the session persists after that. It can break when Shopify changes its dashboard layout — if it stalls, use the AI bot or bookmarklet.
+              </p>
+              <button type="button" onClick={() => void startBot('scripted')} disabled={!shopHandle || botPhase === 'running' || keysOnFile} className="mt-2.5 inline-flex items-center gap-2 rounded-xl bg-success px-5 py-2.5 text-[14px] font-bold text-white transition-opacity hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-40"><Cpu className="size-4.5" /> Run the scripted bot</button>
+            </div>
+          )}
+
+          {/* Partner API — headless GraphQL secret-read (uncertain coverage). */}
+          {method === 'partnerapi' && (
+            <div className="mt-3 rounded-xl border border-border bg-card p-4">
+              <p className="text-[13px] font-bold text-foreground">Partner API — headless, no browser</p>
+              <p className="mt-1 text-[12.5px] font-medium leading-relaxed text-muted-foreground">
+                Reads an <b className="text-foreground">already-created</b> app's secret over Shopify's Partner GraphQL API. Needs a Partner API access token (Partners dashboard → Settings → Partner API clients). Whether it can see dev.shopify.com apps is unverified — this is the one to test.
+              </p>
+              <div className="mt-2.5 flex flex-col gap-2">
+                <input value={partnerToken} onChange={(e) => setPartnerToken(e.target.value)} type="password" placeholder="Partner API access token" spellCheck={false}
+                  className="w-full rounded-lg border border-input bg-card px-3 py-2 font-mono text-[12.5px] text-foreground shadow-sm focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40" />
+                <input value={orgId} onChange={(e) => setOrgId(e.target.value)} placeholder="Organization ID (optional — from the dashboard URL)" spellCheck={false}
+                  className="w-full rounded-lg border border-input bg-card px-3 py-2 font-mono text-[12.5px] text-foreground shadow-sm focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40" />
+              </div>
+              <button type="button" onClick={() => void startBot('partnerapi')} disabled={!shopHandle || !partnerToken.trim() || botPhase === 'running' || keysOnFile} className="mt-2.5 inline-flex items-center gap-2 rounded-xl bg-success px-5 py-2.5 text-[14px] font-bold text-white transition-opacity hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-40"><Globe className="size-4.5" /> Read via Partner API</button>
+            </div>
+          )}
+
+          {method === 'llm' && (<>
+          <p className="mt-3 text-[12.5px] font-medium leading-relaxed text-muted-foreground">
+            An AI agent drives your own Chrome (already signed in, so Shopify's captcha never triggers) and reads the keys off the page. Most robust, but slowest and uses tokens.
           </p>
           <div className="mt-2.5 flex flex-wrap gap-1.5">
             <Chip ok={status ? status.chrome.installed || status.edge.installed : null} label={status?.chrome.installed ? 'Google Chrome installed' : status?.edge.installed ? 'Microsoft Edge installed' : 'Chrome / Edge installed'} />
@@ -274,8 +383,10 @@ export function ChromeKeysCard({ storeUrl, projectName, keysOnFile, onKeys, onCh
           {openResult && botPhase === 'idle' && (
             <p className={`mt-2 text-[12.5px] font-semibold ${openResult.ok ? 'text-success' : 'text-destructive'}`}>{openResult.detail}</p>
           )}
+          </>)}
 
-          {/* Bot flow panel — confirm → running → done/error (smooth collapse). */}
+          {/* Bot flow panel — confirm → running → done/error (smooth collapse). Shared by the
+              server-run methods (AI bot, scripted, Partner API). */}
           <div className={`collapse-panel${botPhase !== 'idle' ? ' is-open' : ''}`} aria-hidden={botPhase === 'idle'}>
             <div className="collapse-panel__inner">
               <div className="mt-3 rounded-xl border border-success/30 bg-card p-4">
@@ -293,11 +404,15 @@ export function ChromeKeysCard({ storeUrl, projectName, keysOnFile, onKeys, onCh
                         </p>
                       ))}
                     </div>
-                    <p className="mt-1.5 text-[12px] font-medium leading-relaxed text-muted-foreground">
-                      <b className="text-foreground">If Shopify asks you to log in, just log in — the bot waits for you and continues by itself.</b> Nothing else to click here:
-                      the first ~30s is the agent booting, then Chrome starts moving on its own. A full first-time setup (create app → scopes → release → install → fetch keys)
-                      can take several minutes; you'll get a notification when it's done. Don't close the Chrome window or click Stop unless the feed is clearly stuck.
-                    </p>
+                    {method === 'partnerapi' ? (
+                      <p className="mt-1.5 text-[12px] font-medium leading-relaxed text-muted-foreground">Querying the Partner API — this is headless and usually finishes in a few seconds.</p>
+                    ) : (
+                      <p className="mt-1.5 text-[12px] font-medium leading-relaxed text-muted-foreground">
+                        <b className="text-foreground">If Shopify asks you to log in, just log in — the bot waits for you and continues by itself.</b> Nothing else to click here:
+                        {method === 'scripted' ? ' the ThemeBot browser opens and clicks through the steps on its own.' : ' the first ~30s is the agent booting, then Chrome starts moving on its own.'} A full first-time setup (create app → scopes → release → install → fetch keys)
+                        can take several minutes; you'll get a notification when it's done. Don't close the browser window or click Stop unless the feed is clearly stuck.
+                      </p>
+                    )}
                     <button type="button" onClick={() => void stopBot()} disabled={!stopArmed} className="mt-3 inline-flex items-center gap-2 rounded-lg border border-border px-3.5 py-2 text-[13px] font-bold text-muted-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40">
                       <Square className="size-3.5" /> Stop the bot
                     </button>

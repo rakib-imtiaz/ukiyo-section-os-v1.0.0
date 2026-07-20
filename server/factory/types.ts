@@ -41,6 +41,10 @@ export interface JobIntake {
 export type BotModel = 'opus' | 'sonnet' | 'haiku';
 export const BOT_MODELS: readonly BotModel[] = ['opus', 'sonnet', 'haiku'];
 
+/** How the wizard collects the Shopify app's Client ID + Secret. */
+export type CollectionMethod = 'llm' | 'scripted' | 'bookmarklet' | 'partnerapi' | 'manual';
+export const COLLECTION_METHODS: readonly CollectionMethod[] = ['manual', 'bookmarklet', 'scripted', 'llm', 'partnerapi'];
+
 export interface FactorySettings {
   /** Model for clone + fix sessions (the heavy theme work). */
   cloneModel: BotModel;

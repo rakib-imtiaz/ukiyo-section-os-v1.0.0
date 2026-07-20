@@ -11,7 +11,9 @@ import { TEMPLATES_ROOT, containsPackageJson, derivePrefix, isZipPath, mintKeyFo
 import { factoryScheduler } from './scheduler';
 import { getFactorySettings, lockedFields, updateFactorySettings } from './settings';
 import { buildSpawnEnv, scrubSecrets } from './runner';
-import { TERMINAL_STATUSES, type JobIntake } from './types';
+import { TERMINAL_STATUSES, type CollectionMethod, type JobIntake } from './types';
+import { runScriptedCollector, type ScriptedHandle } from './scripted-collector';
+import { fetchAppSecretViaPartnerApi } from './partner-api';
 
 type AsyncHandler = (request: Request, response: Response, next: NextFunction) => Promise<unknown>;
 const handle = (handler: AsyncHandler) => (request: Request, response: Response, next: NextFunction) => handler(request, response, next).catch(next);
@@ -437,11 +439,12 @@ export function createFactoryRouter() {
   // reveals + reads the Secret, and POSTs them back to the loopback deliver endpoint
   // below with a one-time token. Keys live ONLY in this in-memory state and are handed
   // to the wizard exactly once (?take=1), then wiped — never written to disk or logs.
-  interface CollectState { status: 'idle' | 'working' | 'delivered' | 'partial' | 'failed'; startedAt: number; finishedAt: number; note: string | null; clientId: string | null; clientSecret: string | null }
-  let collect: CollectState = { status: 'idle', startedAt: 0, finishedAt: 0, note: null, clientId: null, clientSecret: null };
+  interface CollectState { status: 'idle' | 'working' | 'delivered' | 'partial' | 'failed'; method: CollectionMethod | null; startedAt: number; finishedAt: number; note: string | null; clientId: string | null; clientSecret: string | null }
+  let collect: CollectState = { status: 'idle', method: null, startedAt: 0, finishedAt: 0, note: null, clientId: null, clientSecret: null };
   let collectTarget: { shop: string; label: string } | null = null;
   let collectToken: string | null = null;
   let collectChild: ChildProcess | null = null;
+  let collectScripted: ScriptedHandle | null = null;
   let collectTimer: NodeJS.Timeout | null = null;
   // Full autopilot runs (create app → scopes → release → install → harvest) need more room.
   const COLLECT_TIMEOUT_MS = 15 * 60_000;
@@ -489,8 +492,35 @@ export function createFactoryRouter() {
       else collectChild.kill('SIGKILL');
     }
     collectChild = null;
+    // Scripted (in-process Playwright) runs: abort the step-machine and close the browser.
+    if (collectScripted) { collectScripted.abort.abort(); void collectScripted.close().catch(() => {}); collectScripted = null; }
     collectToken = null;
     if (collect.status === 'working') collect = { ...collect, status, note, finishedAt: Date.now() };
+  };
+
+  /** Validate a delivered clientId+secret, encrypt+persist an encrypted saved store, and set the
+   *  collector's terminal state. Shared by the LLM deliver endpoint, the scripted + Partner-API
+   *  collectors (in-process), and the manual /keys/save route. Returns whether it was a full delivery. */
+  const persistDelivered = async (rawClientId: unknown, rawClientSecret: unknown, status: string | undefined, note: string | null): Promise<boolean> => {
+    const clientId = typeof rawClientId === 'string' && /^[0-9a-f]{32}$/i.test(rawClientId.trim()) ? rawClientId.trim() : null;
+    const clientSecret = typeof rawClientSecret === 'string' && rawClientSecret.trim().startsWith('shpss_') ? rawClientSecret.trim() : null;
+    const delivered = status === 'delivered' && Boolean(clientId) && Boolean(clientSecret);
+    collect = {
+      ...collect,
+      status: delivered ? 'delivered' : status === 'failed' ? 'failed' : 'partial',
+      note: typeof note === 'string' ? note.slice(0, 300) : null,
+      finishedAt: Date.now(),
+      clientId, clientSecret,
+    };
+    // Durability: persist a full delivery as an encrypted saved store IMMEDIATELY, so a reload
+    // before the user hits Test connection can never lose the secret.
+    if (delivered && collectTarget) {
+      await db.upsertFactoryStore({
+        label: collectTarget.label, shop_domain: collectTarget.shop, client_id: clientId!,
+        client_secret_cipher: encrypt(clientSecret!), storefront_password_cipher: null,
+      }).catch(() => { /* best-effort — the wizard hand-off still works from memory */ });
+    }
+    return delivered;
   };
 
   router.post('/collect-keys/start', handle(async (request, response) => {
@@ -500,11 +530,60 @@ export function createFactoryRouter() {
     const handleName = shop.replace(/\.myshopify\.com$/i, '');
     // App is named after the PROJECT so users (and the bot) always know which store it belongs to.
     const projectName = String(request.body?.projectName ?? '').trim();
-    const appName = `${(slugify(projectName) || handleName).slice(0, 25)}_bot`;
-    collectToken = newSecret(24);
-    collect = { status: 'working', startedAt: Date.now(), finishedAt: 0, note: null, clientId: null, clientSecret: null };
+    // slugify() THROWS on an empty/symbol-only name rather than returning '', so guard the fallback.
+    let appName: string;
+    try { appName = `${(slugify(projectName) || handleName).slice(0, 25)}_bot`; }
+    catch { appName = `${handleName.slice(0, 25)}_bot`; }
+    const requested = String(request.body?.method ?? 'llm');
+    const method: CollectionMethod = (['llm', 'scripted', 'partnerapi'] as const).includes(requested as never) ? requested as CollectionMethod : 'llm';
     collectTarget = { shop, label: projectName || handleName };
     collectLog = [];
+    collect = { status: 'working', method, startedAt: Date.now(), finishedAt: 0, note: null, clientId: null, clientSecret: null };
+
+    // --- Method: Partner API (headless GraphQL — no browser) --------------------------------
+    if (method === 'partnerapi') {
+      const partnerToken = String(request.body?.partnerToken ?? '').trim();
+      const orgId = String(request.body?.orgId ?? '').trim();
+      const clientIdHint = String(request.body?.clientId ?? '').trim();
+      if (!partnerToken) { stopCollector('failed', 'A Partner API access token is required for this method.'); response.status(422).json({ error: collect.note }); return; }
+      pushCollectLog('Querying the Shopify Partner API…');
+      collectTimer = setTimeout(() => stopCollector('failed', 'Partner API request timed out.'), 60_000);
+      void (async () => {
+        try {
+          const result = await fetchAppSecretViaPartnerApi({ partnerToken, orgId, shop, appName, clientIdHint, log: pushCollectLog });
+          if (collect.status === 'working') await persistDelivered(result.clientId, result.clientSecret, result.status, result.note);
+        } catch (error) {
+          if (collect.status === 'working') stopCollector('failed', error instanceof Error ? error.message : 'Partner API request failed.');
+        } finally { if (collectTimer) { clearTimeout(collectTimer); collectTimer = null; } }
+      })();
+      response.json({ started: true }); return;
+    }
+
+    // --- Method: Scripted Playwright bot (deterministic, no LLM) -----------------------------
+    if (method === 'scripted') {
+      pushCollectLog('Launching the ThemeBot browser…');
+      collectTimer = setTimeout(() => stopCollector('failed', 'The scripted bot timed out.'), COLLECT_TIMEOUT_MS);
+      try {
+        collectScripted = runScriptedCollector({
+          shop, handleName, appName, projectLabel: projectName || handleName, scopes: AUTOPILOT_SCOPES,
+          profileDir: path.join(config.factory.workspaceRoot, '_collector-profile'),
+          log: pushCollectLog,
+          onDone: async (result) => {
+            if (collect.status === 'working') await persistDelivered(result.clientId, result.clientSecret, result.status, result.note);
+            if (collectTimer) { clearTimeout(collectTimer); collectTimer = null; }
+            collectScripted = null;
+          },
+          onError: (message) => { if (collect.status === 'working') stopCollector('failed', message); },
+        });
+      } catch (error) {
+        stopCollector('failed', error instanceof Error ? error.message : 'Could not launch the scripted bot.');
+        response.status(500).json({ error: collect.note }); return;
+      }
+      response.json({ started: true }); return;
+    }
+
+    // --- Method: LLM Chrome bot (default; spawns a Claude agent) -----------------------------
+    collectToken = newSecret(24);
     pushCollectLog('Bot process starting — the agent takes ~30s to boot before Chrome moves…');
     const deliverUrl = `http://127.0.0.1:${config.port}/api/factory/collect-keys/deliver`;
     const prompt = [
@@ -531,7 +610,7 @@ export function createFactoryRouter() {
       await writeFile(path.join(collectorRoot, '.claude', 'settings.json'), JSON.stringify({ permissions: { allow: ['ToolSearch', 'Bash(curl:*)', 'mcp__claude-in-chrome'], deny: [] } }, null, 2) + '\n');
       await trustWorkspace(collectorRoot);
     } catch (error) {
-      collect = { status: 'failed', startedAt: collect.startedAt, finishedAt: Date.now(), note: error instanceof Error ? error.message : 'Could not prepare the collector workspace.', clientId: null, clientSecret: null };
+      collect = { ...collect, status: 'failed', finishedAt: Date.now(), note: error instanceof Error ? error.message : 'Could not prepare the collector workspace.', clientId: null, clientSecret: null };
       collectToken = null;
       response.status(500).json({ error: collect.note }); return;
     }
@@ -559,7 +638,7 @@ export function createFactoryRouter() {
         if (text) pushCollectLog(text.split('\n')[0].slice(0, 140));
       });
     } catch (error) {
-      collect = { status: 'failed', startedAt: collect.startedAt, finishedAt: Date.now(), note: error instanceof Error ? error.message : 'Could not launch the bot.', clientId: null, clientSecret: null };
+      collect = { ...collect, status: 'failed', finishedAt: Date.now(), note: error instanceof Error ? error.message : 'Could not launch the bot.', clientId: null, clientSecret: null };
       collectToken = null;
       response.status(500).json({ error: collect.note }); return;
     }
@@ -573,33 +652,35 @@ export function createFactoryRouter() {
     const token = String(request.headers['x-collect-token'] ?? '');
     if (!collectToken || !token || !secureEqual(token, collectToken)) { response.status(403).json({ error: 'Invalid collector token.' }); return; }
     const body = request.body as { clientId?: string; clientSecret?: string; status?: string; note?: string };
-    const clientId = typeof body.clientId === 'string' && /^[0-9a-f]{32}$/i.test(body.clientId.trim()) ? body.clientId.trim() : null;
-    const clientSecret = typeof body.clientSecret === 'string' && body.clientSecret.trim().startsWith('shpss_') ? body.clientSecret.trim() : null;
-    const delivered = body.status === 'delivered' && clientId && clientSecret;
-    collect = {
-      status: delivered ? 'delivered' : body.status === 'failed' ? 'failed' : 'partial',
-      startedAt: collect.startedAt,
-      finishedAt: Date.now(),
-      note: typeof body.note === 'string' ? body.note.slice(0, 300) : null,
-      clientId, clientSecret,
-    };
-    // Durability: persist a full delivery as an encrypted saved store IMMEDIATELY, so a page
-    // reload before the user hits Test connection can never lose the secret.
-    if (delivered && collectTarget) {
-      await db.upsertFactoryStore({
-        label: collectTarget.label, shop_domain: collectTarget.shop, client_id: clientId!,
-        client_secret_cipher: encrypt(clientSecret!), storefront_password_cipher: null,
-      }).catch(() => { /* best-effort — the wizard hand-off still works from memory */ });
-    }
+    await persistDelivered(body.clientId, body.clientSecret, body.status, typeof body.note === 'string' ? body.note : null);
     if (collectTimer) { clearTimeout(collectTimer); collectTimer = null; }
     collectToken = null;
     response.status(204).end();
+  }));
+
+  // Manual + bookmarklet durability: validate a client-supplied Client ID + Secret, persist an
+  // encrypted saved store, and set delivered state. Loopback-only (no external caller should be
+  // able to inject credentials). Distinct from /deliver, which is token-gated for the LLM bot.
+  router.post('/keys/save', handle(async (request, response) => {
+    if (!isLoopback(request)) { response.status(403).json({ error: 'Available on localhost only.' }); return; }
+    const shop = normalizeShop(String(request.body?.storeUrl ?? ''));
+    if (!shop) { response.status(422).json({ error: 'A valid *.myshopify.com store is required.' }); return; }
+    const projectName = String(request.body?.projectName ?? '').trim();
+    const handleName = shop.replace(/\.myshopify\.com$/i, '');
+    // Reset any stale run state so the wizard's take-once handoff sees a fresh delivery.
+    if (collectTimer) { clearTimeout(collectTimer); collectTimer = null; }
+    collectTarget = { shop, label: projectName || handleName };
+    collect = { status: 'working', method: 'manual', startedAt: Date.now(), finishedAt: 0, note: null, clientId: null, clientSecret: null };
+    const delivered = await persistDelivered(request.body?.clientId, request.body?.clientSecret, 'delivered', null);
+    if (!delivered) { collect = { ...collect, status: 'failed', finishedAt: Date.now(), note: 'The Client ID or Secret was not in the expected format.' }; response.status(422).json({ error: collect.note }); return; }
+    response.json({ ok: true });
   }));
 
   router.get('/collect-keys/status', handle(async (request, response) => {
     const take = String(request.query.take ?? '') === '1';
     const payload = {
       status: collect.status,
+      method: collect.method,
       running: collect.status === 'working',
       elapsedSec: collect.status === 'working' ? Math.round((Date.now() - collect.startedAt) / 1000) : null,
       finishedAgoSec: collect.finishedAt ? Math.round((Date.now() - collect.finishedAt) / 1000) : null,
@@ -642,7 +723,7 @@ export function createFactoryRouter() {
       }
     }
     stopCollector('failed', null);
-    collect = { status: 'idle', startedAt: 0, finishedAt: 0, note: null, clientId: null, clientSecret: null };
+    collect = { status: 'idle', method: null, startedAt: 0, finishedAt: 0, note: null, clientId: null, clientSecret: null };
     collectLog = [];
     response.json({ ok: true, ...removed });
   }));
