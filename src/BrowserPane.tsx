@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft, ArrowRight, Bug, Columns2, Download, Globe, Loader, Maximize, Network,
-  PanelRightClose, PanelRightOpen, Plus, Power, Puzzle, RotateCw, ShieldCheck, Sparkles, SquareArrowOutUpRight, X, ZoomIn, ZoomOut,
+  PanelRightClose, PanelRightOpen, Plus, Power, Puzzle, RotateCw, ShieldCheck, Sparkles, SquareArrowOutUpRight, Store, X, ZoomIn, ZoomOut,
 } from 'lucide-react';
 
 type EngineId = 'chromium' | 'chrome' | 'msedge';
@@ -29,6 +29,13 @@ let pendingCompareRequest: BrowserCompareRequest | null = null;
 export function openBrowserCompare(request: BrowserCompareRequest) {
   pendingCompareRequest = request;
   window.dispatchEvent(new CustomEvent<BrowserCompareRequest>(BROWSER_COMPARE_EVENT, { detail: request }));
+}
+
+/** Pinned Shopify shortcut target + matcher (any shopify.com / myshopify.com page counts). */
+const SHOPIFY_HOME = 'https://accounts.shopify.com';
+function isShopifyUrl(url: string): boolean {
+  try { const host = new URL(url).hostname; return host === 'shopify.com' || host.endsWith('.shopify.com') || host.endsWith('.myshopify.com'); }
+  catch { return false; }
 }
 
 /** Loose URL match for pairing a compare target with the tab that loaded it (the page may
@@ -112,6 +119,7 @@ export default function BrowserPane({ onActivity }: { onActivity?: () => void })
   const [qaRunning, setQaRunning] = useState(false);
   const [qaReport, setQaReport] = useState<QaReport | null>(null);
   const [extMenuOpen, setExtMenuOpen] = useState(false);
+  const [oauthNoteDismissed, setOauthNoteDismissed] = useState(false);
   // Pending React-vs-Shopify comparison (see openBrowserCompare). started → engine start sent;
   // opened → both tab-new sent; baseline → tab ids that existed before the compare tabs opened.
   const compareRef = useRef<(BrowserCompareRequest & { started: boolean; opened: boolean; baseline: Set<number> }) | null>(null);
@@ -303,6 +311,9 @@ export default function BrowserPane({ onActivity }: { onActivity?: () => void })
   const noEngine = !!status && !engine && status.engines.every((item) => !item.available);
   const extensions = status?.extensions ?? [];
   const hasClaudeExt = extensions.some((item) => item.isClaude);
+  // The Claude extension auto-opens an OAuth tab that can stall on Cloudflare's
+  // "Just a moment…" check — surface a dismissible note so users know what it is.
+  const stuckVerification = hasClaudeExt && tabs.some((t) => /just a moment/i.test(t.title));
   const focusedNav = focusedTab ?? status?.nav;
   const paneIds = split ? [focusedId, secondaryId].filter(Boolean) : [focusedId].filter(Boolean);
 
@@ -424,6 +435,20 @@ export default function BrowserPane({ onActivity }: { onActivity?: () => void })
 
       {/* ---- tab strip ---- */}
       <div className="browser-tabs">
+        {/* Pinned Shopify shortcut: focuses an existing Shopify tab, or opens the login/dashboard.
+            The persistent profile keeps the session, so after one login this lands signed-in. */}
+        <button
+          type="button"
+          className={`browser-tab__pin${focusedTab && isShopifyUrl(focusedTab.url) ? ' is-active' : ''}`}
+          title="Shopify — focuses your Shopify tab, or opens accounts.shopify.com"
+          onClick={() => {
+            const existing = tabs.find((t) => isShopifyUrl(t.url));
+            if (existing) { setFocusedId(existing.id); send({ type: 'tab-activate', id: existing.id }); }
+            else send({ type: 'tab-new', url: SHOPIFY_HOME });
+          }}
+        >
+          <Store size={12} /> Shopify
+        </button>
         {tabs.map((tab) => (
           <div key={tab.id} className={`browser-tab${tab.id === focusedId ? ' is-active' : ''}`}>
             <button type="button" className="browser-tab__main" onClick={() => { setFocusedId(tab.id); send({ type: 'tab-activate', id: tab.id }); }} title={tab.url}>
@@ -435,6 +460,15 @@ export default function BrowserPane({ onActivity }: { onActivity?: () => void })
         ))}
         <button type="button" className="browser-tab__add" title="New tab" onClick={() => send({ type: 'tab-new' })}><Plus size={14} /></button>
       </div>
+
+      {/* ---- Claude extension OAuth tab note (dismissible) ---- */}
+      {stuckVerification && !oauthNoteDismissed && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 14px', borderBottom: '1px solid var(--b-border)', background: 'var(--b-bg-2)', color: 'var(--b-fg-dim)', fontSize: 12, lineHeight: 1.45 }}>
+          <Sparkles size={13} style={{ flexShrink: 0, color: 'var(--b-accent)' }} />
+          <span style={{ flex: 1, minWidth: 0 }}>The Claude extension auto-opened a sign-in tab. If it's stuck on Cloudflare's "Just a moment…", select that tab and complete the check manually — or just ignore/close it; everything else works normally.</span>
+          <button type="button" title="Dismiss" onClick={() => setOauthNoteDismissed(true)} style={{ flexShrink: 0, display: 'grid', placeItems: 'center', padding: 2, border: 0, background: 'none', color: 'inherit', cursor: 'pointer' }}><X size={12} /></button>
+        </div>
+      )}
 
       {/* ---- QA input row ---- */}
       {qaOpen && (

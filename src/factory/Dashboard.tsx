@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { AlertTriangle, ArrowRight, CheckCircle2, Factory, FolderOpen, MoreVertical, PlayCircle, Timer } from 'lucide-react';
+import { AlertTriangle, ArrowRight, CheckCircle2, Factory, FolderOpen, MoreVertical, PencilLine, PlayCircle, Timer } from 'lucide-react';
 import { Badge, Button, ConfirmDialog, DropdownMenu, EmptyState, LiveDot, Progress, Skeleton, useToast } from './ui';
 import { CountUp, ScoreRing, Sparkline, SpotlightCard } from './fx';
 import { api } from './api';
+import { clearWizardDraft, getWizardDraft } from './NewJobWizard';
 import { STATUS_META, TERMINAL, type Job, type SchedulerStatus } from './types';
 
 const ACTIVE_STATUSES = ['scaffolding', 'cloning', 'qa_running', 'fixing'];
@@ -78,6 +79,8 @@ export function Dashboard({ jobs, scheduler, loading, onOpen, onNew, refresh }: 
   const toast = useToast();
   const [confirm, setConfirm] = useState<{ kind: 'cancel' | 'delete'; job: Job } | null>(null);
   const [purge, setPurge] = useState(false);
+  // In-progress wizard draft (localStorage) — surfaced so a refresh never hides where you left off.
+  const [draft, setDraft] = useState(getWizardDraft);
 
   const act = async (label: string, action: () => Promise<unknown>) => {
     try { await action(); toast.push({ title: label, variant: 'default' }); refresh(); }
@@ -123,12 +126,26 @@ export function Dashboard({ jobs, scheduler, loading, onOpen, onNew, refresh }: 
         <StatTile icon={<AlertTriangle />} label="Needs attention" value={counts.attention} alert />
       </div>
 
+      {draft && (
+        <SpotlightCard className="rise-in flex flex-wrap items-center gap-3.5 border-primary/30 p-4">
+          <span className="flex size-11 shrink-0 items-center justify-center rounded-xl border border-primary/30 bg-primary/10 text-primary">
+            <PencilLine className="size-5" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-[14.5px] font-bold tracking-tight">Draft in progress — “{draft.name}”</p>
+            <p className="mt-0.5 text-[13px] font-medium text-muted-foreground">You left off on step {draft.step} of 3. Everything you entered is saved locally.</p>
+          </div>
+          <Button onClick={onNew}>Resume where I left off <ArrowRight /></Button>
+          <Button variant="ghost" onClick={() => { clearWizardDraft(); setDraft(null); }}>Discard draft</Button>
+        </SpotlightCard>
+      )}
+
       {!jobs.length ? (
         <EmptyState
           icon={<Factory />}
-          title="No clone jobs yet"
-          description="Create your first clone: point the factory at a deployed React site and a Shopify store, and it handles the rest — clone, QA, and fix loop."
-          action={<Button size="lg" onClick={onNew}>Create your first clone</Button>}
+          title={draft ? 'No clone jobs yet — but your draft is ready' : 'No clone jobs yet'}
+          description={draft ? 'Resume the draft above to finish setting up your first clone job.' : 'Create your first clone: point the factory at a deployed React site and a Shopify store, and it handles the rest — clone, QA, and fix loop.'}
+          action={<Button size="lg" onClick={onNew}>{draft ? 'Resume draft' : 'Create your first clone'}</Button>}
         />
       ) : (
         <div className="stagger grid gap-4 lg:grid-cols-2">

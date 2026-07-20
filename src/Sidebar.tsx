@@ -83,15 +83,45 @@ export default function Sidebar<V extends string>({ items, view, onNavigate, col
     const measure = () => {
       const active = nav.querySelector<HTMLButtonElement>('button.is-active');
       if (!active) { setIndicator(null); return; }
-      setIndicator({ x: active.offsetLeft, y: active.offsetTop, w: active.offsetWidth, h: active.offsetHeight });
+      const next = { x: active.offsetLeft, y: active.offsetTop, w: active.offsetWidth, h: active.offsetHeight };
+      // Skip the state update (and re-render) when the box hasn't moved.
+      setIndicator((prev) => (prev && prev.x === next.x && prev.y === next.y && prev.w === next.w && prev.h === next.h ? prev : next));
     };
     measure();
     // Fires continuously while the rail collapses/expands and on breakpoint
     // changes, so the pill tracks the active button instead of drifting.
     const observer = new ResizeObserver(measure);
     observer.observe(nav);
-    return () => observer.disconnect();
+    // The rail width animates (.3s) on collapse/expand and across the <=1050px
+    // breakpoint; a single RO sample can land mid-transition and leave the pill
+    // at the 235px expanded width on the 72px rail. Re-measure every frame for
+    // the transition window, once more on transitionend, and on breakpoint flips.
+    let raf = 0;
+    const track = () => {
+      cancelAnimationFrame(raf);
+      const start = performance.now();
+      const step = (now: number) => { measure(); if (now - start < 450) raf = requestAnimationFrame(step); };
+      raf = requestAnimationFrame(step);
+    };
+    track();
+    const media = window.matchMedia('(max-width: 1050px)');
+    media.addEventListener('change', track);
+    nav.addEventListener('transitionend', measure, true);
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(raf);
+      media.removeEventListener('change', track);
+      nav.removeEventListener('transitionend', measure, true);
+    };
   }, [view, collapsed, items]);
+
+  // Close the account menu on Escape (basic menu a11y).
+  useEffect(() => {
+    if (!accountMenu) return;
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setAccountMenu(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [accountMenu]);
 
   const statusLabel = state === 'online' ? 'Production ready' : state === 'offline' ? 'Server offline' : 'Checking status…';
   const statusSub = state === 'online' ? 'All systems normal' : state === 'offline' ? 'API is not responding' : 'Connecting to the server';
@@ -130,6 +160,7 @@ export default function Sidebar<V extends string>({ items, view, onNavigate, col
               key={item.id}
               className={`sidebar__link${active ? ' is-active' : ''}`}
               data-tooltip={item.label}
+              aria-label={item.label}
               aria-current={active ? 'page' : undefined}
               onClick={() => onNavigate(item.id)}
             >
@@ -143,6 +174,7 @@ export default function Sidebar<V extends string>({ items, view, onNavigate, col
       <button
         className={`sidebar__meta${state === 'offline' ? ' is-offline' : ''}${state === 'checking' ? ' is-checking' : ''}`} type="button"
         title={`${statusLabel} — open Connections`}
+        data-tooltip={statusLabel}
         onClick={() => onNavigate(settingsView)}
       >
         <span>SYSTEM STATUS</span>
@@ -162,7 +194,7 @@ export default function Sidebar<V extends string>({ items, view, onNavigate, col
           <ChevronRight size={14} className="sidebar__user-chevron" aria-hidden />
         </button>
         {account && (
-          <button className="sidebar__account-more" type="button" title="Account actions" aria-haspopup="true" aria-expanded={accountMenu} onClick={() => setAccountMenu((value) => !value)}><MoreHorizontal size={15} /></button>
+          <button className="sidebar__account-more" type="button" title="Account actions" aria-label="Account actions" aria-haspopup="true" aria-expanded={accountMenu} onClick={() => setAccountMenu((value) => !value)}><MoreHorizontal size={15} /></button>
         )}
         {account && accountMenu && (
           <>

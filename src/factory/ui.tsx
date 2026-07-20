@@ -3,7 +3,7 @@
 // Every interactive control is keyboard-accessible and readable in BOTH themes —
 // text color is always explicitly paired with its background.
 import {
-  createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState,
+  createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState,
   type ComponentProps, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes,
 } from 'react';
 import { cva, type VariantProps } from 'class-variance-authority';
@@ -19,8 +19,12 @@ export function usePresence(open: boolean, duration = 320) {
   useEffect(() => {
     if (open) {
       setMounted(true);
-      const raf = requestAnimationFrame(() => requestAnimationFrame(() => setState('open')));
-      return () => cancelAnimationFrame(raf);
+      // requestAnimationFrame is paused in background/throttled tabs — pair it with a
+      // timeout so overlays always reach their "open" state (backdrop/panel visible,
+      // cancel paths live) instead of getting stuck in the "closed" CSS state.
+      const raf = requestAnimationFrame(() => setState('open'));
+      const fallback = setTimeout(() => setState('open'), 50);
+      return () => { cancelAnimationFrame(raf); clearTimeout(fallback); };
     }
     setState('closed');
     const timer = setTimeout(() => setMounted(false), duration);
@@ -81,9 +85,11 @@ export const CardFooter = ({ className, children }: { className?: string; childr
 
 // ---------- Inputs ----------
 
-export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
+export function Input({ className, id, ...props }: InputHTMLAttributes<HTMLInputElement>) {
+  const fieldId = useContext(FieldIdContext);
   return (
     <input
+      id={id ?? fieldId}
       className={cn(
         'flex h-10 w-full rounded-lg border border-input bg-card px-3.5 py-1 text-[15px] font-medium text-foreground shadow-sm transition-all placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50',
         className,
@@ -97,12 +103,16 @@ export const Label = ({ className, children, htmlFor }: { className?: string; ch
   <label htmlFor={htmlFor} className={cn('text-[13px] font-bold leading-none tracking-tight text-foreground', className)}>{children}</label>
 );
 
+/** Lets controls rendered inside a Field pick up the label's htmlFor id automatically. */
+const FieldIdContext = createContext<string | undefined>(undefined);
+
 /** Labeled field with optional help text + validation state. */
-export function Field({ label, help, error, ok, children }: { label: string; help?: string; error?: string | null; ok?: string | null; children: ReactNode }) {
+export function Field({ label, icon, help, error, ok, children }: { label: string; icon?: ReactNode; help?: string; error?: string | null; ok?: string | null; children: ReactNode }) {
+  const id = useId();
   return (
     <div className="flex flex-col gap-2">
-      <Label>{label}</Label>
-      {children}
+      <Label htmlFor={id} className={icon ? 'flex items-center gap-2 [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-muted-foreground' : undefined}>{icon}{label}</Label>
+      <FieldIdContext.Provider value={id}>{children}</FieldIdContext.Provider>
       {error ? <p className="text-[13px] font-semibold text-destructive">{error}</p>
         : ok ? <p className="text-[13px] font-semibold text-success">{ok}</p>
         : help ? <p className="text-[13px] font-medium leading-relaxed text-muted-foreground">{help}</p> : null}
@@ -110,10 +120,12 @@ export function Field({ label, help, error, ok, children }: { label: string; hel
   );
 }
 
-export function Select({ className, children, ...props }: SelectHTMLAttributes<HTMLSelectElement>) {
+export function Select({ className, children, id, ...props }: SelectHTMLAttributes<HTMLSelectElement>) {
+  const fieldId = useContext(FieldIdContext);
   return (
     <div className="relative w-full">
       <select
+        id={id ?? fieldId}
         className={cn(
           'flex h-10 w-full appearance-none rounded-lg border border-input bg-card pl-3.5 pr-10 py-1 text-[15px] font-medium text-foreground shadow-sm transition-all focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50',
           className,
@@ -127,10 +139,10 @@ export function Select({ className, children, ...props }: SelectHTMLAttributes<H
   );
 }
 
-export function Switch({ checked, onCheckedChange, disabled, id }: { checked: boolean; onCheckedChange: (value: boolean) => void; disabled?: boolean; id?: string }) {
+export function Switch({ checked, onCheckedChange, disabled, id, 'aria-label': ariaLabel }: { checked: boolean; onCheckedChange: (value: boolean) => void; disabled?: boolean; id?: string; 'aria-label'?: string }) {
   return (
     <button
-      id={id} type="button" role="switch" aria-checked={checked} disabled={disabled}
+      id={id} type="button" role="switch" aria-checked={checked} aria-label={ariaLabel} disabled={disabled}
       onClick={() => onCheckedChange(!checked)}
       className={cn(
         'inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent shadow-sm transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-50',
@@ -142,13 +154,16 @@ export function Switch({ checked, onCheckedChange, disabled, id }: { checked: bo
   );
 }
 
-export function Slider({ value, onValueChange, min, max, step = 1, disabled, format }: {
+export function Slider({ value, onValueChange, min, max, step = 1, disabled, format, id, 'aria-label': ariaLabel }: {
   value: number; onValueChange: (value: number) => void; min: number; max: number; step?: number; disabled?: boolean; format?: (value: number) => string;
+  id?: string; 'aria-label'?: string;
 }) {
+  const fieldId = useContext(FieldIdContext);
   const percent = ((value - min) / (max - min)) * 100;
   return (
     <div className="flex items-center gap-4">
       <input
+        id={id ?? fieldId} aria-label={ariaLabel}
         type="range" min={min} max={max} step={step} value={value} disabled={disabled}
         onChange={(event) => onValueChange(Number(event.target.value))}
         className="h-2 w-full cursor-pointer appearance-none rounded-full accent-primary disabled:cursor-not-allowed disabled:opacity-50"
@@ -285,7 +300,7 @@ export function ConfirmDialog({ open, title, description, confirmLabel = 'Confir
   if (!mounted) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="dialog-overlay absolute inset-0 bg-black/50 backdrop-blur-[2px]" data-state={state} onClick={onCancel} />
+      <div className="dialog-overlay absolute inset-0 bg-black/50 backdrop-blur-[2px]" data-state={state} onClick={onCancel} aria-hidden="true" />
       <div role="alertdialog" aria-modal="true" aria-label={content.title} data-state={state}
         className="dialog-panel relative z-10 w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-2xl">
         <h2 className="text-[17px] font-bold tracking-tight">{content.title}</h2>

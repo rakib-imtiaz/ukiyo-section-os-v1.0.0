@@ -154,8 +154,37 @@
 .factory-root .stagger > *:nth-child(n+12) { animation-delay: 0.58s; }
 @keyframes factory-rise { from { opacity: 0; transform: translateY(14px) scale(0.99); } to { opacity: 1; transform: none; } }
 
-/* Tab-panel cross-fade (re-runs whenever the panel is re-keyed) */
-.factory-root .tab-panel { animation: factory-rise 0.35s cubic-bezier(0.165, 0.84, 0.44, 1) both; }
+/* Tab-panel cross-fade (re-runs whenever the panel is re-keyed).
+   fill-mode is `backwards` on purpose: `both` leaves a residual identity transform after the
+   animation, which silently becomes the containing block for position:fixed descendants
+   (e.g. the wizard's pinned setup-video card) and breaks their viewport positioning. */
+.factory-root .tab-panel { animation: factory-rise 0.35s cubic-bezier(0.165, 0.84, 0.44, 1) backwards; }
+
+/* Hero CTA for the key-collector bot: breathing glow ring + periodic shine sweep.
+   Only applied while the button is actually clickable (never on disabled states). */
+.factory-root .bot-cta { position: relative; overflow: hidden; animation: factory-bot-glow 2.4s ease-in-out infinite; }
+@keyframes factory-bot-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.45), 0 6px 18px -6px rgba(22, 163, 74, 0.55); transform: scale(1); }
+  50% { box-shadow: 0 0 0 9px rgba(22, 163, 74, 0), 0 8px 26px -4px rgba(22, 163, 74, 0.7); transform: scale(1.02); }
+}
+.factory-root .bot-cta::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(115deg, transparent 32%, rgba(255, 255, 255, 0.35) 50%, transparent 68%);
+  background-size: 220% 100%; animation: factory-shine 2.8s linear infinite;
+}
+
+/* Smooth disclosure collapse (grid-rows trick: animates to natural height, no max-height hacks).
+   Usage: <div class="collapse-panel is-open"><div class="collapse-panel__inner">content</div></div>
+   The inner wrapper must carry NO padding/border of its own so the closed state is exactly 0px. */
+.factory-root .collapse-panel { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.4s cubic-bezier(0.165, 0.84, 0.44, 1); }
+.factory-root .collapse-panel.is-open { grid-template-rows: 1fr; }
+/* visibility keeps closed content out of the tab order; its transition is delayed past the
+   height animation on close so nothing blinks out early. */
+.factory-root .collapse-panel__inner { min-height: 0; overflow: hidden; visibility: hidden; transition: visibility 0s 0.4s; }
+.factory-root .collapse-panel.is-open .collapse-panel__inner { visibility: visible; transition: visibility 0s; }
+/* Content eases in slightly after the panel starts opening (and fades fast on close). */
+.factory-root .collapse-panel__inner > * { opacity: 0; transform: translateY(-4px); transition: opacity 0.25s ease, transform 0.3s cubic-bezier(0.165, 0.84, 0.44, 1); }
+.factory-root .collapse-panel.is-open .collapse-panel__inner > * { opacity: 1; transform: none; transition-delay: 0.1s; }
 
 /* Spotlight card — radial monochrome highlight follows the cursor */
 .factory-root .spotlight-card { position: relative; overflow: hidden; transition: transform 0.25s cubic-bezier(0.165, 0.84, 0.44, 1), box-shadow 0.25s ease, border-color 0.25s ease; }

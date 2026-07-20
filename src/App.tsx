@@ -3,7 +3,8 @@ import {
   CircleAlert, ExternalLink, Factory, FolderKanban, Globe, House, KeyRound, LoaderCircle, LogOut,
   Link2, Moon, RefreshCw, Search, Sparkles, Store, Sun, TerminalSquare,
 } from 'lucide-react';
-import FactoryApp, { applyFactoryTheme } from './factory/FactoryApp';
+import FactoryApp from './factory/FactoryApp';
+import { applyFactoryTheme } from './factory/applyTheme';
 import HomeScreen from './HomeScreen';
 import Sidebar from './Sidebar';
 import TerminalPane from './TerminalPane';

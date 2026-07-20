@@ -56,7 +56,7 @@ Without `DATABASE_URL`, development uses in-memory storage automatically (factor
 
 ## Clone Factory pipeline
 
-1. **Create a job** — React URL + Shopify store URL + custom-app Client ID/Secret (+ optional storefront password).
+1. **Create a job** — React URL + Shopify store URL + custom-app Client ID/Secret (+ optional storefront password). No paid plan or credit card needed: a free Dev Dashboard dev store works — see [docs/FACTORY_STORE_SETUP.md](docs/FACTORY_STORE_SETUP.md). Credentials can be saved (encrypted) and reused from a dropdown on later jobs.
 2. **Scaffold** — an isolated workspace with the reference inputs, the bundled `/clone-theme` command, QA scripts, and a scoped `.claude/settings.json` permission allowlist.
 3. **Clone** — headless `claude -p /clone-theme` builds and pushes the theme to an unpublished dev theme.
 4. **Converge** — Playwright QA scores presence / text / interaction against the reference site; below-threshold runs get targeted fix sessions with fresh QA each iteration, up to `max_iterations`. The best-scoring iteration is tracked on the job.

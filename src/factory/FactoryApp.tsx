@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Cog, LayoutDashboard, Moon, Pause, Play, Plus, Settings2, Sun } from 'lucide-react';
+import { Cog, LayoutDashboard, Pause, Play, Plus, Settings2 } from 'lucide-react';
 import './theme.css';
 import { Badge, Button, LiveDot, Tabs, ToastProvider, useToast } from './ui';
 import { api, usePoll } from './api';
@@ -14,7 +14,13 @@ export type FactoryNavigate = (view: 'terminal' | 'browser') => void;
 
 function FactoryInner({ onNavigate }: { onNavigate?: FactoryNavigate }) {
   const toast = useToast();
-  const [tab, setTab] = useState('dashboard');
+  // Tab persists across refreshes so a reload drops you back exactly where you were
+  // (e.g. mid-wizard) instead of on a blank dashboard.
+  const [tab, setTab] = useState(() => {
+    const stored = localStorage.getItem('factory-tab');
+    return stored === 'new' || stored === 'settings' ? stored : 'dashboard';
+  });
+  useEffect(() => { localStorage.setItem('factory-tab', tab); }, [tab]);
   const [openJobId, setOpenJobId] = useState<string | null>(null);
   const [defaults, setDefaults] = useState<FactorySettings | null>(null);
   const { data, loading, refresh } = usePoll(() => api.listJobs(), 3000);
@@ -91,34 +97,6 @@ function FactoryInner({ onNavigate }: { onNavigate?: FactoryNavigate }) {
 
       <JobDetail jobId={openJobId} onClose={() => setOpenJobId(null)} onNavigate={onNavigate} />
     </div>
-  );
-}
-
-let themeAnimTimer: number | undefined;
-export function applyFactoryTheme(dark: boolean) {
-  const html = document.documentElement;
-  const changing = html.getAttribute('data-app-theme') !== (dark ? 'dark' : 'light');
-  if (changing) {
-    // Enable a brief global color cross-fade so the flip glides instead of snapping.
-    html.classList.add('theme-anim');
-    window.clearTimeout(themeAnimTimer);
-    themeAnimTimer = window.setTimeout(() => html.classList.remove('theme-anim'), 450);
-  }
-  document.querySelectorAll('.factory-root').forEach((root) => root.setAttribute('data-theme', dark ? 'dark' : 'light'));
-  // The whole app shell (sidebar + topbar) follows the toggle too.
-  html.setAttribute('data-app-theme', dark ? 'dark' : 'light');
-  // Persistence lives in App.tsx's toggleTheme — the single writer of 'factory-theme'.
-}
-
-export function ThemeToggle() {
-  const [dark, setDark] = useState(() => localStorage.getItem('factory-theme') === 'dark');
-  useEffect(() => { applyFactoryTheme(dark); }, [dark]);
-  return (
-    <Button variant="outline" size="sm" onClick={() => setDark((value) => !value)} aria-pressed={dark}
-      aria-label={dark ? 'Switch to light theme' : 'Switch to dark theme'}>
-      {dark ? <Sun className="size-4" /> : <Moon className="size-4" />}
-      {dark ? 'Light mode' : 'Dark mode'}
-    </Button>
   );
 }
 

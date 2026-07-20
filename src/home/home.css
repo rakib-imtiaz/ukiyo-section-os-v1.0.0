@@ -33,20 +33,8 @@
   border: 1px solid rgba(255, 255, 255, 0.09);
   color: #e4e4e7;
 }
-/* Dark mode: flip the terminal to a light card with dark text (it otherwise vanishes on the dark page). */
-.factory-root[data-theme='dark'] .home-terminal {
-  background: #ffffff;
-  border-color: rgba(0, 0, 0, 0.08);
-  color: #18181b;
-  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.28);
-}
-.factory-root[data-theme='dark'] .home-terminal .text-zinc-200 { color: #18181b; }
-.factory-root[data-theme='dark'] .home-terminal .text-zinc-400 { color: #52525b; }
-.factory-root[data-theme='dark'] .home-terminal .text-zinc-500 { color: #71717a; }
-.factory-root[data-theme='dark'] .home-terminal .text-success { color: #15803d; }
-.factory-root[data-theme='dark'] .home-terminal .text-red-400 { color: #dc2626; }
-.factory-root[data-theme='dark'] .home-terminal .bg-success { background-color: #15803d; }
-.factory-root[data-theme='dark'] .home-terminal .home-caret { background: #18181b; }
+/* The terminal stays dark in BOTH themes — its zinc/success text palette is already
+   tuned for a dark panel, so no per-theme color overrides are needed. */
 .factory-root .home-log-line {
   display: grid;
   grid-template-columns: 58px 14px minmax(0, 1fr);
