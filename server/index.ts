@@ -55,6 +55,12 @@ app.get('/auth/shopify/callback',completeShopifyAuth);
 app.post('/auth/logout',(request,response)=>{response.clearCookie('vso_session',{path:'/'});response.status(204).end();});
 
 app.get('/api/health',(_request,response)=>response.json({ok:true,name:'ThemeBot',version:'1.0.0',database:db.persistent?'postgres':'memory',uptimeSec:Math.round(process.uptime())}));
+// Setup tutorial video (rendered by Remotion into video/setup-guide/out — gitignored, may be
+// absent on fresh clones). sendFile handles Range requests, so seeking works in <video>.
+const setupVideoPath=path.resolve(__dirname,'../video/setup-guide/out/setup-guide.mp4');
+app.get('/api/setup-video',(_request,response)=>{
+  response.sendFile(setupVideoPath,(error)=>{if(error&&!response.headersSent)response.status(404).json({error:'The setup video has not been rendered on this machine.'});});
+});
 app.use('/api',createOnboardingRouter()); // claude/workspace/onboarding — localhost-only, before the session-gated router
 app.use('/api/factory',createFactoryRouter());
 app.use('/api',createApiRouter());

@@ -4,7 +4,7 @@ import { access, mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from '../config';
 import type { FactoryJobRecord } from '../db';
-import type { RunResult } from './types';
+import type { BotModel, RunResult } from './types';
 
 const SECRET_PATTERNS = [/shpat_[a-zA-Z0-9]+/g, /shpss_[a-zA-Z0-9]+/g, /shpca_[a-zA-Z0-9]+/g, /vso_live_[a-zA-Z0-9]+/g, /sk-ant-[\w-]+/g];
 // Narrowly scoped so ordinary prose like "respects rate limits" does not false-positive:
@@ -180,11 +180,11 @@ export function cloneBlockerSignals(job: FactoryJobRecord) {
 }
 
 /** Spawn the initial headless clone-theme run. Completion = final.md | BLOCKED.md | ABORTED.md. */
-export function spawnClone(job: FactoryJobRecord, scrub = true, timeouts: RunTimeouts = {}): RunHandle {
+export function spawnClone(job: FactoryJobRecord, scrub = true, timeouts: RunTimeouts = {}, model: BotModel = 'opus'): RunHandle {
   const reports = path.join(job.workspace_path, 'qa', 'reports');
   return run({
     cwd: job.workspace_path,
-    args: ['-p', '/clone-theme', '--model', 'opus'],
+    args: ['-p', '/clone-theme', '--model', model],
     logPath: path.join(job.workspace_path, 'factory', 'logs', 'clone-0.log'),
     signals: {
       [path.join(reports, 'final.md')]: 'final',
@@ -198,11 +198,11 @@ export function spawnClone(job: FactoryJobRecord, scrub = true, timeouts: RunTim
 }
 
 /** Spawn a fix session for one iteration. Completion = fix-complete-<iter>.md sentinel. */
-export function spawnFix(job: FactoryJobRecord, iteration: number, scrub = true, timeouts: RunTimeouts = {}): RunHandle {
+export function spawnFix(job: FactoryJobRecord, iteration: number, scrub = true, timeouts: RunTimeouts = {}, model: BotModel = 'opus'): RunHandle {
   const promptPath = path.join(job.workspace_path, 'factory', `fix-prompt-${iteration}.md`);
   return run({
     cwd: job.workspace_path,
-    args: ['-p', `You are an autonomous fix session. Read the file at ${promptPath} and execute it exactly. Never wait for user input.`, '--model', 'opus'],
+    args: ['-p', `You are an autonomous fix session. Read the file at ${promptPath} and execute it exactly. Never wait for user input.`, '--model', model],
     logPath: path.join(job.workspace_path, 'factory', 'logs', `fix-${iteration}.log`),
     signals: { [path.join(job.workspace_path, 'qa', 'reports', `fix-complete-${iteration}.md`)]: 'sentinel' },
     inactivityMs: timeouts.inactivityMs ?? config.factory.inactivityTimeoutMin * 60_000,

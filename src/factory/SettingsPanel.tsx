@@ -1,8 +1,30 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { CheckCircle2, ChevronDown, Cpu, FlaskConical, FolderCog, RefreshCw, Save, ScanSearch, ShieldCheck, TimerReset, TriangleAlert, XCircle } from 'lucide-react';
+import { Activity, Bot, Camera, CheckCircle2, ChevronDown, Clock3, Cpu, Eraser, FlaskConical, FolderCog, Gauge, Hammer, Hourglass, KeyRound, LayoutList, Layers, ListPlus, MousePointerClick, OctagonPause, PauseCircle, RefreshCw, Repeat2, Save, ScanSearch, ShieldCheck, Target, TimerReset, TrendingUp, TriangleAlert, Type, Wrench, XCircle } from 'lucide-react';
 import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle, ConfirmDialog, Field, Separator, Slider, Spinner, Switch, useToast } from './ui';
 import { api } from './api';
-import type { FactorySettings, Job, QaSelftestResult, SettingsResponse } from './types';
+import type { BotModel, FactorySettings, Job, QaSelftestResult, SettingsResponse } from './types';
+
+const MODEL_META: Record<BotModel, { label: string; hint: string }> = {
+  opus: { label: 'Opus', hint: 'Most reliable · default' },
+  sonnet: { label: 'Sonnet', hint: '~2–3× faster' },
+  haiku: { label: 'Haiku', hint: 'Fastest · least careful' },
+};
+
+function ModelPicker({ value, onChange, ariaLabel }: { value: BotModel; onChange: (model: BotModel) => void; ariaLabel: string }) {
+  return (
+    <div role="radiogroup" aria-label={ariaLabel} className="grid grid-cols-3 gap-2">
+      {(Object.keys(MODEL_META) as BotModel[]).map((model) => (
+        <button
+          key={model} type="button" role="radio" aria-checked={value === model} onClick={() => onChange(model)}
+          className={`flex flex-col items-start gap-0.5 rounded-xl border px-3.5 py-2.5 text-left transition-all ${value === model ? 'border-primary bg-primary/5 shadow-sm' : 'border-border bg-card hover:border-ring/50'}`}
+        >
+          <span className="text-[13.5px] font-bold">{MODEL_META[model].label}</span>
+          <span className="text-[11.5px] font-semibold text-muted-foreground">{MODEL_META[model].hint}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
 
 function SectionHeader({ icon, title, description, danger }: { icon: ReactNode; title: string; description?: string; danger?: boolean }) {
   return (
@@ -112,9 +134,11 @@ function QaSelfTest() {
                 className="mt-3 inline-flex items-center gap-1 text-[13px] font-bold text-foreground transition-opacity hover:opacity-70">
                 <ChevronDown className={`size-4 transition-transform ${showLog ? 'rotate-180' : ''}`} /> {showLog ? 'Hide log' : 'Show log'}
               </button>
-              {showLog && (
-                <pre className="mt-2 max-h-72 overflow-auto rounded-lg bg-terminal p-3.5 font-mono text-[12px] leading-5 text-zinc-100">{result.log}</pre>
-              )}
+              <div className={`collapse-panel${showLog ? ' is-open' : ''}`} aria-hidden={!showLog}>
+                <div className="collapse-panel__inner">
+                  <pre className="mt-2 max-h-72 overflow-auto rounded-lg bg-terminal p-3.5 font-mono text-[12px] leading-5 text-zinc-100">{result.log}</pre>
+                </div>
+              </div>
             </>
           )}
         </div>
@@ -158,20 +182,39 @@ export function SettingsPanel({ jobs, refreshFleet }: { jobs: Job[]; refreshFlee
   return (
     <div className="stagger mx-auto flex w-full max-w-2xl flex-col gap-5 pb-24">
       <Card>
+        <SectionHeader icon={<Bot />} title="Models" description="Which Claude model each bot runs on — switch to compare speed against reliability." />
+        <CardContent className="flex flex-col gap-5">
+          <Field icon={<Hammer />} label="Clone & fix sessions" help="The heavy theme work: cloning the React site and fix iterations. Opus is the most careful; Sonnet is a good speed experiment; Haiku is fastest but misses details.">
+            <ModelPicker value={draft.cloneModel} onChange={(model) => set('cloneModel', model)} ariaLabel="Clone and fix model" />
+          </Field>
+          <Separator />
+          <Field icon={<KeyRound />} label="Key-collector bot (Chrome)" help="Drives your Chrome to create the app and fetch credentials.">
+            <ModelPicker value={draft.collectorModel} onChange={(model) => set('collectorModel', model)} ariaLabel="Key collector model" />
+          </Field>
+          {draft.collectorModel !== 'opus' && (
+            <p className="flex items-start gap-2 rounded-xl border border-warning/30 bg-warning/5 px-3.5 py-2.5 text-[13px] font-semibold leading-relaxed text-warning">
+              <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+              Heads up: in testing, Sonnet and Haiku refuse this bot's mission (they treat autonomous credential fetching as suspicious) and the run dies right after boot. Opus is the only model that reliably completes it.
+            </p>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
         <SectionHeader icon={<Cpu />} title="Execution" description="How many stores run at once and how launches are spaced." />
         <CardContent className="flex flex-col gap-5">
-          <Field label="Parallel clone slots" help={lockNote('concurrency') ?? 'Each slot is a full Claude session. 2 is a good balance; >3 burns usage limits fast.'}>
+          <Field icon={<Layers />} label="Parallel clone slots" help={lockNote('concurrency') ?? 'Each slot is a full Claude session. 2 is a good balance; >3 burns usage limits fast.'}>
             <Slider value={draft.concurrency} onValueChange={(value) => set('concurrency', value)} min={1} max={5} disabled={locked.concurrency} />
           </Field>
-          <Field label="Launch stagger (seconds)" help={lockNote('launchStaggerSec') ?? 'Delay between slot launches so simultaneous clones do not spike token spend.'}>
+          <Field icon={<Hourglass />} label="Launch stagger (seconds)" help={lockNote('launchStaggerSec') ?? 'Delay between slot launches so simultaneous clones do not spike token spend.'}>
             <Slider value={draft.launchStaggerSec} onValueChange={(value) => set('launchStaggerSec', value)} min={0} max={600} step={10} format={(value) => `${value}s`} disabled={locked.launchStaggerSec} />
           </Field>
           <div className="flex items-center justify-between gap-4">
             <div>
-              <p className="text-[15px] font-bold">Pause queue on usage limit</p>
+              <p className="flex items-center gap-2 text-[15px] font-bold [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-muted-foreground"><PauseCircle /> Pause queue on usage limit</p>
               <p className="mt-0.5 text-[13px] font-medium leading-relaxed text-muted-foreground">When a run hits the Claude usage limit, hold all queued jobs instead of burning through them.</p>
             </div>
-            <Switch checked={draft.pauseQueueOnUsageLimit} onCheckedChange={(value) => set('pauseQueueOnUsageLimit', value)} />
+            <Switch checked={draft.pauseQueueOnUsageLimit} onCheckedChange={(value) => set('pauseQueueOnUsageLimit', value)} aria-label="Pause queue on usage limit" />
           </div>
         </CardContent>
       </Card>
@@ -179,16 +222,16 @@ export function SettingsPanel({ jobs, refreshFleet }: { jobs: Job[]; refreshFlee
       <Card>
         <SectionHeader icon={<TimerReset />} title="Timeouts" description="Watchdogs that kill stalled runs and mark the job blocked (resumable)." />
         <CardContent className="flex flex-col gap-5">
-          <Field label="Inactivity watchdog (minutes)" help={lockNote('inactivityTimeoutMin') ?? 'Kill a CLI session with no output for this long.'}>
+          <Field icon={<Activity />} label="Inactivity watchdog (minutes)" help={lockNote('inactivityTimeoutMin') ?? 'Kill a CLI session with no output for this long.'}>
             <Slider value={draft.inactivityTimeoutMin} onValueChange={(value) => set('inactivityTimeoutMin', value)} min={5} max={120} format={(value) => `${value}m`} disabled={locked.inactivityTimeoutMin} />
           </Field>
-          <Field label="Clone wall-clock cap" help={lockNote('cloneTimeoutMin')}>
+          <Field icon={<Clock3 />} label="Clone wall-clock cap" help={lockNote('cloneTimeoutMin')}>
             <Slider value={draft.cloneTimeoutMin} onValueChange={(value) => set('cloneTimeoutMin', value)} min={30} max={720} step={10} format={(value) => `${value}m`} disabled={locked.cloneTimeoutMin} />
           </Field>
-          <Field label="Fix session cap" help={lockNote('fixTimeoutMin')}>
+          <Field icon={<Wrench />} label="Fix session cap" help={lockNote('fixTimeoutMin')}>
             <Slider value={draft.fixTimeoutMin} onValueChange={(value) => set('fixTimeoutMin', value)} min={10} max={240} step={5} format={(value) => `${value}m`} disabled={locked.fixTimeoutMin} />
           </Field>
-          <Field label="QA run cap" help={lockNote('qaTimeoutMin')}>
+          <Field icon={<Gauge />} label="QA run cap" help={lockNote('qaTimeoutMin')}>
             <Slider value={draft.qaTimeoutMin} onValueChange={(value) => set('qaTimeoutMin', value)} min={5} max={120} step={5} format={(value) => `${value}m`} disabled={locked.qaTimeoutMin} />
           </Field>
         </CardContent>
@@ -197,35 +240,35 @@ export function SettingsPanel({ jobs, refreshFleet }: { jobs: Job[]; refreshFlee
       <Card>
         <SectionHeader icon={<ScanSearch />} title="QA & convergence" description="Defaults for new jobs, and how the composite match score is weighed." />
         <CardContent className="flex flex-col gap-5">
-          <Field label="Default max fix iterations">
+          <Field icon={<Repeat2 />} label="Default max fix iterations">
             <Slider value={draft.defaultMaxIterations} onValueChange={(value) => set('defaultMaxIterations', value)} min={1} max={10} />
           </Field>
-          <Field label="Default convergence threshold">
+          <Field icon={<Target />} label="Default convergence threshold">
             <Slider value={draft.defaultScoreThreshold} onValueChange={(value) => set('defaultScoreThreshold', value)} min={0.5} max={1} step={0.01} format={(value) => `${Math.round(value * 100)}%`} />
           </Field>
           <Separator />
           <p className="text-[13.5px] font-bold">Score weights <span className="font-semibold text-muted-foreground">(normalized on save — currently {Math.round((draft.scoreWeights.presence / weightTotal) * 100)}% / {Math.round((draft.scoreWeights.text / weightTotal) * 100)}% / {Math.round((draft.scoreWeights.interaction / weightTotal) * 100)}%)</span></p>
-          <Field label="Section presence" help="Are all React sections there?">
+          <Field icon={<LayoutList />} label="Section presence" help="Are all React sections there?">
             <Slider value={draft.scoreWeights.presence} onValueChange={(value) => setWeight('presence', value)} min={0} max={1} step={0.05} format={(value) => value.toFixed(2)} />
           </Field>
-          <Field label="Text match" help="Does the copy match, word for word?">
+          <Field icon={<Type />} label="Text match" help="Does the copy match, word for word?">
             <Slider value={draft.scoreWeights.text} onValueChange={(value) => setWeight('text', value)} min={0} max={1} step={0.05} format={(value) => value.toFixed(2)} />
           </Field>
-          <Field label="Interaction parity" help="Do buttons, links, and menus behave the same?">
+          <Field icon={<MousePointerClick />} label="Interaction parity" help="Do buttons, links, and menus behave the same?">
             <Slider value={draft.scoreWeights.interaction} onValueChange={(value) => setWeight('interaction', value)} min={0} max={1} step={0.05} format={(value) => value.toFixed(2)} />
           </Field>
           <Separator />
           <div className="flex items-center justify-between gap-4">
             <div>
-              <p className="text-[15px] font-bold">Early-stop when stalled</p>
+              <p className="flex items-center gap-2 text-[15px] font-bold [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-muted-foreground"><OctagonPause /> Early-stop when stalled</p>
               <p className="mt-0.5 text-[13px] font-medium leading-relaxed text-muted-foreground">Stop the loop after two iterations with less than {(draft.noProgressEpsilon * 100).toFixed(0)}% score movement.</p>
             </div>
-            <Switch checked={draft.earlyStopOnNoProgress} onCheckedChange={(value) => set('earlyStopOnNoProgress', value)} />
+            <Switch checked={draft.earlyStopOnNoProgress} onCheckedChange={(value) => set('earlyStopOnNoProgress', value)} aria-label="Early-stop when stalled" />
           </div>
-          <Field label="No-progress epsilon" help="Minimum score delta that counts as progress.">
+          <Field icon={<TrendingUp />} label="No-progress epsilon" help="Minimum score delta that counts as progress.">
             <Slider value={draft.noProgressEpsilon} onValueChange={(value) => set('noProgressEpsilon', value)} min={0} max={0.2} step={0.005} format={(value) => `${(value * 100).toFixed(1)}%`} />
           </Field>
-          <Field label="Keep screenshot iterations" help="Older QA screenshot folders beyond this are eligible for pruning.">
+          <Field icon={<Camera />} label="Keep screenshot iterations" help="Older QA screenshot folders beyond this are eligible for pruning.">
             <Slider value={draft.keepIterations} onValueChange={(value) => set('keepIterations', value)} min={1} max={20} />
           </Field>
         </CardContent>
@@ -248,12 +291,12 @@ export function SettingsPanel({ jobs, refreshFleet }: { jobs: Job[]; refreshFlee
         <CardContent className="flex flex-col gap-5">
           <div className="flex items-center justify-between gap-4">
             <div>
-              <p className="text-[15px] font-bold">Scrub secrets from logs</p>
+              <p className="flex items-center gap-2 text-[15px] font-bold [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-muted-foreground"><Eraser /> Scrub secrets from logs</p>
               <p className="mt-0.5 text-[13px] font-medium leading-relaxed text-muted-foreground">Replace shpat_/shpss_/vso_live_ tokens with *** before logs hit disk.</p>
             </div>
-            <Switch checked={draft.secretScrub} onCheckedChange={(value) => set('secretScrub', value)} />
+            <Switch checked={draft.secretScrub} onCheckedChange={(value) => set('secretScrub', value)} aria-label="Scrub secrets from logs" />
           </div>
-          <Field label="Extra permission allowlist entries (advanced)" help="One per line, appended to each job's scoped .claude/settings.json — e.g. Bash(python:*). The base allowlist already covers node, npm, curl, and the two project domains.">
+          <Field icon={<ListPlus />} label="Extra permission allowlist entries (advanced)" help="One per line, appended to each job's scoped .claude/settings.json — e.g. Bash(python:*). The base allowlist already covers node, npm, curl, and the two project domains.">
             <textarea
               value={draft.extraAllow.join('\n')}
               onChange={(event) => set('extraAllow', event.target.value.split('\n').map((entry) => entry.trim()).filter(Boolean))}
@@ -301,7 +344,7 @@ export function SettingsPanel({ jobs, refreshFleet }: { jobs: Job[]; refreshFlee
         onCancel={() => setDanger(null)}
         onConfirm={async () => {
           setDanger(null);
-          const defaults: Partial<FactorySettings> = { concurrency: 2, launchStaggerSec: 90, inactivityTimeoutMin: 20, cloneTimeoutMin: 240, fixTimeoutMin: 60, qaTimeoutMin: 30, defaultMaxIterations: 5, defaultScoreThreshold: 0.92, scoreWeights: { presence: 0.5, text: 0.3, interaction: 0.2 }, noProgressEpsilon: 0.01, earlyStopOnNoProgress: true, pauseQueueOnUsageLimit: true, keepIterations: 3, secretScrub: true, extraAllow: [] };
+          const defaults: Partial<FactorySettings> = { cloneModel: 'opus', collectorModel: 'opus', concurrency: 2, launchStaggerSec: 90, inactivityTimeoutMin: 20, cloneTimeoutMin: 240, fixTimeoutMin: 60, qaTimeoutMin: 30, defaultMaxIterations: 5, defaultScoreThreshold: 0.92, scoreWeights: { presence: 0.5, text: 0.3, interaction: 0.2 }, noProgressEpsilon: 0.01, earlyStopOnNoProgress: true, pauseQueueOnUsageLimit: true, keepIterations: 3, secretScrub: true, extraAllow: [] };
           const saved = await api.saveSettings(defaults);
           setResponse((current) => current ? { ...current, settings: saved.settings } : current);
           setDraft(saved.settings);

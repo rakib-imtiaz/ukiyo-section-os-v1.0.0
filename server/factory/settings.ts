@@ -1,6 +1,6 @@
 import { config } from '../config';
 import { db } from '../db';
-import { DEFAULT_SCORE_WEIGHTS, type FactorySettings } from './types';
+import { BOT_MODELS, DEFAULT_SCORE_WEIGHTS, type BotModel, type FactorySettings } from './types';
 
 const SETTINGS_KEY = 'factory_settings';
 
@@ -12,6 +12,8 @@ const ENV_LOCKED = new Set(
 
 export function factoryDefaults(): FactorySettings {
   return {
+    cloneModel: 'opus',
+    collectorModel: 'opus',
     concurrency: config.factory.defaultConcurrency,
     launchStaggerSec: config.factory.launchStaggerSec,
     inactivityTimeoutMin: config.factory.inactivityTimeoutMin,
@@ -43,6 +45,9 @@ const clamp = (value: number, min: number, max: number) => Math.min(max, Math.ma
 
 export function sanitizeSettings(input: Partial<FactorySettings>, base: FactorySettings): FactorySettings {
   const next = { ...base, ...input };
+  const model = (value: unknown, fallback: BotModel): BotModel => BOT_MODELS.includes(value as BotModel) ? value as BotModel : fallback;
+  next.cloneModel = model(next.cloneModel, base.cloneModel);
+  next.collectorModel = model(next.collectorModel, base.collectorModel);
   next.concurrency = clamp(Math.round(next.concurrency), 1, 5);
   next.launchStaggerSec = clamp(next.launchStaggerSec, 0, 600);
   next.inactivityTimeoutMin = clamp(next.inactivityTimeoutMin, 5, 120);

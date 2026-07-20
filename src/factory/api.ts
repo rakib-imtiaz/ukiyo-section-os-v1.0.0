@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Job, Iteration, SchedulerStatus, SettingsResponse, FactorySettings, QaSelftestResult } from './types';
+import type { Job, Iteration, SchedulerStatus, SettingsResponse, FactorySettings, QaSelftestResult, CredCheckResult, FactoryStore } from './types';
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api/factory${path}`, {
@@ -39,12 +39,29 @@ export const api = {
   pauseQueue: () => request<{ scheduler: SchedulerStatus }>('/queue/pause', { method: 'POST' }),
   resumeQueue: () => request<{ scheduler: SchedulerStatus }>('/queue/resume', { method: 'POST' }),
   browserStatus: () => request<{ hasPlaywright: boolean; hasChromium: boolean; ready: boolean; playwrightRoot: string; installing: boolean }>('/browser'),
+  /** Detection for the wizard's "use your own Chrome" credential helper. */
+  chromeStatus: () => request<{ chrome: { installed: boolean }; edge: { installed: boolean }; claudeExtension: { installed: boolean } }>('/chrome-status'),
+  /** Open a Shopify admin/accounts page in the user's real Chrome/Edge (their profile, their logins). */
+  openInChrome: (url: string) => request<{ ok: boolean; opened: string; browser: string }>('/open-in-chrome', { method: 'POST', body: JSON.stringify({ url }) }),
+  // "Lazy mode" key collector: a spawned Claude agent drives the user's Chrome to fetch app credentials.
+  collectKeysStart: (storeUrl: string, projectName?: string) => request<{ started: boolean }>('/collect-keys/start', { method: 'POST', body: JSON.stringify({ storeUrl, projectName }) }),
+  collectKeysStatus: (take = false) => request<{ status: 'idle' | 'working' | 'delivered' | 'partial' | 'failed'; running: boolean; elapsedSec: number | null; finishedAgoSec: number | null; note: string | null; log: Array<{ at: number; text: string }>; clientId: string | null; clientSecret: string | null; hasSecret: boolean }>(`/collect-keys/status${take ? '?take=1' : ''}`),
+  collectKeysStop: () => request<{ stopped: boolean }>('/collect-keys/stop', { method: 'POST' }),
+  /** Remove a store's credentials from everywhere: saved stores, job ciphers, API.txt, collector memory. */
+  purgeKeys: (storeUrl: string) => request<{ ok: boolean; stores: number; jobs: number; files: number }>('/keys/purge', { method: 'POST', body: JSON.stringify({ storeUrl }) }),
   installBrowser: () => request<{ installing: boolean; detail?: string }>('/browser/install', { method: 'POST' }),
   /** Long-running (up to ~5 min server-side) — runs the QA calibration fixture through the full scoring pipeline. */
   qaSelftest: () => request<QaSelftestResult>('/qa-selftest', { method: 'POST' }),
   validate: (kind: string, value: string) => request<{ ok: boolean; detail?: string }>('/validate', { method: 'POST', body: JSON.stringify({ kind, value }) }),
-  validateCreds: (storeUrl: string, clientId: string, clientSecret: string) =>
-    request<{ ok: boolean; detail?: string; shopName?: string | null; scopes?: { required: Array<{ scope: string; granted: boolean }>; recommended: Array<{ scope: string; granted: boolean }> } }>('/validate-creds', { method: 'POST', body: JSON.stringify({ storeUrl, clientId, clientSecret }) }),
+  validateCreds: (storeUrl: string, clientId: string, clientSecret: string, canary = false) =>
+    request<CredCheckResult>('/validate-creds', { method: 'POST', body: JSON.stringify({ storeUrl, clientId, clientSecret, canary }) }),
+  // Saved stores (lazy onboarding): credentials entered once, reused on every job.
+  listStores: () => request<{ stores: FactoryStore[] }>('/stores'),
+  saveStore: (input: { label?: string; storeUrl: string; clientId: string; clientSecret: string; storefrontPassword?: string }) =>
+    request<{ store: FactoryStore }>('/stores', { method: 'POST', body: JSON.stringify(input) }),
+  deleteStore: (id: string) => fetch(`/api/factory/stores/${id}`, { method: 'DELETE' }).then((response) => { if (!response.ok && response.status !== 204) throw new Error(`HTTP ${response.status}`); }),
+  /** Test a saved store using its server-side stored secret (never round-trips to the browser). */
+  testStore: (id: string, canary = false) => request<CredCheckResult>(`/stores/${id}/test`, { method: 'POST', body: JSON.stringify({ canary }) }),
 };
 
 /** Poll a fetcher on an interval while the component is mounted (and the tab visible). */

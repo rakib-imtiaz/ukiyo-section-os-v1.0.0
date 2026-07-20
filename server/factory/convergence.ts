@@ -239,7 +239,7 @@ export async function driveJob(jobId: string, control: DriveControl) {
       await clearSignalFiles(cloneBlockerSignals(job));
       await transition(job.id, 'cloning', 'Headless /clone-theme run in progress', { started_at: job.started_at ?? new Date().toISOString() });
       const iterationRow = await recordIteration(job, 0, 'clone', path.join('factory', 'logs', 'clone-0.log'));
-      const outcome = await awaitRun(spawnClone(job, settings.secretScrub, { inactivityMs: min(settings.inactivityTimeoutMin), wallClockMs: min(settings.cloneTimeoutMin) }), control);
+      const outcome = await awaitRun(spawnClone(job, settings.secretScrub, { inactivityMs: min(settings.inactivityTimeoutMin), wallClockMs: min(settings.cloneTimeoutMin) }, settings.cloneModel), control);
 
       if (outcome.outcome === 'spawn_error') {
         await db.finishFactoryIteration(iterationRow.id, 'failed');
@@ -390,7 +390,7 @@ async function runConvergenceLoop(job: FactoryJobRecord, settings: FactorySettin
     // Clear a prior run's sentinel so this fix session isn't instantly re-settled by it.
     await clearSignalFiles([path.join(job.workspace_path, 'qa', 'reports', `fix-complete-${iteration}.md`)]);
     const fixRow = await recordIteration(job, iteration, 'fix', path.join('factory', 'logs', `fix-${iteration}.log`));
-    const outcome = await awaitRun(spawnFix(job, iteration, settings.secretScrub, { inactivityMs: min(settings.inactivityTimeoutMin), wallClockMs: min(settings.fixTimeoutMin) }), control);
+    const outcome = await awaitRun(spawnFix(job, iteration, settings.secretScrub, { inactivityMs: min(settings.inactivityTimeoutMin), wallClockMs: min(settings.fixTimeoutMin) }, settings.cloneModel), control);
 
     if (outcome.outcome === 'killed') { await db.finishFactoryIteration(fixRow.id, 'killed'); return; }
     if (outcome.outcome === 'spawn_error') {

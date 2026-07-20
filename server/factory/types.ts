@@ -23,6 +23,8 @@ export interface JobIntake {
   storeUrl: string;
   clientId: string;
   clientSecret: string;
+  /** When set, credentials are pulled from this saved store server-side (secret never round-trips). */
+  savedStoreId?: string;
   storefrontPassword?: string;
   reactFilesPath?: string;
   prefix?: string;
@@ -35,7 +37,15 @@ export interface JobIntake {
 }
 
 // Global factory settings persisted in app_settings under 'factory_settings'.
+/** Claude CLI model aliases the bots can run on. */
+export type BotModel = 'opus' | 'sonnet' | 'haiku';
+export const BOT_MODELS: readonly BotModel[] = ['opus', 'sonnet', 'haiku'];
+
 export interface FactorySettings {
+  /** Model for clone + fix sessions (the heavy theme work). */
+  cloneModel: BotModel;
+  /** Model for the key-collector Chrome bot. Opus recommended — smaller models tend to refuse the mission. */
+  collectorModel: BotModel;
   concurrency: number;
   launchStaggerSec: number;
   inactivityTimeoutMin: number;

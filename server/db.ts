@@ -36,12 +36,15 @@ export interface FactoryJobRecord {
 }
 export interface FactoryIterationRecord { id: string; job_id: string; iteration: number; kind: string; status: string; score: number | null; breakdown: Record<string, unknown> | null; report_path: string | null; log_path: string | null; started_at: string; finished_at: string | null; }
 export interface AppSettingRecord { key: string; value: unknown; updated_at: string; }
+// Saved store credentials for the wizard (006): secrets are ciphers, client_id is public.
+export interface FactoryStoreRecord { id: string; label: string; shop_domain: string; client_id: string; client_secret_cipher: string; storefront_password_cipher: string | null; created_at: string; updated_at: string; }
 
 const now = () => new Date().toISOString();
 const memory = {
   shops: new Map<string, ShopRecord>(), states: new Map<string, { shop: string; expires: number }>(), projects: new Map<string, ProjectRecord>(),
   versions: new Map<string, VersionRecord>(), deployments: new Map<string, DeploymentRecord>(), apiKeys: new Map<string, ApiKeyRecord>(),
   factoryJobs: new Map<string, FactoryJobRecord>(), factoryIterations: new Map<string, FactoryIterationRecord>(), settings: new Map<string, AppSettingRecord>(),
+  factoryStores: new Map<string, FactoryStoreRecord>(),
 };
 
 const FACTORY_JOB_COLUMNS = new Set(['status','status_detail','iteration','max_iterations','score_threshold','last_score','score_history','error','started_at','finished_at','autoswap','auto_qa','qa_mode','qa_engine','dev_theme_name','prefix','workspace_path','best_iteration','best_score']);
@@ -55,11 +58,12 @@ const factoryStatePath = path.join(config.factory.workspaceRoot, '.factory', 'st
 function hydrateFactoryMemory() {
   if (!factoryStatePersistence) return;
   try {
-    const state = JSON.parse(readFileSync(factoryStatePath, 'utf8')) as { jobs?: FactoryJobRecord[]; iterations?: FactoryIterationRecord[]; settings?: AppSettingRecord[]; cloneProjects?: ProjectRecord[] };
+    const state = JSON.parse(readFileSync(factoryStatePath, 'utf8')) as { jobs?: FactoryJobRecord[]; iterations?: FactoryIterationRecord[]; settings?: AppSettingRecord[]; cloneProjects?: ProjectRecord[]; stores?: FactoryStoreRecord[] };
     // Coalesce the 005 best-iteration fields so records persisted before 005 hydrate as null.
     for (const job of state.jobs ?? []) memory.factoryJobs.set(job.id, { ...job, best_iteration: job.best_iteration ?? null, best_score: job.best_score ?? null });
     for (const iteration of state.iterations ?? []) memory.factoryIterations.set(iteration.id, iteration);
     for (const setting of state.settings ?? []) memory.settings.set(setting.key, setting);
+    for (const store of state.stores ?? []) memory.factoryStores.set(store.id, store);
     // Clone-projects mirror factory jobs, so they ride the same persistence file (section
     // projects stay ephemeral in memory mode, matching pre-existing behavior).
     // Coalesce the 004 deploy-target fields so records persisted before 004 hydrate as null.
@@ -68,7 +72,7 @@ function hydrateFactoryMemory() {
 }
 
 function writeFactoryState() {
-  const state = JSON.stringify({ jobs: [...memory.factoryJobs.values()], iterations: [...memory.factoryIterations.values()], settings: [...memory.settings.values()], cloneProjects: [...memory.projects.values()].filter((project) => project.kind === 'clone') });
+  const state = JSON.stringify({ jobs: [...memory.factoryJobs.values()], iterations: [...memory.factoryIterations.values()], settings: [...memory.settings.values()], cloneProjects: [...memory.projects.values()].filter((project) => project.kind === 'clone'), stores: [...memory.factoryStores.values()] });
   mkdirSync(path.dirname(factoryStatePath), { recursive: true });
   // Atomic write: a crash mid-write must not corrupt the file and wipe all job history.
   const tmp = `${factoryStatePath}.${randomUUID().slice(0, 8)}.tmp`;
@@ -361,6 +365,37 @@ class Repository {
   async listFactoryIterations(jobId: string) {
     if (this.pool) return (await this.pool.query<FactoryIterationRecord>('SELECT * FROM factory_iterations WHERE job_id=$1 ORDER BY started_at ASC', [jobId])).rows;
     return [...memory.factoryIterations.values()].filter((item) => item.job_id === jobId).sort((a,b) => a.started_at.localeCompare(b.started_at));
+  }
+
+  // --- Saved factory stores (006): encrypted credential reuse for the wizard ---
+  async listFactoryStores() {
+    if (this.pool) return (await this.pool.query<FactoryStoreRecord>('SELECT * FROM factory_stores ORDER BY created_at ASC')).rows;
+    return [...memory.factoryStores.values()].sort((a,b) => a.created_at.localeCompare(b.created_at));
+  }
+
+  async getFactoryStore(id: string) {
+    if (this.pool) return (await this.pool.query<FactoryStoreRecord>('SELECT * FROM factory_stores WHERE id=$1', [id])).rows[0] ?? null;
+    return memory.factoryStores.get(id) ?? null;
+  }
+
+  /** Upsert keyed on shop_domain. A null storefront password never erases a stored one. */
+  async upsertFactoryStore(input: { label: string; shop_domain: string; client_id: string; client_secret_cipher: string; storefront_password_cipher: string | null }) {
+    if (this.pool) return (await this.pool.query<FactoryStoreRecord>(`INSERT INTO factory_stores (id,label,shop_domain,client_id,client_secret_cipher,storefront_password_cipher)
+      VALUES ($1,$2,$3,$4,$5,$6)
+      ON CONFLICT (shop_domain) DO UPDATE SET label=EXCLUDED.label, client_id=EXCLUDED.client_id, client_secret_cipher=EXCLUDED.client_secret_cipher,
+        storefront_password_cipher=COALESCE(EXCLUDED.storefront_password_cipher, factory_stores.storefront_password_cipher), updated_at=NOW() RETURNING *`,
+      [randomUUID(), input.label, input.shop_domain, input.client_id, input.client_secret_cipher, input.storefront_password_cipher])).rows[0];
+    const existing = [...memory.factoryStores.values()].find((store) => store.shop_domain === input.shop_domain);
+    const record: FactoryStoreRecord = existing
+      ? { ...existing, label: input.label, client_id: input.client_id, client_secret_cipher: input.client_secret_cipher, storefront_password_cipher: input.storefront_password_cipher ?? existing.storefront_password_cipher, updated_at: now() }
+      : { id: randomUUID(), ...input, created_at: now(), updated_at: now() };
+    memory.factoryStores.set(record.id, record); persistFactoryMemory(); return record;
+  }
+
+  async deleteFactoryStore(id: string) {
+    if (this.pool) return Boolean((await this.pool.query('DELETE FROM factory_stores WHERE id=$1', [id])).rowCount);
+    if (!memory.factoryStores.delete(id)) return false;
+    persistFactoryMemory(); return true;
   }
 
   async getSetting(key: string): Promise<unknown> {

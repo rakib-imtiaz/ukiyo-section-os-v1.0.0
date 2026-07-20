@@ -32,6 +32,20 @@ export interface InteractionsReport { interaction?: number; issues?: QaIssue[]; 
 
 export interface QaSelftestResult { ok: boolean; score: number | null; subscores: QaSubscores | null; log: string; error?: string }
 
+/** A saved store (006): secrets are encrypted server-side and never echoed — this is the
+ *  public, safe-to-render shape returned by GET /api/factory/stores. */
+export interface FactoryStore {
+  id: string; label: string; shop_domain: string; client_id: string;
+  has_storefront_password: boolean; created_at: string; updated_at: string;
+}
+
+export interface CredCheckResult {
+  ok: boolean; detail?: string; shopName?: string | null;
+  scopes?: { required: Array<{ scope: string; granted: boolean }>; recommended: Array<{ scope: string; granted: boolean }> };
+  /** Present only when the canary write-test was explicitly requested. */
+  push?: { ok: boolean; detail: string };
+}
+
 const ISSUE_KIND_META: Record<string, { label: string; tone: 'destructive' | 'warning' | 'secondary' | 'info' }> = {
   missing_page: { label: 'Missing page', tone: 'destructive' },
   missing_section: { label: 'Missing section', tone: 'destructive' },
@@ -50,7 +64,10 @@ export function issueKindMeta(kind: string): { label: string; tone: 'destructive
   return ISSUE_KIND_META[kind] ?? { label: kind.replace(/_/g, ' '), tone: 'info' };
 }
 
+export type BotModel = 'opus' | 'sonnet' | 'haiku';
+
 export interface FactorySettings {
+  cloneModel: BotModel; collectorModel: BotModel;
   concurrency: number; launchStaggerSec: number; inactivityTimeoutMin: number; cloneTimeoutMin: number;
   fixTimeoutMin: number; qaTimeoutMin: number; defaultMaxIterations: number; defaultScoreThreshold: number;
   scoreWeights: { presence: number; text: number; interaction: number };
