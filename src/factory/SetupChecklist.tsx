@@ -79,10 +79,13 @@ export function ChromeKeysCard({ storeUrl, projectName, keysOnFile, onKeys, onCh
   const [pasteMsg, setPasteMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [partnerToken, setPartnerToken] = useState('');
   const [orgId, setOrgId] = useState('');
+  // Scripted bot: which of the user's Chrome profiles to open (the one signed into the right Shopify).
+  const [chromeProfiles, setChromeProfiles] = useState<Array<{ dir: string; label: string }>>([]);
+  const [chromeProfile, setChromeProfile] = useState('Default');
   const [copiedMarklet, setCopiedMarklet] = useState(false);
   const [botNote, setBotNote] = useState('');
   const [botElapsed, setBotElapsed] = useState(0);
-  const [botLog, setBotLog] = useState<Array<{ at: number; text: string }>>([]);
+  const [botLog, setBotLog] = useState<Array<{ at: number; text: string; kind?: 'thought' | 'action' | 'system' }>>([]);
   // Stop stays disarmed briefly after start: it renders where the start button was, so a
   // double-click would otherwise start the bot and instantly kill it ("Stopped by user").
   const [stopArmed, setStopArmed] = useState(false);
@@ -94,6 +97,7 @@ export function ChromeKeysCard({ storeUrl, projectName, keysOnFile, onKeys, onCh
   }, [botPhase]);
 
   useEffect(() => { void api.chromeStatus().then(setStatus).catch(() => setStatus(null)); }, []);
+  useEffect(() => { void api.chromeProfiles().then((r) => { if (r.profiles.length) setChromeProfiles(r.profiles); }).catch(() => {}); }, []);
 
   // Re-attach to the server-side bot on mount. The bot is a server process — switching
   // factory tabs, moving wizard steps, or refreshing the page unmounts this card but must
@@ -169,7 +173,8 @@ export function ChromeKeysCard({ storeUrl, projectName, keysOnFile, onKeys, onCh
     setBotNote('');
     try { if ('Notification' in window && Notification.permission === 'default') void Notification.requestPermission(); } catch { /* optional */ }
     loginNotified.current = false;
-    const extra = runMethod === 'partnerapi' ? { partnerToken: partnerToken.trim(), orgId: orgId.trim() } : undefined;
+    const extra = runMethod === 'partnerapi' ? { partnerToken: partnerToken.trim(), orgId: orgId.trim() }
+      : runMethod === 'scripted' ? { chromeProfile } : undefined;
     try {
       await api.collectKeysStart(storeUrl, projectName, runMethod, extra);
       setBotPhase('running');
@@ -306,8 +311,17 @@ export function ChromeKeysCard({ storeUrl, projectName, keysOnFile, onKeys, onCh
             <div className="mt-3 rounded-xl border border-border bg-card p-4">
               <p className="text-[13px] font-bold text-foreground">Deterministic scripted bot — no AI, faster, free</p>
               <p className="mt-1 text-[12.5px] font-medium leading-relaxed text-muted-foreground">
-                Opens a dedicated ThemeBot browser and clicks through create → scopes → install → harvest itself. First run: log into Shopify once in that window (you solve the captcha); the session persists after that. It can break when Shopify changes its dashboard layout — if it stalls, use the AI bot or bookmarklet.
+                Reuses <b className="text-foreground">your own Chrome profile</b> (already signed into Shopify — no login wall) and clicks through create → scopes → install → harvest itself. <b className="text-foreground">Close all your Chrome windows first</b> — Chrome locks the profile to one instance, so the bot can't open it while Chrome is running (open this app in Edge or Firefox to run it). It reopens your own profile, works, and closes. It can break when Shopify changes its dashboard layout — if it stalls, use the AI bot or bookmarklet.
               </p>
+              {chromeProfiles.length > 1 && (
+                <label className="mt-3 flex flex-col gap-1">
+                  <span className="text-[12px] font-bold text-foreground">Which Chrome profile is signed into Shopify?</span>
+                  <select value={chromeProfile} onChange={(event) => setChromeProfile(event.target.value)} className="rounded-lg border border-border bg-background px-3 py-2 text-[13px] font-medium text-foreground">
+                    {chromeProfiles.map((profile) => <option key={profile.dir} value={profile.dir}>{profile.label}</option>)}
+                  </select>
+                  <span className="text-[11.5px] font-medium text-muted-foreground">Pick the profile whose Shopify account owns the store. Wrong one → it&apos;ll hit a login page.</span>
+                </label>
+              )}
               <button type="button" onClick={() => void startBot('scripted')} disabled={!shopHandle || botPhase === 'running' || keysOnFile} className="mt-2.5 inline-flex items-center gap-2 rounded-xl bg-success px-5 py-2.5 text-[14px] font-bold text-white transition-opacity hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-40"><Cpu className="size-4.5" /> Run the scripted bot</button>
             </div>
           )}
@@ -392,24 +406,19 @@ export function ChromeKeysCard({ storeUrl, projectName, keysOnFile, onKeys, onCh
               <div className="mt-3 rounded-xl border border-success/30 bg-card p-4">
                 {botPhase === 'running' && (
                   <>
-                    <p className="flex items-center gap-2 text-[13.5px] font-bold text-foreground">
-                      <Loader2 className="size-4 animate-spin text-success" /> Bot is working <span className="tabular-nums text-muted-foreground">{botElapsed}s</span>
-                    </p>
-                    {/* Live activity feed straight from the agent's event stream (always redacted). */}
-                    <div className="mt-2.5 flex flex-col gap-1 rounded-lg bg-muted/60 p-3">
-                      {(botLog.length ? botLog.slice(-5) : [{ at: 0, text: 'Spawning the agent…' }]).map((entry, index, list) => (
-                        <p key={`${entry.at}-${index}`} className={`flex items-start gap-2 text-[12.5px] leading-relaxed ${index === list.length - 1 ? 'font-bold text-foreground' : 'font-medium text-muted-foreground'}`}>
-                          {index === list.length - 1 ? <Loader2 className="mt-0.5 size-3.5 shrink-0 animate-spin text-success" /> : <Check className="mt-0.5 size-3.5 shrink-0 text-success/60" />}
-                          <span className="min-w-0">{entry.text}</span>
-                        </p>
-                      ))}
-                    </div>
+                    {/* Live-cognition viewport — the agent's own thoughts + Chrome actions,
+                        streamed straight from its event feed (always key-redacted server-side). */}
+                    <CognitionViewport log={botLog} elapsed={botElapsed} method={method} />
                     {method === 'partnerapi' ? (
                       <p className="mt-1.5 text-[12px] font-medium leading-relaxed text-muted-foreground">Querying the Partner API — this is headless and usually finishes in a few seconds.</p>
+                    ) : method === 'scripted' ? (
+                      <p className="mt-1.5 text-[12px] font-medium leading-relaxed text-muted-foreground">
+                        <b className="text-foreground">A Chrome window opens with your own profile and clicks through the steps on its own</b> — don't touch it. If it says "close Chrome", quit every Chrome window and click Run again. A full setup (create app → scopes → release → install → fetch keys) takes a minute or two; you'll get a notification when it's done.
+                      </p>
                     ) : (
                       <p className="mt-1.5 text-[12px] font-medium leading-relaxed text-muted-foreground">
                         <b className="text-foreground">If Shopify asks you to log in, just log in — the bot waits for you and continues by itself.</b> Nothing else to click here:
-                        {method === 'scripted' ? ' the ThemeBot browser opens and clicks through the steps on its own.' : ' the first ~30s is the agent booting, then Chrome starts moving on its own.'} A full first-time setup (create app → scopes → release → install → fetch keys)
+                        the first ~30s is the agent booting, then Chrome starts moving on its own. A full first-time setup (create app → scopes → release → install → fetch keys)
                         can take several minutes; you'll get a notification when it's done. Don't close the browser window or click Stop unless the feed is clearly stuck.
                       </p>
                     )}
@@ -441,6 +450,42 @@ export function ChromeKeysCard({ storeUrl, projectName, keysOnFile, onKeys, onCh
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/** The "sci-fi processing screen": a dark HUD viewport that streams the collector agent's live
+ *  cognition — its own narration (thoughts) interleaved with the Chrome actions it fires — so the
+ *  user can watch Claude think while it drives their browser. Reads the same redacted feed the
+ *  plain list used; only server-run methods (AI / scripted / partnerapi) produce a stream. */
+function CognitionViewport({ log, elapsed, method }: {
+  log: Array<{ at: number; text: string; kind?: 'thought' | 'action' | 'system' }>;
+  elapsed: number;
+  method: CollectionMethod;
+}) {
+  const boot = method === 'partnerapi' ? 'Opening a headless link to the Partner API…' : 'Booting neural link — spinning up the agent…';
+  const lines = log.length ? log.slice(-7) : [{ at: 0, text: boot, kind: 'system' as const }];
+  const label = method === 'scripted' ? 'THEMEBOT · SCRIPTED RUN' : method === 'partnerapi' ? 'PARTNER API · LINK' : 'CLAUDE · LIVE COGNITION';
+  const glyph = (kind?: string) => (kind === 'action' ? '▸' : kind === 'thought' ? '›' : '·');
+  return (
+    <div className="cognition mt-2.5">
+      <div className="cognition-head">
+        <span className="cognition-core" aria-hidden />
+        <span className="cognition-title">{label}</span>
+        <span className="cognition-elapsed tabular-nums">{elapsed}s</span>
+      </div>
+      <div className="cognition-stream" role="log" aria-live="polite" aria-label="Agent activity">
+        {lines.map((entry, index, list) => {
+          const active = index === list.length - 1;
+          const kind = entry.kind ?? 'system';
+          return (
+            <div key={`${entry.at}-${index}`} className={`cognition-line cognition-${kind}${active ? ' is-active' : ''}`}>
+              <span className="cognition-glyph" aria-hidden>{glyph(kind)}</span>
+              <span className="cognition-text">{entry.text}{active && <span className="cognition-cursor" aria-hidden />}</span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

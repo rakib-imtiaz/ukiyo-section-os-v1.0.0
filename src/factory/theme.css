@@ -288,6 +288,89 @@
 .factory-root .intro-tagline { animation: factory-fade-in 0.6s ease 0.95s both; }
 .factory-root .intro-skip { animation: factory-fade-in 0.5s ease 1.1s both; }
 
+/* ── Live-cognition viewport ─────────────────────────────────────────────────
+   The credential bot's "sci-fi processing screen": a dark HUD that streams the
+   agent's thoughts (its own narration) and actions (Chrome tools it fires) while
+   it drives the user's browser. Always dark — an embedded "monitor" that reads as
+   intentional even inside the otherwise clean light UI. */
+.factory-root .cognition {
+  position: relative; overflow: hidden; border-radius: 12px;
+  background: radial-gradient(130% 100% at 50% 0%, #0b1524 0%, #060a12 58%, #04060b 100%);
+  border: 1px solid rgba(52, 211, 153, 0.24);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.02),
+              inset 0 26px 46px -34px rgba(52,211,153,0.45),
+              0 12px 34px -20px rgba(0,0,0,0.75);
+}
+/* Scanlines + faint grid — CRT texture */
+.factory-root .cognition::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 0; opacity: 0.55;
+  background-image:
+    repeating-linear-gradient(0deg, rgba(255,255,255,0.028) 0 1px, transparent 1px 3px),
+    linear-gradient(90deg, rgba(52,211,153,0.05) 1px, transparent 1px),
+    linear-gradient(0deg,  rgba(52,211,153,0.05) 1px, transparent 1px);
+  background-size: 100% 3px, 28px 28px, 28px 28px;
+}
+/* Slow scan sweep gliding down the panel */
+.factory-root .cognition::after {
+  content: ''; position: absolute; left: 0; right: 0; top: -45%; height: 45%; z-index: 1; pointer-events: none;
+  background: linear-gradient(180deg, transparent, rgba(52,211,153,0.10) 62%, transparent);
+  animation: cognition-sweep 4.6s linear infinite;
+}
+@keyframes cognition-sweep { from { top: -45%; } to { top: 100%; } }
+
+.factory-root .cognition-head {
+  position: relative; z-index: 2; display: flex; align-items: center; gap: 9px;
+  padding: 8px 12px; border-bottom: 1px solid rgba(52,211,153,0.16); background: rgba(4,7,12,0.55);
+}
+.factory-root .cognition-core {
+  width: 9px; height: 9px; border-radius: 50%; background: #34d399; flex: none;
+  box-shadow: 0 0 10px 1px rgba(52,211,153,0.8); animation: cognition-pulse 1.6s ease-out infinite;
+}
+@keyframes cognition-pulse {
+  0%   { box-shadow: 0 0 10px 1px rgba(52,211,153,0.75), 0 0 0 0 rgba(52,211,153,0.55); }
+  70%  { box-shadow: 0 0 10px 1px rgba(52,211,153,0.35), 0 0 0 8px rgba(52,211,153,0); }
+  100% { box-shadow: 0 0 10px 1px rgba(52,211,153,0.75), 0 0 0 0 rgba(52,211,153,0); }
+}
+.factory-root .cognition-title {
+  font-family: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+  font-size: 10.5px; letter-spacing: 0.2em; font-weight: 700; color: #7ee7c2; text-transform: uppercase;
+}
+.factory-root .cognition-elapsed {
+  margin-left: auto; font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11px; font-weight: 700; color: #4d6f65;
+}
+
+.factory-root .cognition-stream {
+  position: relative; z-index: 2; display: flex; flex-direction: column; justify-content: flex-end;
+  gap: 5px; padding: 13px 14px; min-height: 140px; max-height: 196px; overflow: hidden;
+  font-family: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+  -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 24%, #000 100%);
+          mask-image: linear-gradient(180deg, transparent 0, #000 24%, #000 100%);
+}
+.factory-root .cognition-line {
+  display: flex; align-items: flex-start; gap: 8px; font-size: 12px; line-height: 1.5;
+  animation: cognition-in 0.3s ease both;
+}
+@keyframes cognition-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+.factory-root .cognition-glyph { flex: none; opacity: 0.85; }
+.factory-root .cognition-text { min-width: 0; word-break: break-word; }
+
+.factory-root .cognition-thought { color: rgba(206,240,226,0.60); }
+.factory-root .cognition-thought .cognition-glyph { color: #34d399; }
+.factory-root .cognition-action { color: rgba(150,214,255,0.68); }
+.factory-root .cognition-action .cognition-glyph { color: #5fd0ff; }
+.factory-root .cognition-system { color: rgba(150,170,185,0.48); }
+
+/* Newest line = the "active" thought: full brightness with a soft glow + typing caret */
+.factory-root .cognition-thought.is-active { color: #d9f7ec; text-shadow: 0 0 9px rgba(52,211,153,0.4); }
+.factory-root .cognition-action.is-active  { color: #c6ecff; text-shadow: 0 0 9px rgba(95,208,255,0.4); }
+.factory-root .cognition-system.is-active  { color: #b7c6d1; }
+.factory-root .cognition-cursor {
+  display: inline-block; width: 7px; height: 13px; margin-left: 3px; vertical-align: text-bottom;
+  background: currentColor; animation: cognition-blink 1s step-end infinite;
+}
+@keyframes cognition-blink { 50% { opacity: 0; } }
+
 /* Respect reduced motion — kill every animation & transition on the surface */
 @media (prefers-reduced-motion: reduce) {
   .factory-root *, .factory-root *::before, .factory-root *::after {

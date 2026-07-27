@@ -45,9 +45,11 @@ export const api = {
   openInChrome: (url: string) => request<{ ok: boolean; opened: string; browser: string }>('/open-in-chrome', { method: 'POST', body: JSON.stringify({ url }) }),
   // Key collectors: 'llm' (Claude agent drives Chrome), 'scripted' (deterministic Playwright),
   // 'partnerapi' (headless GraphQL secret-read). All report through the same status endpoint.
-  collectKeysStart: (storeUrl: string, projectName?: string, method: CollectionMethod = 'llm', extra?: { partnerToken?: string; orgId?: string; clientId?: string }) =>
+  collectKeysStart: (storeUrl: string, projectName?: string, method: CollectionMethod = 'llm', extra?: { partnerToken?: string; orgId?: string; clientId?: string; chromeProfile?: string }) =>
     request<{ started: boolean }>('/collect-keys/start', { method: 'POST', body: JSON.stringify({ storeUrl, projectName, method, ...extra }) }),
-  collectKeysStatus: (take = false) => request<{ status: 'idle' | 'working' | 'delivered' | 'partial' | 'failed'; method: CollectionMethod | null; running: boolean; elapsedSec: number | null; finishedAgoSec: number | null; note: string | null; log: Array<{ at: number; text: string }>; clientId: string | null; clientSecret: string | null; hasSecret: boolean }>(`/collect-keys/status${take ? '?take=1' : ''}`),
+  /** Chrome profiles for the scripted collector's profile picker (which is signed into Shopify). */
+  chromeProfiles: () => request<{ profiles: Array<{ dir: string; label: string }> }>('/chrome-profiles'),
+  collectKeysStatus: (take = false) => request<{ status: 'idle' | 'working' | 'delivered' | 'partial' | 'failed'; method: CollectionMethod | null; running: boolean; elapsedSec: number | null; finishedAgoSec: number | null; note: string | null; log: Array<{ at: number; text: string; kind?: 'thought' | 'action' | 'system' }>; clientId: string | null; clientSecret: string | null; hasSecret: boolean }>(`/collect-keys/status${take ? '?take=1' : ''}`),
   collectKeysStop: () => request<{ stopped: boolean }>('/collect-keys/stop', { method: 'POST' }),
   /** Persist keys the user obtained themselves (manual paste or bookmarklet): encrypted saved store + wizard hand-off. */
   saveKeys: (body: { storeUrl: string; projectName?: string; clientId: string; clientSecret: string }) => request<{ ok: boolean }>('/keys/save', { method: 'POST', body: JSON.stringify(body) }),

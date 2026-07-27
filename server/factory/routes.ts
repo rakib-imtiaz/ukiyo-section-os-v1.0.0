@@ -12,7 +12,7 @@ import { factoryScheduler } from './scheduler';
 import { getFactorySettings, lockedFields, updateFactorySettings } from './settings';
 import { buildSpawnEnv, scrubSecrets } from './runner';
 import { TERMINAL_STATUSES, type CollectionMethod, type JobIntake } from './types';
-import { runScriptedCollector, type ScriptedHandle } from './scripted-collector';
+import { runScriptedCollector, listChromeProfiles, type ScriptedHandle } from './scripted-collector';
 import { fetchAppSecretViaPartnerApi } from './partner-api';
 
 type AsyncHandler = (request: Request, response: Response, next: NextFunction) => Promise<unknown>;
@@ -413,6 +413,12 @@ export function createFactoryRouter() {
     });
   }));
 
+  // Chrome profiles for the scripted collector's profile picker (which one is signed into the
+  // right Shopify account). Read from Chrome's own Local State; empty if Chrome isn't installed.
+  router.get('/chrome-profiles', handle(async (_request, response) => {
+    response.json({ profiles: listChromeProfiles() });
+  }));
+
   router.post('/open-in-chrome', handle(async (request, response) => {
     const raw = typeof request.body?.url === 'string' ? request.body.url : '';
     let url: URL;
@@ -455,33 +461,38 @@ export function createFactoryRouter() {
 
   // Live activity feed for the wizard panel — friendly one-liners derived from the spawned
   // agent's stream-json events, ALWAYS redacted (no key material can ever appear here).
-  let collectLog: Array<{ at: number; text: string }> = [];
+  // 'thought' = the agent's own narration/reasoning; 'action' = a Chrome tool it fired;
+  // 'system' = our own status lines. The wizard's live-cognition viewport styles each differently.
+  type LogKind = 'thought' | 'action' | 'system';
+  let collectLog: Array<{ at: number; text: string; kind: LogKind }> = [];
   const redactKeys = (text: string) => text.replace(/shpss_[A-Za-z0-9_-]+/g, 'shpss_•••').replace(/\b[0-9a-f]{32}\b/gi, '••••••••');
-  const pushCollectLog = (text: string) => {
+  const pushCollectLog = (text: string, kind: LogKind = 'system') => {
     const clean = redactKeys(text);
     if (collectLog[collectLog.length - 1]?.text === clean) return; // collapse repeats
-    collectLog.push({ at: Date.now(), text: clean });
-    if (collectLog.length > 40) collectLog = collectLog.slice(-40);
+    collectLog.push({ at: Date.now(), text: clean, kind });
+    if (collectLog.length > 60) collectLog = collectLog.slice(-60);
   };
-  const collectEventText = (line: string): string | null => {
-    let parsed: { type?: string; subtype?: string; is_error?: boolean; message?: { content?: Array<{ type?: string; name?: string; text?: string }> } };
+  const collectEventText = (line: string): { text: string; kind: LogKind } | null => {
+    let parsed: { type?: string; subtype?: string; is_error?: boolean; message?: { content?: Array<{ type?: string; name?: string; text?: string; thinking?: string }> } };
     try { parsed = JSON.parse(line) as typeof parsed; } catch { return null; }
-    if (parsed.type === 'system' && parsed.subtype === 'init') return 'Agent booted — connecting to your Chrome…';
+    if (parsed.type === 'system' && parsed.subtype === 'init') return { text: 'Agent booted — connecting to your Chrome…', kind: 'system' };
     if (parsed.type === 'assistant' && Array.isArray(parsed.message?.content)) {
       for (const block of parsed.message.content) {
         if (block.type === 'tool_use') {
           const name = String(block.name ?? '');
-          if (name === 'ToolSearch') return 'Loading the Chrome browser tools…';
-          if (/tabs_create|navigate/.test(name)) return 'Opening your store admin in Chrome…';
-          if (/read_page|get_page_text|find/.test(name)) return 'Reading the page…';
-          if (/computer|form_input/.test(name)) return 'Clicking in your Chrome…';
-          if (name === 'Bash') return 'Delivering the keys to ThemeBot…';
-          return `Using ${name.replace(/^mcp__claude-in-chrome__/, 'chrome: ')}…`;
+          if (name === 'ToolSearch') return { text: 'Loading the Chrome browser tools…', kind: 'action' };
+          if (/tabs_create|navigate/.test(name)) return { text: 'Opening your store admin in Chrome…', kind: 'action' };
+          if (/read_page|get_page_text|find/.test(name)) return { text: 'Reading the page…', kind: 'action' };
+          if (/computer|form_input/.test(name)) return { text: 'Clicking in your Chrome…', kind: 'action' };
+          if (name === 'Bash') return { text: 'Delivering the keys to ThemeBot…', kind: 'action' };
+          return { text: `Using ${name.replace(/^mcp__claude-in-chrome__/, 'chrome: ')}…`, kind: 'action' };
         }
-        if (block.type === 'text' && typeof block.text === 'string' && block.text.trim()) return block.text.trim().slice(0, 140);
+        // Extended-thinking blocks (when present) and plain narration both read as "thoughts".
+        if (block.type === 'thinking' && typeof block.thinking === 'string' && block.thinking.trim()) return { text: block.thinking.trim().slice(0, 240), kind: 'thought' };
+        if (block.type === 'text' && typeof block.text === 'string' && block.text.trim()) return { text: block.text.trim().slice(0, 240), kind: 'thought' };
       }
     }
-    if (parsed.type === 'result') return parsed.is_error ? 'Agent finished with an error.' : 'Agent finished.';
+    if (parsed.type === 'result') return parsed.is_error ? { text: 'Agent finished with an error.', kind: 'system' } : { text: 'Agent finished.', kind: 'system' };
     return null;
   };
 
@@ -566,6 +577,11 @@ export function createFactoryRouter() {
       try {
         collectScripted = runScriptedCollector({
           shop, handleName, appName, projectLabel: projectName || handleName, scopes: AUTOPILOT_SCOPES,
+          // Reuse the user's real, already-signed-in Chrome profile (no login wall). Falls back to
+          // the dedicated ThemeBot profile if the real one can't be found. chromeProfile picks WHICH
+          // profile directory (the one signed into the right Shopify account); default "Default".
+          useRealProfile: true,
+          chromeProfile: String(request.body?.chromeProfile ?? '').trim() || undefined,
           profileDir: path.join(config.factory.workspaceRoot, '_collector-profile'),
           log: pushCollectLog,
           onDone: async (result) => {
@@ -631,7 +647,7 @@ export function createFactoryRouter() {
         streamBuffer += chunk.toString('utf8');
         const lines = streamBuffer.split('\n');
         streamBuffer = lines.pop() ?? '';
-        for (const line of lines) { const text = collectEventText(line.trim()); if (text) pushCollectLog(text); }
+        for (const line of lines) { const ev = collectEventText(line.trim()); if (ev) pushCollectLog(ev.text, ev.kind); }
       });
       collectChild.stderr?.on('data', (chunk: Buffer) => {
         const text = chunk.toString('utf8').trim();
@@ -685,7 +701,7 @@ export function createFactoryRouter() {
       elapsedSec: collect.status === 'working' ? Math.round((Date.now() - collect.startedAt) / 1000) : null,
       finishedAgoSec: collect.finishedAt ? Math.round((Date.now() - collect.finishedAt) / 1000) : null,
       note: collect.note,
-      log: collectLog.slice(-8),
+      log: collectLog.slice(-14),
       clientId: take ? collect.clientId : collect.clientId ? 'ready' : null,
       clientSecret: take ? collect.clientSecret : null,
       hasSecret: Boolean(collect.clientSecret),
