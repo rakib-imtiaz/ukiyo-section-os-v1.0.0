@@ -9,6 +9,7 @@ import { db, flushFactoryState } from './db';
 import { createFactoryRouter } from './factory/routes';
 import { ensureWorkspaceRoot } from './factory/scaffolder';
 import { factoryScheduler } from './factory/scheduler';
+import { stopAllPreviews } from './factory/intake';
 import { handleLocalMcp, requireLocalMcp } from './browser-mcp';
 import { createOnboardingRouter } from './onboarding-routes';
 import { normalizeShop, verifyWebhook } from './security';
@@ -83,5 +84,5 @@ const server=app.listen(config.port,config.host,()=>console.log(`ThemeBot listen
 attachTerminal();
 attachBrowser();
 installWsHub(server);
-const shutdown=async()=>{server.close();if(config.factory.enabled){await factoryScheduler.shutdown();flushFactoryState();}await db.close();process.exit(0);};
+const shutdown=async()=>{server.close();if(config.factory.enabled){stopAllPreviews();await factoryScheduler.shutdown();flushFactoryState();}await db.close();process.exit(0);};
 process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);

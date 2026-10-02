@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowRight, Ban, Bug, CheckCircle2, CircleDashed, Columns2, FileText, Hammer, ImageOff, Pause, Play, RotateCcw, ScanSearch, TerminalSquare, XCircle } from 'lucide-react';
-import { Badge, Button, ConfirmDialog, Progress, Select, Sheet, Skeleton, Tabs, useToast } from './ui';
+import { Activity, ArrowRight, ChevronDown, Code2, LayoutGrid, MoreHorizontal, Square, Store, Ban, Bug, CheckCircle2, CircleDashed, Columns2, ExternalLink, FileText, FolderOpen, Globe, Hammer, ImageOff, Images, LayoutDashboard, Palette, Pause, Play, RotateCcw, ScanSearch, ScrollText, ShoppingBag, TerminalSquare, XCircle } from 'lucide-react';
+import { Badge, Button, ConfirmDialog, DropdownMenu, Progress, Select, Sheet, Skeleton, Tabs, useToast } from './ui';
 import { ScoreRing, Sparkline } from './fx';
 import { api, usePoll } from './api';
+import { ActivityFeed } from './ActivityFeed';
+import { LiveCode } from './LiveCode';
+import { BuildProgressCard } from './BuildProgressCard';
+import { CheckPanel } from './CheckPanel';
 import {
   STATUS_META, TERMINAL, issueKindMeta,
-  type InteractionsReport, type Iteration, type Job, type QaIssue, type QaSubscores, type SectionsReport,
-} from './types';
+  type InteractionsReport, type Iteration, type Job, type QaIssue, type QaSubscores, type SectionsReport, plainDetail, plainRoundStatus, isDeveloperMode } from './types';
 import { openTerminalSession } from '../TerminalPane';
 import { openBrowserCompare } from '../BrowserPane';
 
@@ -21,6 +24,7 @@ function shopifyPreviewUrl(job: Job): string {
 }
 
 function iterationIcon(iteration: Iteration) {
+  if (iteration.status === 'interrupted' || iteration.status === 'killed') return <Pause className="size-4 text-muted-foreground" />;
   if (iteration.status === 'running') return <CircleDashed className="size-4.5 animate-spin text-foreground" />;
   if (['succeeded'].includes(iteration.status)) return <CheckCircle2 className="size-4.5 text-success" />;
   if (iteration.status === 'regressed') return <XCircle className="size-4.5 text-warning" />;
@@ -28,9 +32,9 @@ function iterationIcon(iteration: Iteration) {
 }
 
 const kindMeta: Record<Iteration['kind'], { label: string; icon: React.ReactNode }> = {
-  clone: { label: 'Initial clone', icon: <Hammer className="size-4" /> },
-  qa: { label: 'QA comparison', icon: <ScanSearch className="size-4" /> },
-  fix: { label: 'Fix session', icon: <Hammer className="size-4" /> },
+  clone: { label: 'First build', icon: <Hammer className="size-4" /> },
+  qa: { label: 'Checked against your website', icon: <ScanSearch className="size-4" /> },
+  fix: { label: 'Fixed differences', icon: <Hammer className="size-4" /> },
 };
 
 /** Minimal markdown renderer (headings, bold, code, tables degrade to <pre>) — no extra deps. */
@@ -162,7 +166,7 @@ function IssuesTab({ jobId, reports }: { jobId: string; reports: string[] }) {
       <div className="flex flex-wrap items-center gap-3">
         {iterations.length > 1 && (
           <Select value={String(iteration)} onChange={(event) => setSelected(Number(event.target.value))} className="h-9 w-44 text-[13px]">
-            {iterations.map((entry) => <option key={entry} value={entry}>QA iteration {entry}</option>)}
+            {iterations.map((entry) => <option key={entry} value={entry}>Round {entry}</option>)}
           </Select>
         )}
         <Tabs value={groupBy} onChange={(id) => setGroupBy(id as 'kind' | 'page')} className="h-9" tabs={[
@@ -192,7 +196,7 @@ function IssuesTab({ jobId, reports }: { jobId: string; reports: string[] }) {
       {!state.issues.length ? (
         <div className="flex items-center gap-3 rounded-xl border border-border bg-card p-5">
           <CheckCircle2 className="size-5 shrink-0 text-success" />
-          <p className="text-[14px] font-semibold">No issues found in iteration {iteration} — the clone matched everything QA checked.</p>
+          <p className="text-[14px] font-semibold">No differences found in round {iteration} — the store matched everything that was checked.</p>
         </div>
       ) : (
         [...groups.entries()].map(([key, entries]) => (
@@ -205,6 +209,27 @@ function IssuesTab({ jobId, reports }: { jobId: string; reports: string[] }) {
           </div>
         ))
       )}
+    </div>
+  );
+}
+
+const LIVE_KEY = 'themebot-live-activity';
+/** On/off live feed of what the build is doing (remembered per browser; on by default). */
+function LiveActivity({ jobId, running }: { jobId: string; running: boolean }) {
+  const [on, setOn] = useState(() => { try { return localStorage.getItem(LIVE_KEY) !== 'off'; } catch { return true; } });
+  const toggle = () => setOn((value) => { const next = !value; try { localStorage.setItem(LIVE_KEY, next ? 'on' : 'off'); } catch { /* private mode */ } return next; });
+  const { data, error } = usePoll(() => (on ? api.activity(jobId) : Promise.resolve(null)), running ? 3000 : 15000, [jobId, on]);
+  return (
+    <div className="mb-5 flex flex-col gap-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-[14px] font-bold">Live activity</p>
+          <p className="text-[12.5px] font-medium text-muted-foreground">{on ? 'Every file the build writes and every step it takes, as it happens.' : 'Turned off — switch it on to watch the build work.'}</p>
+        </div>
+        <button type="button" role="switch" aria-checked={on} aria-label="Show live activity" onClick={toggle} className={`gs-switch${on ? ' is-on' : ''}`}><b /></button>
+      </div>
+      {on && <ActivityFeed events={data?.events ?? []} live={running} title="What the build is doing" emptyText={error ? 'Live activity is not available yet — it switches on the next time ThemeBot restarts (restarting now would stop this build). The build keeps working in the meantime.' : running ? 'Waiting for the build to write its first files…' : 'No activity recorded for this build.'} />}
+      {on && data && !data.streaming && running && <p className="text-[12px] font-medium text-muted-foreground">This build started before step-by-step streaming was switched on, so only the files it writes are shown. New builds show every step.</p>}
     </div>
   );
 }
@@ -349,7 +374,7 @@ function Screenshots({ jobId }: { jobId: string }) {
         <div className="flex flex-wrap items-center gap-3">
           {iterations.length > 1 && (
             <Select value={String(iteration)} onChange={(event) => setSelectedIter(Number(event.target.value))} className="h-9 w-44 text-[13px]">
-              {iterations.map((entry) => <option key={entry} value={entry}>QA iteration {entry}</option>)}
+              {iterations.map((entry) => <option key={entry} value={entry}>Round {entry}</option>)}
             </Select>
           )}
           <span className="text-[13px] font-semibold text-muted-foreground">React (source of truth) vs Shopify (clone), per route and viewport.</span>
@@ -393,13 +418,29 @@ export function JobDetail({ jobId, onClose, onNavigate }: { jobId: string | null
   const toast = useToast();
   const [tab, setTab] = useState('timeline');
   const [confirmCancel, setConfirmCancel] = useState(false);
+  const [confirmRebuild, setConfirmRebuild] = useState(false);
+  const devMode = isDeveloperMode();
   useEffect(() => { setTab('timeline'); setConfirmCancel(false); }, [jobId]);
   const job: Job | undefined = data?.job;
   const meta = job ? STATUS_META[job.status] : null;
 
+  // One command at a time: the buttons lock while a request is in flight, so a double press can
+  // never send Pause/Resume twice (the server also guards against it).
+  const [acting, setActing] = useState(false);
   const act = async (label: string, action: () => Promise<unknown>) => {
-    try { await action(); toast.push({ title: label, variant: 'default' }); void refresh(); }
+    if (acting) return;
+    setActing(true);
+    try { await action(); toast.push({ title: label, variant: 'default' }); await refresh(); }
     catch (error) { toast.push({ title: `${label} failed`, detail: error instanceof Error ? error.message : undefined, variant: 'destructive' }); }
+    finally { setActing(false); }
+  };
+
+  // The store admin opens in ThemeBot's own window: it is signed in to the Shopify account that
+  // owns the store (the user's everyday Chrome may be on another account).
+  const openAdmin = async (adminPath: string) => {
+    if (!job) return;
+    try { await api.easySigninWindow(undefined, job.store_url, adminPath); }
+    catch (error) { toast.push({ title: 'Could not open the store admin', detail: error instanceof Error ? error.message : undefined, variant: 'destructive' }); }
   };
 
   // Same state rules as the Dashboard card menu (mirrors the server's checks).
@@ -407,6 +448,8 @@ export function JobDetail({ jobId, onClose, onNavigate }: { jobId: string | null
   const canPause = Boolean(job && (job.running || job.status === 'queued'));
   const canRetry = Boolean(job && ['blocked', 'paused', 'exhausted', 'failed', 'aborted'].includes(job.status));
   const canCancel = Boolean(job && !TERMINAL.includes(job.status));
+  // Finished or cancelled builds can start over (Resume covers paused/blocked ones).
+  const canRebuild = Boolean(job && !job.running && ['canceled', 'converged', 'exhausted', 'failed', 'aborted', 'checked'].includes(job.status));
 
   // Issue count for the tab label — the latest QA iteration's breakdown carries it.
   const latestQa = data?.iterations
@@ -419,90 +462,94 @@ export function JobDetail({ jobId, onClose, onNavigate }: { jobId: string | null
       job ? (
         <div className="flex items-center gap-2.5">
           <span className="truncate">{job.name}</span>
-          {meta && <Badge variant={meta.tone}>{meta.label}</Badge>}
+          {meta && <span className={`jd-pill jd-pill--${meta.tone}`}>{job.status === 'paused' ? <Pause /> : job.running ? <CircleDashed className="animate-spin" /> : job.status === 'converged' ? <CheckCircle2 /> : null}{meta.label}</span>}
           {job.last_score != null && <span className="text-[13px] font-semibold tabular-nums text-muted-foreground">{(job.last_score * 100).toFixed(1)}%</span>}
         </div>
       ) : 'Loading…'
     }>
       {!job ? <Skeleton className="h-40 w-full" /> : (
         <div className="flex h-full flex-col gap-5">
-          <div className="rounded-xl border border-border bg-card p-4 text-[13.5px] font-medium leading-6 text-muted-foreground">
-            <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <span className="font-bold text-foreground">{job.react_url}</span>
-              <ArrowRight className="size-3.5 shrink-0" />
-              <span className="font-bold text-foreground">{job.store_url.replace('https://', '')}</span>
-            </p>
-            <p className="mt-1">{job.status_detail ?? '—'}</p>
-            <p className="mt-1 truncate">workspace: <code className="rounded bg-muted px-1 py-0.5 text-[12px]">{job.workspace_path}</code></p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {canStart && (
-                <Button size="sm" variant="outline" title="Queue this draft job for the scheduler" onClick={() => act('Job started', () => api.start(job.id))}>
-                  <Play className="size-4" /> Start
-                </Button>
-              )}
-              {canPause && (
-                <Button size="sm" variant="outline" title="Stop the running session — the job becomes paused and resumable" onClick={() => act('Job paused', () => api.pause(job.id))}>
-                  <Pause className="size-4" /> Pause
-                </Button>
-              )}
-              {canRetry && (
-                <Button size="sm" variant="outline" title="Re-queue this job and resume from where it stopped" onClick={() => act('Job re-queued', () => api.retry(job.id))}>
-                  <RotateCcw className="size-4" /> {job.status === 'paused' || job.status === 'blocked' ? 'Resume' : 'Retry'}
-                </Button>
-              )}
-              {canCancel && (
-                <Button size="sm" variant="outline" className="border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive" title="Cancel the job (terminal — you can delete it afterwards)" onClick={() => setConfirmCancel(true)}>
-                  <Ban className="size-4" /> Cancel
-                </Button>
-              )}
-              <Button
-                size="sm" variant="outline"
-                title={`Open a shell in ${job.workspace_path}`}
-                onClick={() => { openTerminalSession({ cwd: job.workspace_path, label: job.slug }); onNavigate?.('terminal'); }}
-              >
-                <TerminalSquare className="size-4" /> Open terminal here
-              </Button>
-              <Button
-                size="sm" variant="outline"
-                title="Open the React source and the Shopify clone side by side in the integrated browser"
-                onClick={() => { openBrowserCompare({ reactUrl: job.react_url, shopifyUrl: shopifyPreviewUrl(job) }); onNavigate?.('browser'); }}
-              >
-                <Columns2 className="size-4" /> Compare in Browser
-              </Button>
-            </div>
+          {/* Big actions */}
+          <div className="jd-actions">
+            {canStart && <button type="button" disabled={acting} className="jd-btn jd-btn--primary" onClick={() => { setTab('code'); void act('Build started', () => api.start(job.id)); }}><Play /> Start</button>}
+            {canPause && <button type="button" disabled={acting} className="jd-btn jd-btn--outline" title="Pause the build — you can resume it later" onClick={() => act('Build paused', () => api.pause(job.id))}><Pause /> Pause</button>}
+            {canRetry && (
+              <button type="button" disabled={acting} className="jd-btn jd-btn--primary" title="Carry on from where it stopped" onClick={() => { setTab('code'); void act(job.status === 'paused' || job.status === 'blocked' ? 'Build resumed' : 'Build restarted', () => api.retry(job.id)); }}>
+                {job.status === 'paused' || job.status === 'blocked' ? <><Play /> Resume</> : <><RotateCcw /> Retry</>}
+              </button>
+            )}
+            {canRebuild && (
+              <button type="button" disabled={acting} className="jd-btn jd-btn--primary" title="Start this build again from the first step, on the same store" onClick={() => setConfirmRebuild(true)}>
+                <Hammer /> Rebuild
+              </button>
+            )}
+            {canCancel && <button type="button" disabled={acting} className="jd-btn jd-btn--danger" title="Cancel this build" onClick={() => setConfirmCancel(true)}><Square /> Cancel</button>}
+            <DropdownMenu
+              label="More actions"
+              triggerClassName="jd-more"
+              trigger={<MoreHorizontal className="size-4" />}
+              items={[
+                { label: 'Open your website', icon: <Globe />, title: job.react_url, onSelect: () => window.open(job.react_url, '_blank', 'noopener') },
+                { label: 'Open project folder', icon: <FolderOpen />, title: job.workspace_path, onSelect: () => void fetch('/api/workspace/open-folder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: job.workspace_path }) }) },
+                ...(devMode ? [
+                  { label: 'Compare side by side', icon: <Columns2 />, onSelect: () => { openBrowserCompare({ reactUrl: job.react_url, shopifyUrl: shopifyPreviewUrl(job) }); onNavigate?.('browser'); } },
+                  { label: 'Terminal in project', icon: <TerminalSquare />, onSelect: () => { openTerminalSession({ cwd: job.workspace_path, label: job.slug }); onNavigate?.('terminal'); } },
+                ] : []),
+              ]}
+            />
           </div>
 
-          {['failed', 'blocked', 'aborted'].includes(job.status) && job.status_detail && (
-            <div className="rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-[13.5px] font-semibold leading-6 text-red-600 dark:text-red-400">{job.status_detail}</div>
-          )}
+          {/* Store / Environment / Theme */}
+          <div className="jd-links">
+            <button type="button" className="jd-link" title="The live store, as shoppers see it" onClick={() => window.open(job.store_url, '_blank', 'noopener')}>
+              <Store className="jd-link__icon" />
+              <span><small>Store</small><b>Storefront <ExternalLink className="size-3.5" /></b></span>
+            </button>
+            <button type="button" className="jd-link" title="The store's Shopify admin — opens in the ThemeBot window, signed in to the account that owns it" onClick={() => void openAdmin('')}>
+              <LayoutGrid className="jd-link__icon" />
+              <span><small>Environment</small><b>Admin</b></span>
+            </button>
+            <button type="button" className="jd-link" title="The store's themes — the theme ThemeBot builds shows up here" onClick={() => void openAdmin('/themes')}>
+              <Palette className="jd-link__icon" />
+              <span><small>Theme</small><b>Themes</b></span>
+            </button>
+          </div>
 
-          {job.last_score != null && (
-            <div className="flex items-center gap-5 rounded-xl border border-border bg-card p-4">
-              <ScoreRing value={job.last_score} size={60} stroke={5} />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-baseline justify-between gap-3 text-[13px] font-bold">
-                  <span>Match score</span>
-                  <span className="text-muted-foreground">target {Math.round(job.score_threshold * 100)}%</span>
-                </div>
-                <Progress value={job.last_score} active={job.running} className="mt-2.5" />
-              </div>
-              <Sparkline history={job.score_history} width={110} height={34} className="hidden text-muted-foreground sm:block" />
+          <BuildProgressCard jobId={job.id} running={Boolean(job.running) || ['scaffolding', 'cloning', 'qa_running', 'fixing'].includes(job.status)} />
+
+          {/* Match + check / fix controls */}
+          <CheckPanel job={job} running={Boolean(job.running) || ['scaffolding', 'cloning', 'qa_running', 'fixing'].includes(job.status)} busy={acting} onChanged={() => { setTab('timeline'); void refresh(); }} />
+
+          {['failed', 'blocked', 'aborted'].includes(job.status) && (
+            <div className={`rounded-xl border p-4 text-[13.5px] font-semibold leading-6 ${job.status === 'blocked' ? 'border-warning/40 bg-warning/10 text-warning' : 'border-destructive/40 bg-destructive/10 text-destructive'}`}>
+              <p>{plainDetail(job.status_detail) || 'The build stopped.'}</p>
+              <p className="mt-1 font-medium text-muted-foreground">{job.status === 'blocked' ? 'Your store and its connection are fine. Press Resume to carry on from where it stopped.' : 'Press Retry to try again. Anything already built on the draft theme is kept.'}</p>
             </div>
           )}
 
-          <Tabs value={tab} onChange={setTab} tabs={[
-            { id: 'timeline', label: 'Timeline' },
-            { id: 'issues', label: <><Bug className="size-4" /> Issues{issueCount != null ? <Badge variant="secondary">{issueCount}</Badge> : null}</> },
-            { id: 'log', label: 'Live log' },
-            { id: 'reports', label: 'Reports' },
-            { id: 'screenshots', label: 'Screenshots' },
+
+          <Tabs className="job-tabs job-tabs--line" value={tab} onChange={setTab} tabs={[
+            { id: 'timeline', label: <><Activity className="size-4" /> Activity</> },
+            { id: 'code', label: <><Code2 className="size-4" /> Live code{(Boolean(job.running) || ['scaffolding', 'cloning', 'qa_running', 'fixing'].includes(job.status)) && <span className="tab-live" title="Building now — watch it live" aria-label="live" />}</> },
+            { id: 'issues', label: <><Bug className="size-4" /> Differences{issueCount != null ? <Badge variant="secondary">{issueCount}</Badge> : null}</> },
+            { id: 'screenshots', label: <><Images className="size-4" /> Pictures</> },
+            ...(devMode ? [{ id: 'log', label: <><ScrollText className="size-4" /> Log</> }, { id: 'reports', label: <><FileText className="size-4" /> Reports</> }] : []),
           ]} />
+
+          {tab === 'code' && <LiveCode jobId={job.id} running={Boolean(job.running) || ['scaffolding', 'cloning', 'qa_running', 'fixing'].includes(job.status)} />}
+          {tab === 'timeline' && <LiveActivity jobId={job.id} running={Boolean(job.running) || ['scaffolding', 'cloning', 'qa_running', 'fixing'].includes(job.status)} />}
 
           {tab === 'timeline' && (
             <div className="stagger flex flex-col">
-              {!data!.iterations.length && <p className="text-[14px] font-medium text-muted-foreground">Nothing has run yet.</p>}
-              {data!.iterations.map((iteration, index) => (
-                <div key={iteration.id} className="flex gap-4">
+              {!data!.iterations.length && <p className="text-[14px] font-medium text-muted-foreground">Nothing has happened yet.</p>}
+              {data!.iterations.map((raw, index) => {
+                // Only the newest round of a running build can still be in progress; older "running"
+                // rows were cut off by a restart or a pause.
+                const live = Boolean(job.running) || ['scaffolding', 'cloning', 'qa_running', 'fixing'].includes(job.status);
+                const iteration = raw.status === 'running' && !(live && index === data!.iterations.length - 1) ? { ...raw, status: 'interrupted' } as Iteration : raw;
+                return (
+                <div key={iteration.id} className={`jd-row jd-row--${iteration.status}`}>
+                  <span className="jd-row__time">{new Date(iteration.started_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
                   <div className="flex flex-col items-center">
                     <span className="flex size-8 items-center justify-center rounded-full border border-border bg-card shadow-sm">{iterationIcon(iteration)}</span>
                     {index < data!.iterations.length - 1 && <div className="my-1 w-px flex-1 bg-border" />}
@@ -510,17 +557,18 @@ export function JobDetail({ jobId, onClose, onNavigate }: { jobId: string | null
                   <div className="flex-1 pb-6">
                     <p className="flex flex-wrap items-center gap-2 text-[15px] font-bold leading-8">
                       {kindMeta[iteration.kind].icon} {kindMeta[iteration.kind].label}
-                      <span className="text-[13px] font-semibold text-muted-foreground">iteration {iteration.iteration}</span>
+                      {iteration.kind !== 'clone' && <span className="text-[13px] font-semibold text-muted-foreground">round {iteration.iteration}</span>}
                       {iteration.score != null && <Badge variant={iteration.status === 'regressed' ? 'warning' : 'info'}>{(iteration.score * 100).toFixed(1)}%{iteration.status === 'regressed' ? ' ↓' : ''}</Badge>}
                     </p>
                     <p className="mt-0.5 text-[13px] font-medium text-muted-foreground">
-                      {new Date(iteration.started_at).toLocaleTimeString()} · {iteration.status}
-                      {iteration.breakdown ? ` · ${String((iteration.breakdown as { issues?: number }).issues ?? '—')} issues` : ''}
+                      {(() => { const text = plainRoundStatus(iteration.status); return text.charAt(0).toUpperCase() + text.slice(1); })()}
+                      {iteration.breakdown ? ` · ${String((iteration.breakdown as { issues?: number }).issues ?? '—')} differences` : ''}
                     </p>
                     {iteration.kind === 'qa' && <SubscoreChips breakdown={iteration.breakdown} />}
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
 
@@ -531,10 +579,18 @@ export function JobDetail({ jobId, onClose, onNavigate }: { jobId: string | null
         </div>
       )}
       <ConfirmDialog
+        open={confirmRebuild}
+        title={`Rebuild "${job?.name ?? ''}"?`}
+        description="ThemeBot starts this build again from the first step, on the same store with the same connection. The last run's reports are kept in the project folder; its rounds are cleared from this timeline."
+        confirmLabel="Rebuild"
+        onCancel={() => setConfirmRebuild(false)}
+        onConfirm={() => { setConfirmRebuild(false); if (job) { setTab('code'); void act('Rebuilding', () => api.rebuild(job.id)); } }}
+      />
+      <ConfirmDialog
         open={confirmCancel}
         title={`Cancel "${job?.name ?? ''}"?`}
-        description="This kills the running Claude CLI session for this job. Progress already pushed to the dev theme is kept; you can delete the job afterwards."
-        confirmLabel="Cancel job" destructive
+        description="ThemeBot stops working on this store. Anything already built on the draft theme is kept, and you can delete the build afterwards."
+        confirmLabel="Cancel build" destructive
         onCancel={() => setConfirmCancel(false)}
         onConfirm={() => { setConfirmCancel(false); if (job) void act('Job canceled', () => api.cancel(job.id)); }}
       />

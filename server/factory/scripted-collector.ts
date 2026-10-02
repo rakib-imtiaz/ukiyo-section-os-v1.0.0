@@ -34,14 +34,28 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { detectEngines } from '../browser';
+import { centeredWindowArgs, prepareFreshWindow } from '../window-placement';
 import type { CollectorResult } from './partner-api';
 
 export interface ScriptedInput {
-  shop: string;            // full myshopify domain, e.g. acme.myshopify.com
+  shop: string;            // full myshopify domain, e.g. acme.myshopify.com ('' when createStore)
+  /** Easy mode: create a REAL store first (admin "Create store" flow, never a dev store). */
+  createStore?: boolean;
+  storeName?: string;
+  /** Easy-mode retry with a remembered store: if the signed-in account can't open `shop` (it was
+   *  made under another Shopify login), create a fresh store for this account instead. */
+  createIfUnreachable?: boolean;
+  /** Told when the signed-in account can't open `shop`, so the caller can forget it. */
+  onShopUnreachable?: (shop: string) => void;
+  /** Called as soon as the new store's domain is known (and again with its storefront password). */
+  onShop?: (shop: string, storefrontPassword: string | null) => void;
   handleName: string;      // the store handle (subdomain)
   appName: string;         // <project>_bot
   projectLabel: string;
   scopes: string;          // comma-separated AUTOPILOT_SCOPES
+  /** When set, every logged step also saves a screenshot of the bot's window to
+   *  <shotsDir>/<run timestamp>/NN-<step>.png — the record for debugging a failed setup. */
+  shotsDir?: string;
   profileDir: string;      // dedicated fallback profile (used only when useRealProfile is false)
   /** Reuse the user's everyday Chrome profile (already signed into Shopify → no login wall).
    *  Requires Chrome to be fully closed (Chrome locks a profile to one running instance). */
@@ -109,6 +123,13 @@ function isChromeRunning(): boolean {
   } catch { return false; }
 }
 
+/** Chrome refused the profile because another window already has it open. Chrome exits with
+ *  code 21 for this on Windows, which Playwright reports only as "browser has been closed". */
+function isProfileInUse(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  return /ProcessSingleton|user data directory is already in use|profile.*in use|exitCode=21\b/i.test(message);
+}
+
 export interface ScriptedHandle {
   abort: AbortController;
   close: () => Promise<void>;
@@ -141,7 +162,9 @@ export function runScriptedCollector(input: ScriptedInput): ScriptedHandle {
   const close = async () => { const c = context; context = null; if (c) await c.close().catch(() => {}); };
 
   void (async () => {
-    const { log, shop, appName, scopes } = input;
+    const { appName, scopes } = input;
+    let log = input.log;
+    let shop = input.shop;
     const throwIfAborted = () => { if (abort.signal.aborted) throw new Error('__aborted__'); };
 
     try {
@@ -160,31 +183,96 @@ export function runScriptedCollector(input: ScriptedInput): ScriptedHandle {
           headless: false,
           channel: chrome ? 'chrome' : undefined,
           viewport: { width: 1280, height: 900 },
-          args: [`--profile-directory=${real.profile}`, '--no-first-run', '--no-default-browser-check', '--hide-crash-restore-bubble'],
+          args: [`--profile-directory=${real.profile}`, '--no-first-run', '--no-default-browser-check', '--hide-crash-restore-bubble', ...centeredWindowArgs()],
         });
       } else {
         if (input.useRealProfile && !real) log('Could not locate your Chrome profile — falling back to the ThemeBot profile (a one-time login may be needed).');
         await mkdir(input.profileDir, { recursive: true });
         // Dedicated fallback profile: a one-time manual Shopify login persists here across runs.
-        context = await chromium.launchPersistentContext(input.profileDir, {
-          headless: false,
-          channel: chrome ? 'chrome' : undefined,
-          viewport: { width: 1280, height: 900 },
-          args: ['--no-first-run', '--no-default-browser-check'],
-        });
+        // A window that is still closing holds the profile for a moment — retry a few times.
+        for (let attempt = 1; ; attempt += 1) {
+          try {
+            prepareFreshWindow(input.profileDir);
+            context = await chromium.launchPersistentContext(input.profileDir, {
+              headless: false,
+              channel: chrome ? 'chrome' : undefined,
+              viewport: { width: 1280, height: 900 },
+              args: ['--no-first-run', '--no-default-browser-check', ...centeredWindowArgs()],
+            });
+            break;
+          } catch (error) {
+            if (attempt >= 3 || !isProfileInUse(error)) throw error;
+            log('The ThemeBot Chrome window is still open — waiting for it to close…');
+            await new Promise((resolve) => setTimeout(resolve, 5000));
+            throwIfAborted();
+          }
+        }
       }
       const page = context.pages()[0] ?? await context.newPage();
+
+      // Step screenshots: one per logged line, taken in order (a queue, so they never overlap).
+      if (input.shotsDir) {
+        const runDir = path.join(input.shotsDir, new Date().toISOString().replace(/[:.]/g, '-'));
+        let count = 0;
+        let queue: Promise<void> = mkdir(runDir, { recursive: true }).then(() => {}, () => {});
+        const snap = (label: string) => {
+          const name = `${String(++count).padStart(2, '0')}-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'step'}.png`;
+          queue = queue.then(() => page.screenshot({ path: path.join(runDir, name) }).then(() => {}, () => {}));
+        };
+        log = (text: string) => { input.log(text); snap(text); };
+        input.log(`Saving a screenshot of every step to ${runDir}`);
+      }
+
+      // 0a. A remembered store may belong to a different Shopify login than the one signed in now.
+      let createNow = Boolean(input.createStore);
+      if (!createNow && shop && input.createIfUnreachable !== undefined) {
+        const access = await canOpenStore(page, shop, abort.signal);
+        throwIfAborted();
+        if (access === 'no') {
+          input.onShopUnreachable?.(shop);
+          if (!input.createIfUnreachable || !input.storeName) {
+            await input.onDone({ clientId: null, clientSecret: null, status: 'failed', note: `The Shopify account signed in to the ThemeBot window can't open ${shop} — it belongs to a different login. Sign in with that account, or start over to create a new store.` });
+            return;
+          }
+          log(`${shop} belongs to a different Shopify login than the one signed in now — forgetting it and creating a new store for this account.`);
+          shop = '';
+          createNow = true;
+        }
+      }
+
+      // 0. Easy mode: create the real store first and learn its generated domain.
+      if (createNow) {
+        const created = await createRealStore(page, input.storeName ?? '', log, abort.signal);
+        throwIfAborted();
+        if (!created) { await input.onDone({ clientId: null, clientSecret: null, status: 'failed', note: 'Could not create the store (the Create store flow did not reach a store admin page).' }); return; }
+        shop = created;
+        input.onShop?.(shop, null);
+        await nameStore(page, shop, input.storeName ?? '', log);
+        throwIfAborted();
+      }
+
+      // 0b. Every store ThemeBot builds gets the standard storefront password, so the build's page
+      //     checks can pass the "Private mode" gate. Runs for new AND reused stores.
+      const password = await ensureStorefrontPassword(page, shop, DEFAULT_STOREFRONT_PASSWORD, log);
+      if (password) input.onShop?.(shop, password);
+      throwIfAborted();
 
       // 1. Reach the dashboard; wait out a manual login if one appears; read the org id.
       log('Opening the Shopify Dev Dashboard…');
       await page.goto(DASHBOARD_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
-      const orgId = await waitForDashboardOrg(page, log, abort.signal);
+      const startOrg = await waitForDashboardOrg(page, log, abort.signal);
       throwIfAborted();
-      if (!orgId) { await input.onDone({ clientId: null, clientSecret: null, status: 'failed', note: 'Could not reach your Dev Dashboard (still on a login page after 6 minutes?).' }); return; }
-      log(`In organization ${orgId}. Preparing the app…`);
+      if (!startOrg) { await input.onDone({ clientId: null, clientSecret: null, status: 'failed', note: 'Could not reach your Dev Dashboard (still on a login page after 6 minutes?).' }); return; }
+
+      // 1b. The dashboard opens on whichever organization was used LAST — possibly another client's.
+      //     Find the org that actually owns this store; never create anything anywhere else.
+      const orgId = await findOrgForShop(page, shop, createNow, log, abort.signal);
+      throwIfAborted();
+      if (!orgId) { await input.onDone({ clientId: null, clientSecret: null, status: 'failed', note: `Stopped for safety: none of your Shopify organizations lists ${shop}, so no app was created. Open the ThemeBot window, check the store is in your account, then press Continue.` }); return; }
+      log(`In organization ${orgId} (it owns ${shop}). Preparing the app…`);
 
       // 2–3. Create (or reuse) the app in this org, capture its id.
-      const appId = await ensureApp(page, orgId, appName, log, abort.signal);
+      const appId = await ensureApp(page, orgId, appName, scopes, log, abort.signal);
       throwIfAborted();
       if (!appId) { await input.onDone({ clientId: null, clientSecret: null, status: 'failed', note: 'Could not create the app in the Dev Dashboard (layout may have changed — calibrate SELECTORS.createAppButton).' }); return; }
 
@@ -222,13 +310,199 @@ export function runScriptedCollector(input: ScriptedInput): ScriptedHandle {
       }
     } catch (error) {
       if (error instanceof Error && error.message === '__aborted__') return; // stopped by user
-      input.onError(error instanceof Error ? `Scripted bot failed: ${error.message}` : 'Scripted bot failed.');
+      if (error instanceof Error && error.message === '__needs_login__') {
+        log('Not signed in to Shopify in the ThemeBot profile yet — sign in once in the ThemeBot sign-in window.');
+        await input.onDone({ clientId: null, clientSecret: null, status: 'failed', note: 'not logged in — sign in once in the ThemeBot sign-in window, then press Continue' });
+        return;
+      }
+      if (isProfileInUse(error)) {
+        await input.onDone({ clientId: null, clientSecret: null, status: 'failed', note: 'The ThemeBot sign-in window is still open — close it, then press Continue.' });
+        return;
+      }
+      // Playwright errors carry the whole Chrome command line and call log — show only the first line.
+      input.onError(error instanceof Error ? `Scripted bot failed: ${error.message.split('\n')[0].replace(/\s*Browser logs:.*$/s, '').slice(0, 200)}` : 'Scripted bot failed.');
     } finally {
       await close();
     }
   })();
 
   return { abort, close };
+}
+
+// --- Real store creation (calibrated 2026-09-24 by walking the flow with the user) --------------
+//   https://admin.shopify.com/?no_redirect=true is the "Welcome back — Choose a store or create a
+//   new one" picker with a "Create new store" button (no need to open any store's admin first).
+//   Fallback: store switcher (top-right) → "View all" → "All stores" dialog → "Create store".
+//   Shopify creates the store IMMEDIATELY and redirects to
+//     /signup/<uuid>/subscribe/checkout?...&shopPermanentDomain=<handle>.myshopify.com  (card form)
+//   → "Skip" (top-right) → "What can we help you do?" → "Skip" → /store/<handle>?welcome.
+//   The store starts on a 3-day trial named "My Store". We NEVER type on the checkout page.
+const STORE = {
+  createStore: /^\s*(\+\s*)?create (a )?(new )?store\s*$/i,
+  viewAll: /^\s*view all\s*$/i,
+  skip: /^\s*skip( for now| all)?\s*$/i,
+  permanentDomain: /shopPermanentDomain=([a-z0-9][a-z0-9-]*)\.myshopify\.com/i,
+  storeAdmin: /admin\.shopify\.com\/store\/([a-z0-9][a-z0-9-]*)(?:[/?#]|$)/i,
+  signup: /admin\.shopify\.com\/signup\//i,
+  captcha: /captcha|verify you are human|are you a robot/i,
+};
+
+async function clickFirstVisible(page: Page, candidates: Array<import('playwright').Locator>): Promise<boolean> {
+  for (const locator of candidates) {
+    const target = locator.first();
+    if (await target.isVisible().catch(() => false)) { await target.click().catch(() => {}); return true; }
+  }
+  return false;
+}
+
+/** Create a real store through the admin "Create store" flow; returns <handle>.myshopify.com or null. */
+async function createRealStore(page: Page, storeName: string, log: (t: string) => void, signal: AbortSignal): Promise<string | null> {
+  log(`Opening Shopify admin to create "${storeName}"…`);
+  await page.goto('https://admin.shopify.com/?no_redirect=true', { waitUntil: 'domcontentloaded' }).catch(() => {});
+
+  // Wait until we are signed in and inside some store's admin (the switcher lives there).
+  // Signing in inside a script-driven window fails for Google accounts ("This browser or app may
+  // not be secure"), so the script never waits on a login page: it stops and the app offers a
+  // plain, script-free ThemeBot window for the one-time sign-in (see /easy/signin-window).
+  const signedInBy = Date.now() + 60_000;
+  let loginSince = 0;
+  while (Date.now() < signedInBy) {
+    if (signal.aborted) return null;
+    if (STORE.storeAdmin.test(page.url()) || /admin\.shopify\.com\/?(\?|$)/.test(page.url()) && !SELECTORS.loginHost.test(page.url())) break;
+    if (SELECTORS.loginHost.test(page.url())) {
+      loginSince = loginSince || Date.now();
+      if (Date.now() - loginSince > 6000) throw new Error('__needs_login__');
+    } else loginSince = 0;
+    await page.waitForTimeout(1500).catch(() => {});
+  }
+  await page.waitForTimeout(2000).catch(() => {});
+  const before = page.url();
+
+  // Open the "All stores" dialog and press Create store.
+  log('Opening the store list…');
+  // The picker renders client-side — give the "Create new store" button time to appear.
+  await page.getByRole('button', { name: STORE.createStore }).first().waitFor({ state: 'visible', timeout: 20_000 }).catch(() => {});
+  if (SELECTORS.loginHost.test(page.url())) throw new Error('__needs_login__');
+  let clicked =await clickFirstVisible(page, [page.getByRole('button', { name: STORE.createStore }), page.getByRole('link', { name: STORE.createStore })]);
+  if (!clicked) {
+    // Top-right store switcher: the last button in the top bar carries the current store's name.
+    await clickFirstVisible(page, [page.locator('[aria-label*="store" i][aria-haspopup]'), page.locator('header [aria-haspopup]').last(), page.locator('[data-polaris-topbar] button').last()]);
+    await page.waitForTimeout(800).catch(() => {});
+    await clickFirstVisible(page, [page.getByRole('button', { name: STORE.viewAll }), page.getByRole('link', { name: STORE.viewAll }), page.getByText(STORE.viewAll)]);
+    await page.waitForTimeout(1200).catch(() => {});
+    clicked = await clickFirstVisible(page, [page.getByRole('button', { name: STORE.createStore }), page.getByRole('link', { name: STORE.createStore }), page.getByText(STORE.createStore)]);
+  }
+  if (!clicked) { log('Could not find "Create store" (calibrate STORE selectors).'); return null; }
+  log('Creating the store — Shopify sets it up now…');
+
+  // Walk the post-create screens: read the domain, press Skip on the card page and the survey.
+  // SAFETY: the store we started on (possibly a live client store) must never be mistaken for the
+  // new one — only a handle Shopify announced via the signup flow counts.
+  const previousHandle = STORE.storeAdmin.exec(before)?.[1] ?? null;
+  let handle: string | null = null;
+  let sawSignup = false;
+  const doneBy = Date.now() + 8 * 60_000;
+  let waitingNoted = false;
+  while (Date.now() < doneBy) {
+    if (signal.aborted) return null;
+    const url = page.url();
+    if (STORE.signup.test(url)) sawSignup = true;
+    const fromParam = STORE.permanentDomain.exec(url)?.[1];
+    if (fromParam && handle !== fromParam) { handle = fromParam; log(`Store created: ${handle}.myshopify.com`); }
+    const admin = STORE.storeAdmin.exec(url)?.[1];
+    if (admin && admin !== previousHandle && !STORE.signup.test(url) && (handle ? admin === handle : sawSignup)) {
+      handle = admin;
+      log('Store admin is open — the store is ready.');
+      return `${handle}.myshopify.com`;
+    }
+    const body = (await page.textContent('body').catch(() => '')) ?? '';
+    if (SELECTORS.loginHost.test(url) || STORE.captcha.test(body)) {
+      if (!waitingNoted) { log('WAITING FOR LOGIN — Shopify wants a check in the ThemeBot window; finish it there and the bot continues.'); waitingNoted = true; }
+    } else if (STORE.signup.test(url) && await clickFirstVisible(page, [page.getByRole('button', { name: STORE.skip }), page.getByRole('link', { name: STORE.skip })])) {
+      // Skip is pressed ONLY on /signup/ pages (card form, survey) — never inside a store admin.
+      log(/checkout|subscribe/i.test(url) ? 'Skipped the plan / payment screen (no card entered).' : 'Skipped a setup question.');
+      await page.waitForTimeout(1500).catch(() => {});
+      continue;
+    }
+    await page.waitForTimeout(2000).catch(() => {});
+  }
+  // Timed out on the screens but we did learn the domain: the store exists, so carry on with it.
+  return handle ? `${handle}.myshopify.com` : null;
+}
+
+/** Best-effort, time-boxed: set the store's display name (it starts as "My Store").
+ *  Calibrated 2026-09-24: Settings → General → "Store contact details" row links to
+ *  /settings/general/store-contact-details, a page with a "Store name" field; Shopify's contextual
+ *  save bar shows "Save" only after a change. Pages use Polaris web components, so only
+ *  Playwright locators (which pierce shadow DOM) see the fields. */
+async function nameStore(page: Page, shop: string, storeName: string, log: (t: string) => void) {
+  if (!storeName) return;
+  const handle = shop.replace(/\.myshopify\.com$/i, '');
+  try {
+    await page.goto(`https://admin.shopify.com/store/${handle}/settings/general/store-contact-details`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    const field = page.getByLabel(/store name/i).first();
+    await field.waitFor({ state: 'visible', timeout: 20_000 });
+    if ((await field.inputValue().catch(() => '')) === storeName) { log(`The store is already called "${storeName}".`); return; }
+    await field.fill(storeName);
+    const save = page.getByRole('button', { name: /^\s*save\s*$/i }).last();
+    await save.waitFor({ state: 'visible', timeout: 10_000 });
+    await save.click();
+    await page.waitForTimeout(2500);
+    log(`Named the store "${storeName}".`);
+  } catch {
+    log('Could not rename the store — it keeps its default name (cosmetic only).');
+  }
+}
+
+/** Best-effort: read the storefront password new stores are protected with. */
+/** ThemeBot's standard storefront password for stores it builds. New stores are password-protected
+ *  (Private mode) until a plan is chosen; the build's checks need to get past that gate. */
+export const DEFAULT_STOREFRONT_PASSWORD = '12345';
+
+/** The storefront "Password" box on Online Store → Preferences. It sits inside the embedded Online
+ *  Store app frame (verified 2026-09-27), so search every frame, not just the page. */
+async function findPasswordBox(page: Page) {
+  for (let i = 0; i < 15; i += 1) {
+    for (const frame of page.frames()) {
+      const box = frame.getByLabel(/^\s*password\s*$/i).first();
+      if (await box.isVisible().catch(() => false)) return box;
+    }
+    await page.waitForTimeout(1000).catch(() => {});
+  }
+  return null;
+}
+
+/** Set the storefront password to `wanted`, save, and read it back. Returns the password that is
+ *  actually in place (the old one if saving failed), or null if the store has no password box. */
+async function ensureStorefrontPassword(page: Page, shop: string, wanted: string, log: (t: string) => void): Promise<string | null> {
+  const handle = shop.replace(/^https?:\/\//, '').replace(/\.myshopify\.com.*$/i, '');
+  const url = `https://admin.shopify.com/store/${handle}/online_store/preferences`;
+  try {
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    let box = await findPasswordBox(page);
+    if (!box) { log('No storefront password box found (the store may already be open to everyone).'); return null; }
+    const current = (await box.inputValue().catch(() => '')).trim();
+    if (current === wanted) { log(`Storefront password is already "${wanted}".`); return wanted; }
+    log(`Setting the storefront password to "${wanted}"…`);
+    await box.fill(wanted).catch(() => {});
+    // The admin's save bar ("Save") shows once the field changes — in the page or the app frame.
+    let saved = false;
+    for (let i = 0; i < 10 && !saved; i += 1) {
+      await page.waitForTimeout(700).catch(() => {});
+      for (const frame of [page.mainFrame(), ...page.frames()]) {
+        const save = frame.getByRole('button', { name: /^\s*save\s*$/i }).first();
+        if (await save.isVisible().catch(() => false) && await save.isEnabled().catch(() => false)) { await save.click().catch(() => {}); saved = true; break; }
+      }
+    }
+    await page.waitForTimeout(2500).catch(() => {});
+    // Read it back from a fresh load — the only proof it stuck.
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => {});
+    box = await findPasswordBox(page);
+    const after = box ? (await box.inputValue().catch(() => '')).trim() : '';
+    if (after === wanted) { log(`Storefront password set to "${wanted}".`); return wanted; }
+    log(after ? `Could not change the storefront password — keeping the existing one.` : 'Could not read the storefront password back.');
+    return after || current || null;
+  } catch { return null; }
 }
 
 /** Poll until an org-scoped dashboard URL is reached, prompting the user to log in if a login page
@@ -241,7 +515,8 @@ async function waitForDashboardOrg(page: Page, log: (t: string) => void, signal:
     const org = SELECTORS.dashboardOrg.exec(page.url());
     if (org) return org[1];
     if (SELECTORS.loginHost.test(page.url())) {
-      if (!announced) { log('WAITING FOR LOGIN — please log in in the ThemeBot window; the bot continues automatically once you are in.'); announced = true; }
+      if (!announced) { announced = true; await page.waitForTimeout(6000).catch(() => {}); continue; }  // grace for SSO redirects
+      throw new Error('__needs_login__');
     } else {
       // On the dashboard but not yet org-scoped (or a blank tab) — nudge toward the dashboard root.
       await page.goto(DASHBOARD_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
@@ -253,8 +528,56 @@ async function waitForDashboardOrg(page: Page, log: (t: string) => void, signal:
   return null;
 }
 
+/** Can the signed-in account open this store's admin? 'unknown' when Shopify asks for a login
+ *  (the dashboard step handles that) or the page never settles. */
+async function canOpenStore(page: Page, shop: string, signal: AbortSignal): Promise<'yes' | 'no' | 'unknown'> {
+  const handle = shop.replace(/^https?:\/\//, '').replace(/\.myshopify\.com.*$/i, '').trim().toLowerCase();
+  if (!handle) return 'unknown';
+  await page.goto(`https://admin.shopify.com/store/${handle}`, { waitUntil: 'domcontentloaded' }).catch(() => {});
+  for (let i = 0; i < 10; i += 1) {
+    if (signal.aborted) return 'unknown';
+    await page.waitForTimeout(1500).catch(() => {});
+    if (SELECTORS.loginHost.test(page.url())) return 'unknown';
+    const text = await page.innerText('body').catch(() => '');
+    if (/doesn.t have permission|don.t have permission|switch accounts/i.test(text)) return 'no';
+    if (!page.url().includes(`/store/${handle}`)) return 'no';   // bounced to the stores list
+    if (/\b(Home|Orders|Products|Customers)\b/.test(text)) return 'yes';
+  }
+  return 'unknown';
+}
+
+/** Which organization owns this store? Read from the store's OWN admin: Settings → Apps →
+ *  Develop apps links to that organization's Dev Dashboard (verified 2026-09-27: friartucks →
+ *  213631064, a freshly created store → its own new org). Account-wide pages are no use here —
+ *  the admin store picker ignores organization_id and the dashboard's "Recent stores" list is
+ *  account-wide, which is how the old check picked the wrong org. */
+async function findOrgForShop(page: Page, shop: string, justCreated: boolean, log: (t: string) => void, signal: AbortSignal): Promise<string | null> {
+  const handle = shop.replace(/^https?:\/\//, '').replace(/\.myshopify\.com.*$/i, '').trim().toLowerCase();
+  if (!handle) return null;
+  log(`Finding which Shopify organization owns ${shop}…`);
+  // A store created minutes ago can take a moment before its settings pages are ready.
+  const rounds = justCreated ? 4 : 2;
+  for (let round = 0; round < rounds; round += 1) {
+    if (signal.aborted) return null;
+    await page.goto(`https://admin.shopify.com/store/${handle}/settings/apps/development`, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    for (let i = 0; i < 10; i += 1) {
+      if (signal.aborted) return null;
+      await page.waitForTimeout(1500).catch(() => {});
+      if (SELECTORS.loginHost.test(page.url())) throw new Error('__needs_login__');
+      const text = await page.innerText('body').catch(() => '');
+      if (/doesn.t have permission|don.t have permission/i.test(text)) { log(`The signed-in Shopify account can't open ${shop}.`); return null; }
+      const hrefs = await page.$$eval('a[href*="dev.shopify.com/dashboard/"]', (links) => links.map((a) => a.getAttribute('href') ?? '')).catch(() => [] as string[]);
+      const org = hrefs.map((href) => /dev\.shopify\.com\/dashboard\/(\d+)/.exec(href)?.[1]).find(Boolean);
+      if (org) return org;
+    }
+    if (round < rounds - 1) { log('The store settings are not ready yet — trying again in 15 seconds…'); await page.waitForTimeout(15_000).catch(() => {}); }
+  }
+  log(`Could not tell which organization owns ${shop} — stopping before creating anything.`);
+  return null;
+}
+
 /** Create the app (or reuse one already named appName) and return its numeric app id. */
-async function ensureApp(page: Page, orgId: string, appName: string, log: (t: string) => void, signal: AbortSignal): Promise<string | null> {
+async function ensureApp(page: Page, orgId: string, appName: string, scopes: string, log: (t: string) => void, signal: AbortSignal): Promise<string | null> {
   // Reuse: search the apps list for an existing <name>_bot before creating a duplicate.
   await page.goto(`https://dev.shopify.com/dashboard/${orgId}/apps`, { waitUntil: 'domcontentloaded' }).catch(() => {});
   await page.waitForTimeout(1200).catch(() => {});
@@ -269,13 +592,53 @@ async function ensureApp(page: Page, orgId: string, appName: string, log: (t: st
   log(`Creating app "${appName}"…`);
   await page.goto(`https://dev.shopify.com/dashboard/${orgId}/apps/new`, { waitUntil: 'domcontentloaded' }).catch(() => {});
   await page.waitForTimeout(1000).catch(() => {});
-  // "Start from Dev Dashboard" card: an App-name box + a Create submit button.
-  await page.locator(SELECTORS.appNameInput).last().fill(appName).catch(() => {});
-  await page.locator(SELECTORS.createAppButton).last().click().catch(() => {});
-  // Success lands on /apps/{id}/versions/new.
-  await page.waitForURL(/\/apps\/\d+\/versions\/new/, { timeout: 20_000 }).catch(() => {});
-  const id = /\/apps\/(\d+)\//.exec(page.url())?.[1] ?? null;
-  return id;
+  // "Start from Dev Dashboard" card (re-checked 2026-09-24): an "App name" box with a 0/30
+  // counter and a "Create app" button (type=button — no longer a form submit).
+  const nameBox = page.getByLabel(/app name/i).first();
+  await nameBox.waitFor({ state: 'visible', timeout: 15_000 }).catch(() => {});
+  if (await nameBox.isVisible().catch(() => false)) await nameBox.fill(appName.slice(0, 30)).catch(() => {});
+  else await page.locator(SELECTORS.appNameInput).last().fill(appName.slice(0, 30)).catch(() => {});
+  // The Sept 2026 form also has App URL (prefilled) and a Scopes box on the same page.
+  const scopesBox = page.getByLabel(/^\s*scopes\s*$/i).first();
+  if (scopes && await scopesBox.isVisible().catch(() => false)) await scopesBox.fill(scopes).catch(() => {});
+  const createButton = page.getByRole('button', { name: /^\s*create( app)?\s*$/i }).last();
+  if (await createButton.isVisible().catch(() => false)) await createButton.click().catch(() => {});
+  else await page.locator(SELECTORS.createAppButton).last().click().catch(() => {});
+  // Sept 2026: "Create app" opens a "Release version" dialog (optional description + Release) —
+  // the app is only created once Release is pressed. Success lands on /apps/{id}/….
+  const appUrl = /\/apps\/(\d+)(?:[/?#]|$)/;
+  let released = false;
+  for (let i = 0; i < 30 && !appUrl.test(page.url()); i += 1) {
+    if (signal.aborted) return null;
+    if (!released) {
+      const dialog = page.getByRole('dialog').filter({ hasText: /release version/i }).first();
+      const release = dialog.getByRole('button', { name: /^\s*release\s*$/i }).first();
+      if (await release.isVisible().catch(() => false)) {
+        log('Shopify asks to release the first version — pressing Release.');
+        await page.waitForTimeout(400).catch(() => {});   // let that step's screenshot show the dialog
+        await release.click().catch(() => {});
+        released = true;
+      }
+    }
+    await page.waitForTimeout(1000).catch(() => {});
+  }
+  const id = appUrl.exec(page.url())?.[1] ?? null;
+  if (id) { log(`App created (${id}).`); return id; }
+
+  // Shopify didn't navigate. Say why if the page shows an error, then check whether the app
+  // was created anyway (slow redirects do happen) before giving up.
+  const pageError = await page.locator('[role="alert"], [class*="error" i], [class*="critical" i]')
+    .filter({ hasText: /\S/ }).first().innerText({ timeout: 1500 }).catch(() => '');
+  log(`App creation did not open the new app (still on ${page.url().replace(/^https?:\/\//, '').slice(0, 80)}).${pageError ? ` Shopify says: ${pageError.replace(/\s+/g, ' ').trim().slice(0, 160)}` : ''}`);
+  if (signal.aborted) return null;
+  await page.waitForTimeout(1500).catch(() => {});   // keep the error on screen for that step's screenshot
+  await page.goto(`https://dev.shopify.com/dashboard/${orgId}/apps`, { waitUntil: 'domcontentloaded' }).catch(() => {});
+  await page.waitForTimeout(2000).catch(() => {});
+  const created = page.locator(`a[href*="/apps/"]`, { hasText: appName }).first();
+  const href = (await created.isVisible().catch(() => false)) ? await created.getAttribute('href').catch(() => null) : null;
+  const found = href && /\/apps\/(\d+)/.exec(href)?.[1];
+  if (found) { log(`Found the app in your apps list after all (${found}) — carrying on.`); return found; }
+  return null;
 }
 
 /** On the version editor: fill the required-scopes textarea and release (blank version name). */
@@ -366,4 +729,82 @@ async function installOnStore(page: Page, orgId: string, clientId: string, shop:
   }
   // No install button but no error — treat as already installed / OK.
   return 'ok';
+}
+
+/** One-off: rename a store using ThemeBot's own Chrome profile (already signed in to Shopify).
+ *  Used after a build finishes when the in-flow rename was skipped. The profile must be free
+ *  (no sign-in window / setup script using it at the same time). */
+export async function renameStoreInProfile(profileDir: string, shop: string, storeName: string, log: (t: string) => void = () => {}): Promise<boolean> {
+  const chrome = detectEngines().find((e) => e.id === 'chrome' && e.available);
+  prepareFreshWindow(profileDir);
+  const context = await chromium.launchPersistentContext(profileDir, {
+    headless: false, channel: chrome ? 'chrome' : undefined, viewport: { width: 1280, height: 900 },
+    args: ['--no-first-run', '--no-default-browser-check', ...centeredWindowArgs()],
+  });
+  const messages: string[] = [];
+  try {
+    const page = context.pages()[0] ?? await context.newPage();
+    await nameStore(page, shop, storeName, (text) => { messages.push(text); log(text); });
+    return messages.some((text) => text.startsWith('Named the store'));
+  } finally { await context.close().catch(() => {}); }
+}
+
+export interface StoreAccess {
+  shop: string;
+  /** yes = listed for the signed-in account; no = not listed; signed-out = no Shopify login in the
+   *  ThemeBot window; unknown = could not tell (window open, page never loaded…). */
+  access: 'yes' | 'no' | 'signed-out' | 'unknown';
+  account: string | null;
+  storeName: string | null;
+  reason?: 'window-open' | 'busy' | 'launch-failed' | 'timeout';
+  checkedAt: number;
+}
+
+/** Read-only: which Shopify login the ThemeBot window uses, and does that login list this store?
+ *  Opens the admin store picker in a hidden window with the ThemeBot profile — no clicks. */
+export async function checkStoreAccess(profileDir: string, shop: string): Promise<StoreAccess> {
+  const sub = shop.replace(/^https?:\/\//, '').replace(/\.myshopify\.com.*$/i, '').trim().toLowerCase();
+  const base = { shop, account: null, storeName: null, checkedAt: Date.now() };
+  let context: BrowserContext;
+  try {
+    await mkdir(profileDir, { recursive: true });
+    const chrome = detectEngines().find((e) => e.id === 'chrome' && e.available);
+    context = await chromium.launchPersistentContext(profileDir, { headless: true, channel: chrome ? 'chrome' : undefined, args: ['--no-first-run', '--no-default-browser-check'] });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    return { ...base, access: 'unknown', reason: isProfileInUse(error) ? 'window-open' : 'launch-failed' };
+  }
+  try {
+    const page = context.pages()[0] ?? await context.newPage();
+    await page.goto('https://admin.shopify.com/?no_redirect=true', { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => {});
+    for (let i = 0; i < 12; i += 1) {
+      await page.waitForTimeout(1500).catch(() => {});
+      if (SELECTORS.loginHost.test(page.url())) return { ...base, access: 'signed-out' };
+      const rows = await page.$$eval('a[href*="/store/"]', (links) => links.map((a) => ({ href: a.getAttribute('href') ?? '', text: (a.textContent ?? '').replace(/\s+/g, ' ').trim() }))).catch(() => []);
+      if (!rows.length) continue;
+      const body = await page.innerText('body').catch(() => '');
+      const account = /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/.exec(body)?.[0] ?? null;
+      const row = rows.find((r) => new RegExp(`/store/${sub}(?:[/?#]|$)`, 'i').test(r.href) || r.text.toLowerCase().includes(`${sub}.myshopify.com`));
+      const storeName = row ? (row.text.replace(new RegExp(`${sub}\\.myshopify\\.com\\s*$`, 'i'), '').trim() || null) : null;
+      return { ...base, account, storeName, access: row ? 'yes' : 'no' };
+    }
+    return { ...base, access: 'unknown', reason: 'timeout' };
+  } finally {
+    await context.close().catch(() => {});
+  }
+}
+
+/** One-off: give an existing store the standard storefront password using ThemeBot's own Chrome
+ *  profile (must be free — no ThemeBot window open). Returns the password now in place. */
+export async function setStorefrontPasswordInProfile(profileDir: string, shop: string, password = DEFAULT_STOREFRONT_PASSWORD, log: (t: string) => void = () => {}): Promise<string | null> {
+  const chrome = detectEngines().find((e) => e.id === 'chrome' && e.available);
+  prepareFreshWindow(profileDir);
+  const context = await chromium.launchPersistentContext(profileDir, {
+    headless: false, channel: chrome ? 'chrome' : undefined, viewport: { width: 1280, height: 900 },
+    args: ['--no-first-run', '--no-default-browser-check', ...centeredWindowArgs()],
+  });
+  try {
+    const page = context.pages()[0] ?? await context.newPage();
+    return await ensureStorefrontPassword(page, shop, password, log);
+  } finally { await context.close().catch(() => {}); }
 }

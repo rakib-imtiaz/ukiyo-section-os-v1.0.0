@@ -1,0 +1,164 @@
+<title>ThemeBot Workflow Map</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700&family=Source+Sans+3:wght@400;600&display=swap">
+<style>
+  :root {
+    --ink:#1B2432; --ink-2:#4A5568; --paper:#F7F5F0; --panel:#FFFFFF; --line:#DDD8CE;
+    --accent:#137C7A; --ok:#2E7D4F; --wait:#B7791F; --stop:#B0413E; --soft:#EEF3F2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --ink:#EEF1F4; --ink-2:#AAB4C0; --paper:#151A21; --panel:#1E252E; --line:#2E3742; --accent:#4FB8B5; --ok:#5DBB7E; --wait:#E0A93F; --stop:#E07470; --soft:#232C33; }
+  }
+  :root[data-theme="dark"] { --ink:#EEF1F4; --ink-2:#AAB4C0; --paper:#151A21; --panel:#1E252E; --line:#2E3742; --accent:#4FB8B5; --ok:#5DBB7E; --wait:#E0A93F; --stop:#E07470; --soft:#232C33; }
+  * { box-sizing:border-box; }
+  body { background:var(--paper); color:var(--ink); font-family:"Source Sans 3", "Segoe UI", Arial, sans-serif; font-size:17px; line-height:1.55; padding-block:40px 64px; padding-inline:clamp(16px, 5vw, 48px); }
+  main { max-width: 980px; margin: 0 auto; display:flex; flex-direction:column; gap:48px; }
+  h1, h2, h3 { font-family:"Sora", "Segoe UI", Arial, sans-serif; letter-spacing:-0.01em; text-wrap:balance; margin:0; }
+  h1 { font-size:clamp(28px, 4vw, 40px); font-weight:700; }
+  h2 { font-size:clamp(20px, 2.6vw, 26px); font-weight:600; }
+  p { margin:0; max-width:68ch; }
+  .eyebrow { font-family:"Sora", sans-serif; font-size:12px; font-weight:600; letter-spacing:.12em; text-transform:uppercase; color:var(--accent); }
+  header { display:flex; flex-direction:column; gap:12px; border-bottom:1px solid var(--line); padding-bottom:28px; }
+  header p.lead { font-size:19px; color:var(--ink-2); }
+  section { display:flex; flex-direction:column; gap:14px; }
+  .legend { display:flex; flex-wrap:wrap; gap:10px 18px; font-size:15px; color:var(--ink-2); }
+  .legend span { display:inline-flex; align-items:center; gap:7px; }
+  .sw { width:14px; height:14px; border-radius:3px; border:1.5px solid var(--ink-2); display:inline-block; }
+  .sw.you { background:#FFF3D6; border-color:#B7791F; } .sw.bot { background:#DCEFEE; border-color:#137C7A; } .sw.ask { background:#FFFFFF; border-color:#1B2432; } .sw.done { background:#DCEEE2; border-color:#2E7D4F; } .sw.pause { background:#FBE3E2; border-color:#B0413E; }
+  .diagram { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:20px 12px; overflow-x:auto; }
+  .diagram pre.mermaid { margin:0; min-width:520px; }
+  .steps { display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:12px; }
+  .step { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; display:flex; flex-direction:column; gap:6px; }
+  .step b { font-family:"Sora", sans-serif; font-size:15px; }
+  .step small { color:var(--ink-2); font-size:14.5px; line-height:1.45; }
+  .note { border-left:4px solid var(--accent); background:var(--soft); padding:12px 16px; border-radius:6px; color:var(--ink); font-size:16px; }
+  footer { color:var(--ink-2); font-size:14px; border-top:1px solid var(--line); padding-top:20px; }
+</style>
+
+<main>
+  <header>
+    <span class="eyebrow">ThemeBot · how it works</span>
+    <h1>From a website to a working Shopify store, step by step</h1>
+    <p class="lead">Every box below is something you will see on screen. Amber boxes are the moments where you do something. Teal boxes are ThemeBot working on its own, inside your Chrome.</p>
+    <div class="legend">
+      <span><i class="sw you"></i> You do this</span>
+      <span><i class="sw bot"></i> ThemeBot does this</span>
+      <span><i class="sw ask"></i> A question or check</span>
+      <span><i class="sw done"></i> Finished</span>
+      <span><i class="sw pause"></i> Paused, needs you</span>
+    </div>
+  </header>
+
+  <section>
+    <span class="eyebrow">1 · The big picture</span>
+    <h2>What goes in, what comes out</h2>
+    <p>Two things go in. One store comes out. Everything in between is automatic, and it happens in your own Chrome.</p>
+    <div class="diagram"><pre class="mermaid">
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Source Sans 3, Segoe UI, sans-serif","fontSize":"15px","primaryColor":"#DCEFEE","primaryTextColor":"#1B2432","primaryBorderColor":"#137C7A","lineColor":"#4A5568","secondaryColor":"#FFF3D6","tertiaryColor":"#FFFFFF"}}}%%
+flowchart LR
+  A["Your website<br/>(a link, or the project files)"]:::you --> T
+  B["A name for the store"]:::you --> T
+  T["ThemeBot"]:::bot --> S["A Shopify store with your website<br/>rebuilt as a real theme"]:::done
+  T --> R["A report with before / after pictures"]:::done
+  classDef you fill:#FFF3D6,stroke:#B7791F,color:#1B2432,stroke-width:1.5px
+  classDef bot fill:#DCEFEE,stroke:#137C7A,color:#1B2432,stroke-width:1.5px
+  classDef done fill:#DCEEE2,stroke:#2E7D4F,color:#1B2432,stroke-width:1.5px
+    </pre></div>
+  </section>
+
+  <section>
+    <span class="eyebrow">2 · Two ways to start</span>
+    <h2>Pick the door that fits</h2>
+    <p>Most people take the first door. The second is for anyone who already made their Shopify store by hand.</p>
+    <div class="diagram"><pre class="mermaid">
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Source Sans 3, Segoe UI, sans-serif","fontSize":"15px","lineColor":"#4A5568"}}}%%
+flowchart TD
+  Q{"Do you already have<br/>a Shopify store?"}:::ask
+  Q -- "No, or not sure" --> E["Do it for me<br/>ThemeBot creates the store,<br/>connects it, builds the theme"]:::bot
+  Q -- "Yes, and I have its app keys" --> X["I already have a store<br/>Paste the store address and keys,<br/>ThemeBot builds the theme"]:::you
+  E --> J["Same build, same checks,<br/>same result"]:::done
+  X --> J
+  classDef you fill:#FFF3D6,stroke:#B7791F,color:#1B2432,stroke-width:1.5px
+  classDef bot fill:#DCEFEE,stroke:#137C7A,color:#1B2432,stroke-width:1.5px
+  classDef ask fill:#FFFFFF,stroke:#1B2432,color:#1B2432,stroke-width:1.5px
+  classDef done fill:#DCEEE2,stroke:#2E7D4F,color:#1B2432,stroke-width:1.5px
+    </pre></div>
+  </section>
+
+  <section>
+    <span class="eyebrow">3 · "Do it for me", start to finish</span>
+    <h2>The full path, with every place it can pause</h2>
+    <p>Read it top to bottom. There are exactly three things you do: fill in the form, say "yes, that's my website", and confirm your Chrome once. Everything else is ThemeBot, working inside your own Chrome where you are already signed in to Shopify.</p>
+    <div class="diagram"><pre class="mermaid">
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Source Sans 3, Segoe UI, sans-serif","fontSize":"14px","lineColor":"#4A5568"}}}%%
+flowchart TD
+  S1["Step 1 · About your store<br/>Store name · website link · project files"]:::you
+  S1 --> P["ThemeBot opens your website<br/>(or runs your project files)<br/>and takes a picture of the home page"]:::bot
+  P --> C1{"Is this your website?"}:::ask
+  C1 -- "No, wrong one" --> S1
+  C1 -- "Yes, that's it" --> S3["Step 3 · Ready to go<br/>Choose how it checks its work"]:::you
+  S3 --> L{"Chrome ready?<br/>(Claude extension installed,<br/>signed in to Shopify in Chrome)"}:::ask
+  L -- "Not yet" --> SI["One-time Chrome setup<br/>(about three minutes, remembered forever)"]:::pause
+  SI --> L
+  L -- "Yes" --> GO["Press Start"]:::you
+  GO --> A1["Create the Shopify store<br/>skipping every payment step"]:::bot
+  A1 --> A2["Set up the connection<br/>so ThemeBot may edit the store"]:::bot
+  A2 --> A3["Save the connection keys<br/>(encrypted, on this computer)"]:::bot
+  A3 --> A4["Tiny test edit<br/>to prove the connection works"]:::bot
+  A4 --> A5["Get your website ready<br/>to compare against"]:::bot
+  A5 --> B["Build · check · fix<br/>(see the loop below)"]:::bot
+  B --> D["Done · your theme is on the store<br/>as a draft, ready to review"]:::done
+  A1 -. "Shopify insists on a card" .-> ST["Stops and tells you<br/>nothing was charged"]:::pause
+  A2 -. "Shopify asks to sign in again" .-> SL["Log in in the Chrome window<br/>the bot opened; it continues by itself"]:::pause
+  classDef you fill:#FFF3D6,stroke:#B7791F,color:#1B2432,stroke-width:1.5px
+  classDef bot fill:#DCEFEE,stroke:#137C7A,color:#1B2432,stroke-width:1.5px
+  classDef ask fill:#FFFFFF,stroke:#1B2432,color:#1B2432,stroke-width:1.5px
+  classDef done fill:#DCEEE2,stroke:#2E7D4F,color:#1B2432,stroke-width:1.5px
+  classDef pause fill:#FBE3E2,stroke:#B0413E,color:#1B2432,stroke-width:1.5px
+    </pre></div>
+    <div class="note">ThemeBot never types card or payment details. If Shopify will not continue without a card, the run stops and says so. Nothing is charged, nothing is half-built.</div>
+  </section>
+
+  <section>
+    <span class="eyebrow">4 · Build, check, fix</span>
+    <h2>How it makes sure the copy matches</h2>
+    <p>Building the theme is only the first pass. After that it compares the new store to your website page by page, fixes what differs, and goes again, until the match is good enough or it runs out of rounds.</p>
+    <div class="diagram"><pre class="mermaid">
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Source Sans 3, Segoe UI, sans-serif","fontSize":"14px","lineColor":"#4A5568"}}}%%
+flowchart TD
+  B1["Rebuild the website<br/>as Shopify sections"]:::bot --> B2["Put it on the store<br/>as a draft theme"]:::bot
+  B2 --> Q1["Open both sites<br/>and compare every page:<br/>layout · text · clickable things"]:::bot
+  Q1 --> M{"Match good enough?<br/>(you set the bar, default 92%)"}:::ask
+  M -- "Yes" --> OK["Finished · draft theme ready<br/>your live store untouched"]:::done
+  M -- "Not yet" --> F["Fix the differences"]:::bot
+  F --> N{"Rounds left?<br/>(default: up to 5)"}:::ask
+  N -- "Yes" --> Q1
+  N -- "No" --> RV["Needs a look · best version kept,<br/>list of what still differs"]:::pause
+  classDef bot fill:#DCEFEE,stroke:#137C7A,color:#1B2432,stroke-width:1.5px
+  classDef ask fill:#FFFFFF,stroke:#1B2432,color:#1B2432,stroke-width:1.5px
+  classDef done fill:#DCEEE2,stroke:#2E7D4F,color:#1B2432,stroke-width:1.5px
+  classDef pause fill:#FBE3E2,stroke:#B0413E,color:#1B2432,stroke-width:1.5px
+    </pre></div>
+    <div class="steps">
+      <div class="step"><b>Quiet automatic check</b><small>The default. A hidden browser does the comparing in the background. Nothing to install or sign in to.</small></div>
+      <div class="step"><b>Check in my Chrome with Claude</b><small>Optional. Claude opens the pages in your own Chrome and checks them the way a person would. One three-minute setup, remembered forever.</small></div>
+      <div class="step"><b>Publish live?</b><small>Off by default. The result stays a draft until you look at it. Turn it on and a passing build replaces the live theme automatically.</small></div>
+    </div>
+  </section>
+
+  <section>
+    <span class="eyebrow">5 · What you see while it runs</span>
+    <h2>Seven lines, ticking through</h2>
+    <p>While ThemeBot works, the screen shows this list. Each line turns green as it finishes. If one turns red, the message under it says what happened and what to do.</p>
+    <div class="steps">
+      <div class="step"><b>1. Check that your Chrome is ready</b><small>Claude extension, signed in to Shopify.</small></div>
+      <div class="step"><b>2. Create your Shopify store</b><small>No card needed.</small></div>
+      <div class="step"><b>3. Set up the connection</b><small>Between ThemeBot and the store.</small></div>
+      <div class="step"><b>4. Save the connection keys</b><small>To your project, encrypted.</small></div>
+      <div class="step"><b>5. Test that ThemeBot can edit the store</b></div>
+      <div class="step"><b>6. Get your website ready to compare against</b></div>
+      <div class="step"><b>7. Start building your Shopify theme</b><small>Then follow it on the Dashboard.</small></div>
+    </div>
+  </section>
+
+  <footer>ThemeBot workflow map · 22 September 2026 · Every step here exists in the app today. The first live run of step 2 (creating the store) is the next thing being tested.</footer>
+</main>

@@ -77,7 +77,7 @@ export default function OnboardingGate({ onComplete }: { onComplete: () => void 
   }, [claude?.loginActive, refreshClaude]);
 
   const steps: Array<{ id: Step; label: string }> = [
-    { id: 'connect', label: 'Connect Claude' }, { id: 'workspace', label: 'Choose workspace' }, { id: 'init', label: 'Index projects' },
+    { id: 'connect', label: 'Connect your AI' }, { id: 'workspace', label: 'Choose workspace' }, { id: 'init', label: 'Index projects' },
   ];
   const stepIndex = steps.findIndex((entry) => entry.id === step);
 
@@ -113,13 +113,13 @@ function ConnectStep({ claude, busy, setBusy, error, setError, onRefresh, lines 
   const [mode, setMode] = useState<'choose' | 'api'>('choose');
   const [apiKey, setApiKey] = useState('');
 
-  if (!claude) return <div className="ob-panel"><Loader className="spin" size={22} /><p>Checking Claude connection…</p></div>;
+  if (!claude) return <div className="ob-panel"><Loader className="spin" size={22} /><p>Checking the AI connection…</p></div>;
 
   if (!claude.cliPresent) {
     return (
       <div className="ob-panel">
-        <h2>Claude Code CLI not found</h2>
-        <p>ThemeBot drives the Claude Code CLI to clone and QA sites. Install it, then reload.</p>
+        <h2>AI engine not found</h2>
+        <p>ThemeBot builds with an AI engine that runs on this computer (today: the Claude Code command-line tool). Install it, then reload.</p>
         <pre className="ob-code">npm install -g @anthropic-ai/claude-code</pre>
         <p className="ob-muted">Expected at <code>{claude.claudePath}</code> — override with <code>FACTORY_CLAUDE_PATH</code>.</p>
         <button className="ob-btn" onClick={() => void onRefresh(true)}><RefreshCw size={15} /> Re-check</button>
@@ -144,8 +144,8 @@ function ConnectStep({ claude, busy, setBusy, error, setError, onRefresh, lines 
 
   return (
     <div className="ob-panel">
-      <h2>Connect Claude</h2>
-      <p>ThemeBot needs your Claude account to run. Nothing works until it is connected.</p>
+      <h2>Connect your AI</h2>
+      <p>ThemeBot needs an AI account to build your stores. Sign in with the one you use — more providers are coming.</p>
       {claude.reason && !claude.loginActive && <div className="ob-hint"><span><Info size={16} /> {claude.reason}</span><HelpCircle size={16} className="ob-hint__help" /></div>}
 
       {claude.loginActive ? (
@@ -244,7 +244,7 @@ function WorkspaceStep({ busy, setBusy, onBack, onSelected }: { busy: boolean; s
         </div>
       </div>
       {error && <div className="ob-error"><AlertCircle size={14} /> {error}</div>}
-      <button className="ob-btn ob-btn--ghost ob-back" onClick={onBack}><ArrowLeft size={15} /> Back to Claude</button>
+      <button className="ob-btn ob-btn--ghost ob-back" onClick={onBack}><ArrowLeft size={15} /> Back</button>
     </div>
   );
 }
@@ -263,7 +263,7 @@ function InitStep({ lines, onComplete }: { lines: ProgressLine[]; onComplete: ()
   return (
     <div className="ob-panel">
       <h2>Setting up your workspace</h2>
-      <p>Discovering and indexing projects with a quick Claude Haiku scan. This continues in the background — you can enter now.</p>
+      <p>Discovering and indexing projects with a quick AI scan. This continues in the background — you can enter now.</p>
       <ProgressStream lines={lines} />
       <button className="ob-btn ob-btn--accent ob-enter" disabled={!ready} onClick={onComplete}>{ready ? <><Sparkles size={16} /> Enter ThemeBot</> : <><Loader className="spin" size={15} /> Preparing…</>}</button>
     </div>

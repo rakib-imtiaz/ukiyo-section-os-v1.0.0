@@ -3,11 +3,11 @@
 // Every interactive control is keyboard-accessible and readable in BOTH themes —
 // text color is always explicitly paired with its background.
 import {
-  createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState,
+  Fragment, createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState,
   type ComponentProps, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes,
 } from 'react';
 import { cva, type VariantProps } from 'class-variance-authority';
-import { CheckCircle2, ChevronDown, Info, TriangleAlert, X, XCircle } from 'lucide-react';
+import { Check, CheckCircle2, ChevronDown, Info, TriangleAlert, X, XCircle } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 // ---------- Presence (mount/unmount transitions) ----------
@@ -279,36 +279,67 @@ export function Tabs({ tabs, value, onChange, className }: {
 
 // ---------- Dialog (confirm) ----------
 
-export function ConfirmDialog({ open, title, description, confirmLabel = 'Confirm', destructive, onConfirm, onCancel, children }: {
+/** A step shown while a confirmed action runs: done ticks, the active one spins. */
+export type BusyStep = { label: string; state: 'done' | 'active' | 'todo' };
+
+export function ConfirmDialog({ open, title, description, confirmLabel = 'Confirm', destructive, onConfirm, onCancel, children, busy }: {
   open: boolean; title: string; description?: string; confirmLabel?: string; destructive?: boolean;
   onConfirm: () => void; onCancel: () => void; children?: ReactNode;
+  /** While set, the dialog shows these steps + a moving bar and locks its buttons. */
+  busy?: { label: string; steps: BusyStep[] } | null;
 }) {
   const { mounted, state } = usePresence(open, 240);
   const cancelRef = useRef<HTMLButtonElement>(null);
   // Freeze content while the exit transition plays (callers often clear their
   // state on confirm/cancel, which would otherwise flash empty text).
-  const frozen = useRef({ title, description, confirmLabel, destructive, children });
-  if (open) frozen.current = { title, description, confirmLabel, destructive, children };
-  const content = open ? { title, description, confirmLabel, destructive, children } : frozen.current;
+  const frozen = useRef({ title, description, confirmLabel, destructive, children, busy });
+  if (open) frozen.current = { title, description, confirmLabel, destructive, children, busy };
+  const content = open ? { title, description, confirmLabel, destructive, children, busy } : frozen.current;
+  const locked = Boolean(content.busy);
+  const guardedCancel = () => { if (!locked) onCancel(); };
   useEffect(() => {
     if (!open) return;
-    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onCancel(); };
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape' && !busy) onCancel(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, onCancel]);
+  }, [open, onCancel, busy]);
   useEffect(() => { if (open && mounted) requestAnimationFrame(() => cancelRef.current?.focus()); }, [open, mounted]);
   if (!mounted) return null;
+  const done = content.busy ? content.busy.steps.filter((step) => step.state === 'done').length : 0;
+  const total = content.busy ? Math.max(1, content.busy.steps.length) : 1;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="dialog-overlay absolute inset-0 bg-black/50 backdrop-blur-[2px]" data-state={state} onClick={onCancel} aria-hidden="true" />
-      <div role="alertdialog" aria-modal="true" aria-label={content.title} data-state={state}
+      <div className="dialog-overlay absolute inset-0 bg-black/50 backdrop-blur-[2px]" data-state={state} onClick={guardedCancel} aria-hidden="true" />
+      <div role="alertdialog" aria-modal="true" aria-label={content.title} aria-busy={locked} data-state={state}
         className="dialog-panel relative z-10 w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-2xl">
         <h2 className="text-[17px] font-bold tracking-tight">{content.title}</h2>
-        {content.description && <p className="mt-2 text-[14px] font-medium leading-relaxed text-muted-foreground">{content.description}</p>}
-        {content.children && <div className="mt-4">{content.children}</div>}
+        {content.busy ? (
+          <div className="busy-steps mt-4" aria-live="polite">
+            <ul className="flex flex-col gap-2.5">
+              {content.busy.steps.map((step) => (
+                <li key={step.label} className={cn('busy-step flex items-center gap-2.5 text-[14px] font-semibold', step.state === 'todo' && 'text-muted-foreground')} data-state={step.state}>
+                  <span className="busy-step__icon flex size-5 shrink-0 items-center justify-center rounded-full">
+                    {step.state === 'done' ? <Check className="size-3.5" strokeWidth={3} /> : step.state === 'active' ? <Spinner className="size-4 text-primary" /> : <span className="size-1.5 rounded-full bg-muted-foreground/40" />}
+                  </span>
+                  {step.label}
+                </li>
+              ))}
+            </ul>
+            <div className="busy-bar mt-5" role="progressbar" aria-valuenow={Math.round((done / total) * 100)} aria-valuemin={0} aria-valuemax={100}>
+              <div className="busy-bar__fill" style={{ width: `${Math.max(8, (done / total) * 100)}%` }} />
+            </div>
+          </div>
+        ) : (
+          <>
+            {content.description && <p className="mt-2 text-[14px] font-medium leading-relaxed text-muted-foreground">{content.description}</p>}
+            {content.children && <div className="mt-4">{content.children}</div>}
+          </>
+        )}
         <div className="mt-6 flex justify-end gap-2.5">
-          <Button ref={cancelRef} variant="outline" onClick={onCancel}>Cancel</Button>
-          <Button variant={content.destructive ? 'destructive' : 'default'} onClick={onConfirm}>{content.confirmLabel}</Button>
+          <Button ref={cancelRef} variant="outline" onClick={guardedCancel} disabled={locked}>Cancel</Button>
+          <Button variant={content.destructive ? 'destructive' : 'default'} onClick={onConfirm} disabled={locked}>
+            {locked && <Spinner className="size-4 text-current" />}{locked ? content.busy!.label : content.confirmLabel}
+          </Button>
         </div>
       </div>
     </div>
@@ -352,9 +383,9 @@ export function Sheet({ open, onClose, title, children, wide }: { open: boolean;
 
 // ---------- Dropdown menu (kebab actions) ----------
 
-export function DropdownMenu({ trigger, items, label = 'Actions' }: {
-  trigger: ReactNode; label?: string;
-  items: Array<{ label: string; onSelect: () => void; destructive?: boolean; disabled?: boolean; title?: string }>;
+export function DropdownMenu({ trigger, items, label = 'Actions', triggerClassName }: {
+  trigger: ReactNode; label?: string; triggerClassName?: string;
+  items: Array<{ label: string; onSelect: () => void; destructive?: boolean; disabled?: boolean; title?: string; icon?: ReactNode; divider?: boolean }>;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -370,23 +401,26 @@ export function DropdownMenu({ trigger, items, label = 'Actions' }: {
     <div className="relative" ref={ref}>
       <button
         type="button" onClick={() => setOpen((value) => !value)} aria-haspopup="menu" aria-expanded={open} aria-label={label}
-        className="flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+        className={triggerClassName ?? 'flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground'}
       >
         {trigger}
       </button>
       {open && (
-        <div className="pop-in absolute right-0 top-10 z-30 min-w-48 rounded-lg border border-border bg-card p-1.5 shadow-xl" role="menu">
+        <div className="tb-menu pop-in absolute right-0 top-10 z-30 min-w-48 rounded-lg border border-border bg-card p-1.5 shadow-xl" role="menu">
           {items.map((item) => (
+            <Fragment key={item.label}>
+            {item.divider && <div className="my-1 h-px bg-border" role="separator" />}
             <button
-              key={item.label} type="button" role="menuitem" disabled={item.disabled} title={item.title}
+              type="button" role="menuitem" disabled={item.disabled} title={item.title}
               onClick={() => { setOpen(false); item.onSelect(); }}
               className={cn(
-                'block w-full rounded-md px-3 py-2 text-left text-[14px] font-semibold text-foreground transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-40',
-                item.destructive && 'text-destructive hover:bg-destructive/10',
+                'flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-[14px] font-semibold text-foreground transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-40 [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-muted-foreground',
+                item.destructive && 'text-destructive hover:bg-destructive/10 [&_svg]:text-destructive',
               )}
             >
-              {item.label}
+              {item.icon}{item.label}
             </button>
+            </Fragment>
           ))}
         </div>
       )}

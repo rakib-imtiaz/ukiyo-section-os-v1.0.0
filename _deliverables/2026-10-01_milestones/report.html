@@ -1,0 +1,750 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ThemeBot Product Plan</title>
+<style>
+  :root {
+    --ink: #0f1b3d; --ink-2: #44506b; --ink-3: #6b7690; --line: #e3e8f2; --soft: #f4f7fc;
+    --blue: #2a78d6; --orange: #eb6834; --aqua: #1baf7a; --yellow: #e0a100; --red: #e34948; --purple: #7c5cd6; --pink: #d6457a; --grey: #7d879c;
+    --ok: #15803d; --warn: #b45309; --bad: #b42318;
+  }
+  @page { size: A4; margin: 14mm 14mm 16mm; }
+  * { box-sizing: border-box; }
+  body { margin: 0; color: var(--ink); font: 11pt/1.45 "Segoe UI", system-ui, Arial, sans-serif; }
+  h1, h2, h3, p { margin: 0; }
+  .page { page-break-after: always; display: flex; flex-direction: column; gap: 14px; }
+  .page:last-child { page-break-after: auto; }
+  .eyebrow { color: var(--blue); font-size: 8.5pt; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+  h2 { font-size: 24pt; letter-spacing: -.02em; line-height: 1.1; }
+  .lead { color: var(--ink-2); font-size: 12pt; }
+  .muted { color: var(--ink-3); }
+  .card { border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; background: #fff; break-inside: avoid; }
+  .soft { background: var(--soft); border-color: transparent; }
+  .row { display: grid; gap: 12px; }
+  .r2 { grid-template-columns: 1fr 1fr; } .r3 { grid-template-columns: repeat(3, 1fr); } .r4 { grid-template-columns: repeat(4, 1fr); }
+  .ic { display: inline-grid; place-items: center; border-radius: 12px; flex: 0 0 auto; }
+  .ic svg { width: 58%; height: 58%; fill: none; stroke: #fff; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+  .ct { font-weight: 800; font-size: 12pt; }
+  .chip { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 8.5pt; font-weight: 800; letter-spacing: .03em; white-space: nowrap; }
+  .chip.est { background: #fdf1e3; color: var(--warn); }
+  .rec { display: flex; gap: 12px; align-items: center; border-radius: 14px; padding: 12px 16px; background: #eef5ff; border: 1px solid #c8dcfa; font-size: 11pt; break-inside: avoid; }
+  .rec .ic { width: 34px; height: 34px; background: var(--blue); }
+  .rec b { color: #1d5bb8; }
+  .foot { font-size: 8.6pt; color: var(--ink-3); }
+
+  /* cover */
+  .cover { height: 262mm; justify-content: space-between; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 15pt; }
+  .brand i { width: 30px; height: 30px; border-radius: 9px; background: linear-gradient(140deg, #4d82ff, #2f6bff); display: grid; place-items: center; }
+  .brand i::after { content: ''; width: 12px; height: 12px; border: 3px solid #fff; border-radius: 50%; }
+  .cover h1 { font-size: 44pt; line-height: 1.02; letter-spacing: -.03em; }
+  .hero { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .hero .card { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; padding: 20px 14px; }
+  .hero .big { font-size: 30pt; font-weight: 800; letter-spacing: -.03em; line-height: 1; }
+  .hero p { font-size: 10.5pt; color: var(--ink-2); }
+
+  /* rings */
+  .ring { position: relative; display: grid; place-items: center; }
+  .ring b { position: absolute; font-size: 17pt; font-weight: 800; }
+  .ring b.sm { font-size: 9.5pt; color: var(--ink-3); text-align: center; line-height: 1.1; }
+
+  /* status */
+  .status { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .status .card { padding: 12px 14px; }
+  .status h3 { font-size: 12pt; display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .status h3 .ic { width: 28px; height: 28px; border-radius: 9px; }
+  .li { display: flex; gap: 8px; align-items: center; font-size: 10pt; padding: 4px 0; }
+  .dot { width: 18px; height: 18px; border-radius: 50%; display: inline-grid; place-items: center; flex: 0 0 auto; }
+  .dot svg { width: 12px; height: 12px; fill: none; stroke: #fff; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+  .dot.d { background: var(--aqua); } .dot.p { background: var(--yellow); } .dot.x { background: #d3d8e2; }
+  .nums { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .nums .card { padding: 12px; text-align: center; }
+  .nums b { display: block; font-size: 19pt; letter-spacing: -.02em; }
+  .nums span { font-size: 9pt; color: var(--ink-3); }
+
+  /* fast track */
+  .days { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+  .wk { font-size: 9pt; font-weight: 800; color: var(--ink-3); letter-spacing: .1em; text-transform: uppercase; margin: 2px 0 -4px; }
+  .day { border-radius: 14px; padding: 10px; color: #fff; display: flex; flex-direction: column; gap: 6px; min-height: 120px; position: relative; break-inside: avoid; }
+  .day .n { font-size: 8.5pt; font-weight: 700; opacity: .9; }
+  .day .ic { width: 30px; height: 30px; background: rgba(255,255,255,.22); border-radius: 9px; }
+  .day b { font-size: 10.5pt; line-height: 1.2; }
+  .day small { font-size: 8.5pt; opacity: .92; line-height: 1.25; }
+  .day .flag { position: absolute; top: -9px; right: 8px; background: var(--ink); color: #fff; font-size: 7.5pt; font-weight: 800; padding: 2px 8px; border-radius: 999px; letter-spacing: .04em; }
+  .three { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .three .card h3 { font-size: 11.5pt; display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .three .card h3 .ic { width: 28px; height: 28px; border-radius: 9px; }
+  .three .li { font-size: 9.8pt; }
+
+  /* products */
+  .prod { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .prod .card { padding: 0; overflow: hidden; }
+  .prod .top { padding: 14px 16px; color: #fff; display: flex; align-items: center; gap: 12px; }
+  .prod .top .ic { width: 44px; height: 44px; background: rgba(255,255,255,.2); }
+  .prod .top b { font-size: 15pt; display: block; }
+  .prod .top span { font-size: 9.5pt; opacity: .9; }
+  .prod .body { padding: 8px 16px 14px; }
+  .fact { display: grid; grid-template-columns: 30px 1fr; gap: 10px; align-items: center; padding: 7px 0; border-bottom: 1px dashed var(--line); }
+  .fact:last-child { border-bottom: 0; }
+  .fact .ic { width: 30px; height: 30px; border-radius: 9px; }
+  .fact small { display: block; font-size: 8.3pt; color: var(--ink-3); text-transform: uppercase; letter-spacing: .06em; font-weight: 700; }
+  .fact span { font-size: 10.5pt; }
+  .todo { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .todo span { font-size: 9pt; border-radius: 999px; padding: 4px 10px; background: var(--soft); }
+
+  /* gantt */
+  .gantt { display: grid; grid-template-columns: 200px 1fr; padding-right: 22px; }
+  .gantt .l { padding: 7px 10px 7px 0; display: flex; align-items: center; gap: 8px; font-size: 10pt; line-height: 1.2; }
+  .gantt .l .ic { width: 26px; height: 26px; border-radius: 8px; }
+  .gantt .t { position: relative; height: 44px; border-top: 1px solid var(--line); background: repeating-linear-gradient(90deg, transparent 0 calc(100% / 6 - 1px), #edf0f6 calc(100% / 6 - 1px) calc(100% / 6)); }
+  .gantt .t i { position: absolute; top: 13px; height: 18px; border-radius: 6px; }
+  .gantt .t i.ms { width: 14px; height: 14px; top: 15px; border-radius: 3px; transform: translateX(-7px) rotate(45deg); background: var(--ink); }
+  .gantt .axis { position: relative; height: 32px; }
+  .gantt .axis span { position: absolute; transform: translateX(-50%); font-size: 8pt; color: var(--ink-3); text-align: center; line-height: 1.15; white-space: nowrap; }
+  .gantt .axis span b { color: var(--ink); display: block; }
+  .dates { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .dates .card { padding: 12px; display: flex; gap: 10px; align-items: center; }
+  .dates .ic { width: 34px; height: 34px; }
+  .dates b { display: block; font-size: 11pt; }
+  .dates span { font-size: 9pt; color: var(--ink-2); }
+
+  /* milestones */
+  .ms { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .m { border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; display: grid; grid-template-columns: 40px 1fr; gap: 12px; break-inside: avoid; }
+  .m .ic { width: 40px; height: 40px; }
+  .m b { font-size: 11.5pt; display: block; }
+  .m .when { font-size: 8.8pt; color: var(--ink-3); font-weight: 700; }
+  .m p { font-size: 9.8pt; color: var(--ink-2); margin-top: 4px; }
+  .m .done { margin-top: 6px; font-size: 9.3pt; background: #e9f8f1; color: #0f5e3a; border-radius: 8px; padding: 5px 9px; display: flex; gap: 6px; align-items: center; }
+  .m .done .dot { width: 16px; height: 16px; }
+
+  /* effort + risks */
+  .eff { display: grid; grid-template-columns: 120px 1fr 54px; gap: 10px; align-items: center; font-size: 10pt; margin: 6px 0; }
+  .eff i { display: block; height: 16px; border-radius: 5px; }
+  .eff b { text-align: right; }
+  .risks { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .risk { border-radius: 14px; padding: 12px; background: #fff7f1; border: 1px solid #f7d6c2; display: flex; flex-direction: column; gap: 6px; break-inside: avoid; }
+  .risk .ic { width: 30px; height: 30px; background: var(--orange); border-radius: 9px; }
+  .risk b { font-size: 10.5pt; }
+  .risk span { font-size: 9.3pt; color: var(--ink-2); }
+  .ask { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+  .ask div { text-align: center; padding: 12px 8px; border-radius: 14px; background: var(--soft); font-size: 9.5pt; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .ask .ic { width: 36px; height: 36px; background: var(--blue); }
+  .take { border-radius: 14px; padding: 14px 18px; background: var(--ink); color: #fff; font-size: 12pt; }
+  .take b { color: #9cc3ff; }
+  /* why page */
+  .cmp-plans { display: grid; grid-template-columns: 150px 1fr; padding-right: 40px; }
+  .cmp-plans .l { font-size: 10pt; padding: 8px 10px 8px 0; line-height: 1.2; }
+  .cmp-plans .l b { display: block; }
+  .cmp-plans .l small { color: var(--ink-3); font-size: 8.5pt; }
+  .cmp-plans .t { position: relative; height: 50px; border-top: 1px solid var(--line); background: repeating-linear-gradient(90deg, transparent 0 calc(100% / 6 - 1px), #edf0f6 calc(100% / 6 - 1px) calc(100% / 6)); }
+  .cmp-plans .t .line { position: absolute; top: 23px; height: 4px; border-radius: 2px; background: #d9dee8; left: 0; }
+  .cmp-plans .t .pt { position: absolute; top: 16px; width: 18px; height: 18px; border-radius: 50%; transform: translateX(-9px); border: 3px solid #fff; box-shadow: 0 0 0 1px rgba(15,27,61,.15); }
+  .cmp-plans .t .end { position: absolute; top: 15px; font-size: 9.5pt; font-weight: 800; white-space: nowrap; transform: translateX(12px); }
+  .cmp-plans .axis { position: relative; height: 24px; }
+  .cmp-plans .axis span { position: absolute; transform: translateX(-50%); font-size: 8pt; color: var(--ink-3); white-space: nowrap; }
+  .lg { display: inline-block; width: 11px; height: 11px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
+  .split { display: flex; height: 30px; border-radius: 8px; overflow: hidden; gap: 2px; }
+  .split i { display: grid; place-items: center; color: #fff; font-style: normal; font-weight: 800; font-size: 10pt; }
+  .split-l { display: grid; grid-template-columns: 35% 30% 20% 15%; margin-top: 6px; }
+  .split-l div { padding-right: 8px; font-size: 9.3pt; line-height: 1.25; }
+  .split-l b { display: block; }
+  .split-l span { color: var(--ink-3); font-size: 8.6pt; }
+  .why { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .why > div { border: 1px solid var(--line); border-radius: 14px; padding: 11px 12px; display: flex; flex-direction: column; gap: 4px; break-inside: avoid; }
+  .why .ic { width: 30px; height: 30px; border-radius: 9px; }
+  .why b { font-size: 10.5pt; }
+  .why > div > span:last-child { font-size: 9.2pt; color: var(--ink-2); }
+  /* plan v6 */
+  .phases { display: grid; grid-template-columns: 1fr; gap: 10px; }
+  .ph { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; break-inside: avoid; }
+  .ph-h { display: flex; align-items: center; gap: 10px; padding: 9px 14px; color: #fff; }
+  .ph-h .ic { width: 30px; height: 30px; background: rgba(255,255,255,.22); border-radius: 9px; }
+  .ph-h b { font-size: 11.5pt; }
+  .ph-h span.w { margin-left: auto; font-size: 9pt; font-weight: 700; opacity: .95; white-space: nowrap; }
+  .ph-b { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 18px; padding: 9px 14px 10px; }
+  .ph-b .li { font-size: 9.6pt; padding: 3px 0; }
+  .ph-f { font-size: 9.2pt; background: #e9f8f1; color: #0f5e3a; padding: 6px 14px; display: flex; gap: 6px; align-items: center; }
+  .ph-f .dot { width: 16px; height: 16px; }
+  .num-dot { width: 18px; height: 18px; border-radius: 50%; background: var(--soft); color: var(--ink-2); font-size: 8pt; font-weight: 800; display: inline-grid; place-items: center; flex: 0 0 auto; }
+
+  .plans3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .pc { border: 1px solid var(--line); border-radius: 16px; padding: 14px; display: flex; flex-direction: column; gap: 6px; break-inside: avoid; }
+  .pc.pop { border: 2px solid var(--pink); box-shadow: 0 10px 22px -16px rgba(214,69,122,.7); }
+  .pc .tier { font-weight: 800; font-size: 11.5pt; display: flex; justify-content: space-between; align-items: center; }
+  .pc .amt { font-size: 26pt; font-weight: 800; letter-spacing: -.03em; line-height: 1; }
+  .pc .amt small { font-size: 10pt; color: var(--ink-3); font-weight: 600; }
+  .pc .li { font-size: 9.6pt; padding: 2px 0; }
+  .pc .for { font-size: 9pt; color: var(--ink-3); }
+  .tag2 { font-size: 7.5pt; font-weight: 800; padding: 2px 8px; border-radius: 999px; background: #fde7ef; color: #a32858; letter-spacing: .04em; }
+  .desk2 { display: grid; grid-template-columns: 1.15fr 1fr 1fr; gap: 10px; }
+  .pc.d { border-color: #d9cff5; } .pc.d.pop { border: 2px solid var(--purple); box-shadow: 0 10px 22px -16px rgba(124,92,214,.7); }
+  .pc.d .tag2 { background: #efeafc; color: #5a3fb0; }
+
+  .ue { display: grid; grid-template-columns: 170px 1fr 120px; gap: 10px; align-items: center; margin: 7px 0; font-size: 10pt; }
+  .ue .bar { position: relative; height: 22px; background: #f1f3f8; border-radius: 6px; }
+  .ue .bar i { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 6px; }
+  .ue .bar i.c { background: #f3b28f; }
+  .ue .bar i.p { background: transparent; border: 2px solid var(--ink); border-left: 0; border-radius: 0 6px 6px 0; }
+  .ue .bar em { position: absolute; top: 3px; font-style: normal; font-size: 8.6pt; font-weight: 800; }
+  .ue .mg { font-weight: 800; text-align: right; }
+  .ue .mg small { display: block; font-weight: 600; color: var(--ink-3); font-size: 8.3pt; }
+
+  .burn { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; align-items: end; height: 210px; padding: 0 10px; border-bottom: 2px solid var(--line); }
+  .burn .col { display: flex; flex-direction: column; justify-content: flex-end; height: 100%; gap: 2px; align-items: stretch; }
+  .burn .col .tot { text-align: center; font-weight: 800; font-size: 12pt; margin-bottom: 4px; }
+  .burn .col i { display: block; border-radius: 4px; }
+  .burn-l { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; padding: 6px 10px 0; text-align: center; font-size: 9.3pt; }
+  .burn-l b { display: block; font-size: 10pt; }
+  .burn-l span { color: var(--ink-3); font-size: 8.6pt; }
+  table.bt { width: 100%; border-collapse: collapse; font-size: 9.4pt; }
+  .bt th { text-align: right; font-size: 8pt; color: var(--ink-3); text-transform: uppercase; letter-spacing: .05em; padding: 5px 8px; border-bottom: 2px solid var(--line); }
+  .bt th:first-child, .bt td:first-child { text-align: left; }
+  .bt td { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: right; }
+  .bt tr.sum td { font-weight: 800; border-bottom: 0; background: var(--soft); }
+  .bt i.sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+  .be { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .be div { border-radius: 14px; background: var(--soft); padding: 12px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .be .ic { width: 34px; height: 34px; }
+  .be b { font-size: 16pt; }
+  .be span { font-size: 9pt; color: var(--ink-2); }
+  .handsbrain { display: grid; grid-template-columns: 1fr 70px 1fr; align-items: center; gap: 8px; }
+  .handsbrain .side { border-radius: 14px; padding: 12px 14px; }
+  .handsbrain .side b { display: block; font-size: 11pt; margin-bottom: 4px; }
+  .handsbrain .side span { font-size: 9.3pt; }
+  .handsbrain .mid { text-align: center; font-size: 18pt; color: var(--ink-3); }
+  table.vt { width: 100%; border-collapse: collapse; font-size: 8.9pt; }
+  .vt th { text-align: left; font-size: 7.6pt; color: var(--ink-3); text-transform: uppercase; letter-spacing: .05em; padding: 4px 6px; border-bottom: 2px solid var(--line); }
+  .vt td { padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-align: top; line-height: 1.25; }
+  .vt td small { display: block; color: var(--ink-3); font-size: 7.6pt; }
+  .vt td:nth-child(4), .vt td:nth-child(5), .vt th:nth-child(4), .vt th:nth-child(5) { text-align: right; white-space: nowrap; }
+  .vt td.y { font-weight: 700; } .vt td.n { color: #c3c8d4; }
+  .vt tr.grp td { background: var(--soft); font-size: 7.6pt; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); padding: 3px 6px; }
+  .vs { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .vs-col { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+  .vs-h { color: #fff; display: flex; gap: 10px; align-items: center; padding: 10px 14px; }
+  .vs-h .ic { width: 32px; height: 32px; background: rgba(255,255,255,.22); border-radius: 9px; }
+  .vs-h b { display: block; font-size: 12pt; } .vs-h span { font-size: 9pt; opacity: .92; }
+  .vs-r { display: grid; grid-template-columns: 64px 1fr; gap: 10px; align-items: center; padding: 7px 12px; border-top: 1px solid var(--line); }
+  .vs-r b { font-size: 10pt; display: block; } .vs-r small { font-size: 8.6pt; color: var(--ink-3); line-height: 1.25; display: block; }
+  .wkb { color: #fff; font-size: 8.4pt; font-weight: 800; text-align: center; border-radius: 7px; padding: 4px 0; }
+  .three .li { align-items: flex-start; }
+  .rr { display: grid; grid-template-columns: 34px 1fr auto; gap: 12px; align-items: center; padding: 9px 0; border-bottom: 1px dashed var(--line); }
+  .rr:last-child { border-bottom: 0; }
+  .rr .ic { width: 34px; height: 34px; border-radius: 10px; }
+  .rr b { display: block; font-size: 10.8pt; } .rr small { font-size: 9pt; color: var(--ink-3); }
+  .verdict { font-size: 8.6pt; font-weight: 800; padding: 4px 11px; border-radius: 999px; white-space: nowrap; }
+  .verdict.ok { background: #e3f6ec; color: var(--ok); } .verdict.mid { background: #fdf1e3; color: var(--warn); } .verdict.no { background: #fde9e9; color: var(--bad); }
+  .found { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+  .found > div { border: 1px solid #f7d6c2; background: #fff7f1; border-radius: 12px; padding: 10px; display: flex; flex-direction: column; gap: 4px; }
+  .found .ic { width: 28px; height: 28px; border-radius: 8px; }
+  .found b { font-size: 9.6pt; line-height: 1.2; } .found > div > span:last-child { font-size: 8.5pt; color: var(--ink-2); line-height: 1.25; }
+</style>
+</head>
+<body>
+
+<!-- ================= COVER ================= -->
+<section class="page cover">
+  <div class="brand"><i></i> ThemeBot</div>
+  <div style="display:flex;flex-direction:column;gap:18px">
+    <div class="eyebrow">Product plan · 1 October 2026</div>
+    <h1>Desktop app and<br>web app: the plan</h1>
+    <p class="lead" style="max-width:155mm">One engine, two products, built by one person with AI. Desktop first: it sells in 2 weeks. The web app follows and launches in April 2027.</p>
+    <div class="hero">
+      <div class="card"><div class="ic" style="width:96px;height:96px;border-radius:48px;background:var(--purple)" data-i="monitor"></div><div class="ct">Desktop app</div><p>first sale <b>Oct 19</b><br>full version <b>Jan 11</b></p></div>
+      <div class="card"><div class="ic" style="width:96px;height:96px;border-radius:48px;background:var(--pink)" data-i="globe"></div><div class="ct">Web app</div><p>private beta <b>Mar 1</b><br>public launch <b>~Apr 12</b></p></div>
+      <div class="card"><div class="ic" style="width:96px;height:96px;border-radius:48px;background:var(--orange)" data-i="coin"></div><div class="ct">$220–840 / month</div><p>in bills while we build<br>(servers, database, AI, tools)</p></div>
+    </div>
+    <div class="row r3">
+      <div class="card soft" style="text-align:center"><div class="ct" style="font-size:15pt">2 weeks</div><p class="muted" style="font-size:9.5pt">desktop v1 (both plans)</p></div>
+      <div class="card soft" style="text-align:center"><div class="ct" style="font-size:15pt">~4 weeks</div><p class="muted" style="font-size:9.5pt">both first versions (speed run)</p></div>
+      <div class="card soft" style="text-align:center"><div class="ct" style="font-size:15pt">11 vs 27 weeks</div><p class="muted" style="font-size:9.5pt">everything: speed vs normal</p></div>
+    </div>
+  </div>
+  <p class="foot">Week 0 = Monday 5 October 2026. Built by one person working with AI. Bills use each vendor's published price on 1 Oct 2026; your own time is not included. Dates follow the normal plan unless marked speed run. <span class="chip est">ESTIMATE</span> marks planning numbers.</p>
+</section>
+
+<!-- ================= 1. WHERE WE ARE ================= -->
+<section class="page">
+  <div class="eyebrow">1 · Today</div>
+  <h2>Where we are</h2>
+  <p class="lead">The engine works. One store still needs to pass the quality check from start to finish.</p>
+  <div class="status">
+    <div class="card">
+      <h3><span class="ic" style="background:var(--blue)" data-i="spark"></span>Engine</h3>
+      <div class="li"><span class="dot d" data-i="check"></span>Reads the website</div>
+      <div class="li"><span class="dot d" data-i="check"></span>Builds the Shopify theme</div>
+      <div class="li"><span class="dot d" data-i="check"></span>Shows live progress</div>
+      <div class="li"><span class="dot d" data-i="check"></span>Uploads to a draft theme</div>
+      <div class="li"><span class="dot d" data-i="check"></span>Rebuilds only what's missing</div>
+      <div class="li"><span class="dot d" data-i="check"></span>Tracks AI cost</div>
+      <div class="li"><span class="dot p" data-i="dots"></span>Quality check &amp; fixes</div>
+      <div class="li"><span class="dot x" data-i="dash"></span>One store fully passed</div>
+    </div>
+    <div class="card">
+      <h3><span class="ic" style="background:var(--purple)" data-i="monitor"></span>Desktop app</h3>
+      <div class="li"><span class="dot d" data-i="check"></span>Runs on our computer</div>
+      <div class="li"><span class="dot d" data-i="check"></span>Guided store setup</div>
+      <div class="li"><span class="dot d" data-i="check"></span>Uses their own AI account</div>
+      <div class="li"><span class="dot d" data-i="check"></span>Right-store check</div>
+      <div class="li"><span class="dot p" data-i="dots"></span>Client list</div>
+      <div class="li"><span class="dot x" data-i="dash"></span>Installer</div>
+      <div class="li"><span class="dot x" data-i="dash"></span>Licence keys</div>
+    </div>
+    <div class="card">
+      <h3><span class="ic" style="background:var(--pink)" data-i="globe"></span>Web app</h3>
+      <div class="li"><span class="dot x" data-i="dash"></span>Sign-up &amp; teams</div>
+      <div class="li"><span class="dot x" data-i="dash"></span>Building online</div>
+      <div class="li"><span class="dot x" data-i="dash"></span>Cheaper AI engine</div>
+      <div class="li"><span class="dot x" data-i="dash"></span>Plans &amp; credits</div>
+      <div class="li"><span class="dot x" data-i="dash"></span>Connect a store</div>
+      <div class="li"><span class="dot x" data-i="dash"></span>Shopify approval</div>
+      <p class="muted" style="font-size:9.5pt;margin-top:8px">Not started yet.</p>
+    </div>
+  </div>
+  <div style="display:flex;gap:16px;font-size:9.5pt;color:var(--ink-2)"><span><span class="dot d" data-i="check" style="vertical-align:-4px"></span> done</span><span><span class="dot p" data-i="dots" style="vertical-align:-4px"></span> partly done</span><span><span class="dot x" data-i="dash" style="vertical-align:-4px"></span> not started</span></div>
+  <div class="nums">
+    <div class="card soft"><b>117 / 117</b><span>sections built on the test store</span></div>
+    <div class="card soft"><b>16</b><span>pages on the test store</span></div>
+    <div class="card soft"><b>41 / 42</b><span>automatic tests passing</span></div>
+    <div class="card soft"><b>~$45</b><span>AI cost per store build today</span></div>
+  </div>
+  <div class="rec"><span class="ic" data-i="flag"></span><span><b>Next step:</b> get one store to pass the check with no hand edits. Everything else depends on it.</span></div>
+</section>
+
+<!-- ================= 2. PLAN AT A GLANCE ================= -->
+<section class="page">
+  <div class="eyebrow">2 · The plan at a glance</div>
+  <h2>Six phases, about 6 months</h2>
+  <p class="lead">One person, one thing at a time. ◆ = something we can sell or launch.</p>
+  <div class="card"><div class="gantt" id="gantt"></div></div>
+  <div class="dates">
+    <div class="card soft"><span class="ic" style="background:var(--orange)" data-i="flag"></span><div><b>Oct 19</b><span>Desktop v1: first sale</span></div></div>
+    <div class="card soft"><span class="ic" style="background:var(--purple)" data-i="monitor"></span><div><b>Jan 11</b><span>Desktop v2: full version</span></div></div>
+    <div class="card soft"><span class="ic" style="background:var(--pink)" data-i="users"></span><div><b>Mar 1</b><span>Web app private beta</span></div></div>
+    <div class="card soft"><span class="ic" style="background:var(--grey)" data-i="globe"></span><div><b>~Apr 12</b><span>Web app public launch</span></div></div>
+  </div>
+  <div class="card">
+    <div class="ct" style="margin-bottom:8px">How the recipe stays ours</div>
+    <div class="handsbrain">
+      <div class="side" style="background:#efeafc"><b style="color:#5a3fb0">Desktop app = the hands</b><span>Works on the customer's computer: their browser, their files, uploading to their store.</span></div>
+      <div class="mid">⇄</div>
+      <div class="side" style="background:#e6effc"><b style="color:#1d5bb8">Our server = the brain</b><span>The recipe, the building steps and the quality scoring. It never leaves our server.</span></div>
+    </div>
+    <p class="muted" style="font-size:9.3pt;margin-top:8px">The web app uses the same brain; its hands run on our cloud. Until the brain is ready (January), desktop v1 is protected by the licence and the contract.</p>
+  </div>
+  <div class="rec"><span class="ic" data-i="calendar"></span><span><b>Late December is slower</b> (holidays). If you take time off, Desktop v2 moves into mid-January and the rest moves with it.</span></div>
+</section>
+
+<!-- ================= 3. FAST TRACK ================= -->
+<section class="page">
+  <div class="eyebrow">3 · Phase 1 in detail · the next 2 weeks</div>
+  <h2>Fast track to a first sale</h2>
+  <p class="lead">A simple Windows desktop app for 1–2 friendly agencies by <b>Friday 16 October</b>.</p>
+  <div class="wk">Week 1 · prove it, package it</div>
+  <div class="days">
+    <div class="day" style="background:var(--orange)"><span class="n">Day 1 · Mon 5</span><span class="ic" data-i="check2"></span><b>Prove it</b><small>Run the test store until it passes</small></div>
+    <div class="day" style="background:var(--orange)"><span class="n">Day 2 · Tue 6</span><span class="ic" data-i="check2"></span><b>Prove it</b><small>Fix what breaks</small></div>
+    <div class="day" style="background:var(--orange)"><span class="n">Day 3 · Wed 7</span><span class="ic" data-i="check2"></span><b>Prove it</b><small>Record cost &amp; time</small></div>
+    <div class="day" style="background:var(--ink)"><span class="flag">DEADLINE</span><span class="n">Day 4 · Thu 8</span><span class="ic" data-i="flag"></span><b>Go / no-go</b><small>Passed? Start packaging</small></div>
+    <div class="day" style="background:var(--purple)"><span class="n">Day 5 · Fri 9</span><span class="ic" data-i="download"></span><b>Installer</b><small>One-click Windows install</small></div>
+  </div>
+  <div class="wk">Week 2 · make it sellable</div>
+  <div class="days">
+    <div class="day" style="background:var(--blue)"><span class="n">Day 6 · Mon 12</span><span class="ic" data-i="key"></span><b>Licence keys</b><small>Using a ready-made service</small></div>
+    <div class="day" style="background:var(--blue)"><span class="n">Day 7 · Tue 13</span><span class="ic" data-i="shield"></span><b>Safety switches</b><small>Ownership box, draft-only, store password</small></div>
+    <div class="day" style="background:var(--aqua)"><span class="n">Day 8 · Wed 14</span><span class="ic" data-i="spark"></span><b>Setup wizard</b><small>Folder, AI account, store</small></div>
+    <div class="day" style="background:var(--yellow)"><span class="n">Day 9 · Thu 15</span><span class="ic" data-i="monitor"></span><b>Fresh-PC test</b><small>Install &amp; build from zero</small></div>
+    <div class="day" style="background:var(--ok)"><span class="flag">FIRST SALE</span><span class="n">Day 10 · Fri 16</span><span class="ic" data-i="users"></span><b>First agencies</b><small>Hand over, fix issues</small></div>
+  </div>
+  <div class="three">
+    <div class="card">
+      <h3><span class="ic" style="background:var(--blue)" data-i="calendar"></span>Decide on day 1</h3>
+      <div class="li"><span class="dot d" data-i="check"></span>Product name</div>
+      <div class="li"><span class="dot d" data-i="check"></span>Normal pace or speed run</div>
+      <div class="li"><span class="dot d" data-i="check"></span>Payment provider</div>
+      <div class="li"><span class="dot d" data-i="check"></span>Which 1–2 agencies test it</div>
+    </div>
+    <div class="card">
+      <h3><span class="ic" style="background:var(--grey)" data-i="x"></span>Left out for now</h3>
+      <div class="li"><span class="dot x" data-i="x"></span><span>Signed installer <span class="muted" style="font-size:8.5pt">· shows a warning</span></span></div>
+      <div class="li"><span class="dot x" data-i="x"></span>Automatic updates</div>
+      <div class="li"><span class="dot x" data-i="x"></span>Mac version</div>
+      <div class="li"><span class="dot x" data-i="x"></span>Credits &amp; the cloud brain</div>
+    </div>
+    <div class="card">
+      <h3><span class="ic" style="background:var(--orange)" data-i="warn"></span>Watch out</h3>
+      <p style="font-size:9.8pt;color:var(--ink-2)"><b style="color:var(--ink)">Day 4 is the real deadline.</b> If the store hasn't passed by then, use week 2 to fix the engine. Don't sell before it passes.</p>
+      <p style="font-size:9.8pt;color:var(--ink-2);margin-top:6px">Sell only to agencies that sign the contract; v1 carries the recipe.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= SPEED vs NORMAL ================= -->
+<section class="page">
+  <div class="eyebrow">4 · Normal pace vs. speed run</div>
+  <h2>Can it be done in a month?</h2>
+  <p class="lead">First versions of <b>both apps in about 4 weeks</b>, on a 60-hour week (5 days × 12 hours). Everything finished: about 11 weeks instead of 27.</p>
+  <div class="vs">
+    <div class="vs-col">
+      <div class="vs-h" style="background:var(--orange)"><span class="ic" data-i="clock"></span><div><b>Speed run</b><span>60 h a week · no buffers</span></div></div>
+      <div class="vs-r"><span class="wkb" style="background:var(--orange)">Wk 1</span><div><b>Prove it + Windows installer</b><small>One store passes; one-click install</small></div></div>
+      <div class="vs-r"><span class="wkb" style="background:var(--purple)">Wk 2</span><div><b>Desktop v1 to first agencies ◆</b><small>Licence keys, setup wizard, safety switches</small></div></div>
+      <div class="vs-r"><span class="wkb" style="background:var(--pink)">Wk 3</span><div><b>Web app first version</b><small>Sign-up, connect a store, build queue; customers use their own AI account</small></div></div>
+      <div class="vs-r"><span class="wkb" style="background:var(--pink)">Wk 4</span><div><b>Web private beta ◆</b><small>Subscriptions, error reports, backups, ~5 users</small></div></div>
+      <div class="vs-r"><span class="wkb" style="background:var(--blue)">Wk 5–9</span><div><b>Cloud brain + desktop v2</b><small>Credits, recipe stays on our server, signed installer, Mac</small></div></div>
+      <div class="vs-r"><span class="wkb" style="background:var(--grey)">Wk 10–11</span><div><b>Public launch ◆</b><small>Help pages, support, App Store submitted</small></div></div>
+    </div>
+    <div class="vs-col">
+      <div class="vs-h" style="background:var(--blue)"><span class="ic" data-i="calendar"></span><div><b>Normal pace</b><span>40 h a week · with buffers</span></div></div>
+      <div class="vs-r"><span class="wkb" style="background:var(--orange)">Wk 0–2</span><div><b>Desktop v1 ◆</b><small>Same as the speed run</small></div></div>
+      <div class="vs-r"><span class="wkb" style="background:var(--aqua)">Wk 2–5</span><div><b>Protect &amp; sell</b><small>Recipe sent per build, terms, sales page</small></div></div>
+      <div class="vs-r"><span class="wkb" style="background:var(--blue)">Wk 5–11</span><div><b>Cloud brain</b><small>Lower AI cost, credits</small></div></div>
+      <div class="vs-r"><span class="wkb" style="background:var(--purple)">Wk 11–14</span><div><b>Desktop v2 ◆</b><small>Signed installer, Mac, updates</small></div></div>
+      <div class="vs-r"><span class="wkb" style="background:var(--pink)">Wk 14–23</span><div><b>Web app, beta at wk 21 ◆</b><small>Accounts, online building, credits</small></div></div>
+      <div class="vs-r"><span class="wkb" style="background:var(--grey)">Wk 23–27</span><div><b>Public launch ◆</b><small>Help pages, support, App Store</small></div></div>
+    </div>
+  </div>
+  <div class="three">
+    <div class="card">
+      <h3><span class="ic" style="background:var(--orange)" data-i="warn"></span>What speed gives up</h3>
+      <div class="li"><span class="dot p" data-i="dots"></span>Web app starts on customers' own AI accounts; credits come in week ~9</div>
+      <div class="li"><span class="dot p" data-i="dots"></span>Fewer test stores before the beta</div>
+      <div class="li"><span class="dot p" data-i="dots"></span>No room for sickness or holidays</div>
+    </div>
+    <div class="card">
+      <h3><span class="ic" style="background:var(--grey)" data-i="x"></span>What doesn't speed up</h3>
+      <div class="li"><span class="dot x" data-i="x"></span>Shopify's App Store review</div>
+      <div class="li"><span class="dot x" data-i="x"></span>Installer identity check</div>
+      <div class="li"><span class="dot x" data-i="x"></span>Customers' feedback</div>
+      <div class="li"><span class="dot x" data-i="x"></span>Whether the first store passes</div>
+    </div>
+    <div class="card">
+      <h3><span class="ic" style="background:var(--aqua)" data-i="check2"></span>What gets delivered</h3>
+      <div class="li"><span class="dot d" data-i="check"></span><span><b>Week 2:</b> desktop v1 in agencies' hands</span></div>
+      <div class="li"><span class="dot d" data-i="check"></span><span><b>Week 4:</b> web app private beta</span></div>
+      <div class="li"><span class="dot d" data-i="check"></span><span><b>Week 11:</b> both apps launched</span></div>
+    </div>
+  </div>
+  <div class="rec"><span class="ic" data-i="flag"></span><span><b>If we take the speed run:</b> plan a lighter week after each ◆ to fix what the first customers find. The next page shows where speed pays off.</span></div>
+</section>
+
+<!-- ================= RUSH: WHAT IT SAVES ================= -->
+<section class="page">
+  <div class="eyebrow">5 · What a rush really saves</div>
+  <h2>Where speed helps, and where it doesn't</h2>
+  <p class="lead">AI writes code fast. Most of ThemeBot's time goes to testing on real stores, and more hours don't make that part faster.</p>
+
+  <div class="card" style="padding:4px 14px">
+    <div class="rr"><span class="ic" style="background:var(--purple)" data-i="monitor"></span><div><b>Desktop v1 in 2 weeks</b><small>If a store passes the check by day 4</small></div><span class="verdict ok">Rush works</span></div>
+    <div class="rr"><span class="ic" style="background:var(--pink)" data-i="globe"></span><div><b>Web app first version in 4 weeks</b><small>For a few beta users; expect about a week of fixes after</small></div><span class="verdict mid">Works, with fixes after</span></div>
+    <div class="rr"><span class="ic" style="background:var(--blue)" data-i="spark"></span><div><b>Lower AI cost &amp; credits</b><small>Needs many real test builds, and each one takes hours</small></div><span class="verdict no">Rush doesn't help</span></div>
+    <div class="rr"><span class="ic" style="background:var(--grey)" data-i="store"></span><div><b>Signed installer, Mac, App Store</b><small>Waiting on Microsoft, Apple and Shopify</small></div><span class="verdict no">Rush doesn't help</span></div>
+  </div>
+
+  <div class="ct">Problems we only found by testing on real stores</div>
+  <div class="found">
+    <div><span class="ic" style="background:var(--orange)" data-i="store"></span><b>Wrong store picked</b><span>Setup chose another account's store</span></div>
+    <div><span class="ic" style="background:var(--orange)" data-i="warn"></span><b>Surprise Shopify pop-up</b><span>A new screen stopped the setup</span></div>
+    <div><span class="ic" style="background:var(--orange)" data-i="clock"></span><b>Build stopped halfway</b><span>A restart cut a long build short</span></div>
+    <div><span class="ic" style="background:var(--orange)" data-i="x"></span><b>False "limit reached"</b><span>A warning showed when nothing was wrong</span></div>
+    <div><span class="ic" style="background:var(--orange)" data-i="users"></span><b>Old details remembered</b><span>Store data from a previous account</span></div>
+  </div>
+  <p class="muted" style="font-size:9.6pt">Each one was quick to fix once we saw it, but we only saw it by running real builds. A rush runs into the same problems with less time to fix them, and sometimes in front of customers.</p>
+
+  <div class="row r2">
+    <div class="card" style="background:#fff7f1;border-color:#f7d6c2">
+      <div class="ct" style="margin-bottom:6px">If we rush everything</div>
+      <div class="li"><span class="dot p" data-i="dots"></span>First agencies meet the bugs</div>
+      <div class="li"><span class="dot p" data-i="dots"></span>Time moves from building to fixing</div>
+      <div class="li"><span class="dot p" data-i="dots"></span>Harder to win trust back</div>
+    </div>
+    <div class="card" style="background:#e9f8f1;border-color:#bfe8d4">
+      <div class="ct" style="margin-bottom:6px">If we rush only desktop v1</div>
+      <div class="li"><span class="dot d" data-i="check"></span>Something real to sell in 2 weeks</div>
+      <div class="li"><span class="dot d" data-i="check"></span>Real feedback guides the web app</div>
+      <div class="li"><span class="dot d" data-i="check"></span>Each release works the first time</div>
+    </div>
+  </div>
+
+  <div class="rec"><span class="ic" data-i="flag"></span><span><b>Suggested approach:</b> move fast on desktop v1, then keep a steady pace. The first agencies will remember whether it worked more than how fast it arrived.</span></div>
+</section>
+
+<!-- ================= 4. DESKTOP STEPS ================= -->
+<section class="page">
+  <div class="eyebrow">6 · Desktop app · every step</div>
+  <h2>Desktop app milestones</h2>
+  <div class="phases">
+    <div class="ph"><div class="ph-h" style="background:var(--orange)"><span class="ic" data-i="flag"></span><b>Phase 1 · Desktop v1</b><span class="w">wk 0–2 · Oct 5 – Oct 16</span></div>
+      <div class="ph-b">
+        <div class="li"><span class="num-dot">1</span>One store passes end to end</div>
+        <div class="li"><span class="num-dot">2</span>Pick your own work folder</div>
+        <div class="li"><span class="num-dot">3</span>Customer build without our developer tools</div>
+        <div class="li"><span class="num-dot">4</span>Windows installer</div>
+        <div class="li"><span class="num-dot">5</span>Licence key screen</div>
+        <div class="li"><span class="num-dot">6</span>Setup wizard + terms to accept</div>
+        <div class="li"><span class="num-dot">7</span>"I own this site" checkbox</div>
+        <div class="li"><span class="num-dot">8</span>Store password setting; never publish live by default</div>
+      </div>
+      <div class="ph-f"><span class="dot d" data-i="check"></span>Done when 1–2 agencies build a store with it on their own PC</div></div>
+
+    <div class="ph"><div class="ph-h" style="background:var(--aqua)"><span class="ic" data-i="shield"></span><b>Phase 2 · Protect &amp; sell</b><span class="w">wk 2–5 · Oct 19 – Nov 6</span></div>
+      <div class="ph-b">
+        <div class="li"><span class="num-dot">1</span>Recipe sent per build, removed after</div>
+        <div class="li"><span class="num-dot">2</span>Licence re-check, device limit, revoke on refund</div>
+        <div class="li"><span class="num-dot">3</span>Terms, privacy and refund policy checked by a lawyer</div>
+        <div class="li"><span class="num-dot">4</span>Cost estimate + cost limit per build</div>
+        <div class="li"><span class="num-dot">5</span>"Send logs to support" button</div>
+        <div class="li"><span class="num-dot">6</span>Sales page + checkout</div>
+        <div class="li"><span class="num-dot">7</span>Founding-agency offer (first 10)</div>
+        <div class="li"><span class="num-dot">8</span>1–2 done-for-you client stores a month</div>
+      </div>
+      <div class="ph-f"><span class="dot d" data-i="check"></span>Done when 3 agencies have paid and the recipe no longer stays on their PCs</div></div>
+
+    <div class="ph"><div class="ph-h" style="background:var(--purple)"><span class="ic" data-i="monitor"></span><b>Phase 4 · Desktop v2</b><span class="w">wk 11–14 · Dec 21 – Jan 8</span></div>
+      <div class="ph-b">
+        <div class="li"><span class="num-dot">1</span>Cloud-brain mode: credits or their own AI key</div>
+        <div class="li"><span class="num-dot">2</span>Keep "own AI subscription" mode as an option</div>
+        <div class="li"><span class="num-dot">3</span>Signed installer (no warning)</div>
+        <div class="li"><span class="num-dot">4</span>Automatic updates</div>
+        <div class="li"><span class="num-dot">5</span>Mac version</div>
+        <div class="li"><span class="num-dot">6</span>Client &amp; project history, extra seats</div>
+      </div>
+      <div class="ph-f"><span class="dot d" data-i="check"></span>Done when agencies install, update and buy credits without our help</div></div>
+  </div>
+  <div class="rec"><span class="ic" data-i="key"></span><span><b>Protection grows by phase:</b> contract only (v1), then recipe sent per build (phase 2), then the recipe never leaves our server (v2).</span></div>
+</section>
+
+<!-- ================= 5. ENGINE + WEB STEPS ================= -->
+<section class="page">
+  <div class="eyebrow">7 · Shared engine &amp; web app · every step</div>
+  <h2>Engine and web app milestones</h2>
+  <div class="phases">
+    <div class="ph"><div class="ph-h" style="background:var(--blue)"><span class="ic" data-i="spark"></span><b>Phase 3 · Cloud brain (for both apps)</b><span class="w">wk 5–11 · Nov 9 – Dec 18</span></div>
+      <div class="ph-b">
+        <div class="li"><span class="num-dot">1</span>Recipe and build steps run on our server</div>
+        <div class="li"><span class="num-dot">2</span>Desktop app carries out the server's steps</div>
+        <div class="li"><span class="num-dot">3</span>Cheaper AI for simple steps</div>
+        <div class="li"><span class="num-dot">4</span>Overnight builds at half price</div>
+        <div class="li"><span class="num-dot">5</span>Credit meter + spend limit per account</div>
+        <div class="li"><span class="num-dot">6</span>Same quality as v1 on 5 test stores</div>
+      </div>
+      <div class="ph-f"><span class="dot d" data-i="check"></span>Done when a store passes the check for about $20 or less in AI</div></div>
+
+    <div class="ph"><div class="ph-h" style="background:var(--pink)"><span class="ic" data-i="globe"></span><b>Phase 5 · Web app</b><span class="w">wk 14–23 · Jan 11 – Mar 12</span></div>
+      <div class="ph-b">
+        <div class="li"><span class="num-dot">1</span>Sign-up, log-in, teams &amp; roles</div>
+        <div class="li"><span class="num-dot">2</span>Building on our cloud (the web "hands")</div>
+        <div class="li"><span class="num-dot">3</span>Connect a Shopify store in one click</div>
+        <div class="li"><span class="num-dot">4</span>Plans, credits, checkout, invoices</div>
+        <div class="li"><span class="num-dot">5</span>Build queue and plan limits</div>
+        <div class="li"><span class="num-dot">6</span>Monitoring, daily backups, security review</div>
+        <div class="li"><span class="num-dot">7</span>Apply for Shopify approval (week 14)</div>
+        <div class="li"><span class="num-dot">8</span>Private beta: 10 users from Mar 1</div>
+      </div>
+      <div class="ph-f"><span class="dot d" data-i="check"></span>Done when 10 beta users build without our help, each build at about 50% margin</div></div>
+
+    <div class="ph"><div class="ph-h" style="background:var(--grey)"><span class="ic" data-i="store"></span><b>Phase 6 · Launch</b><span class="w">wk 23–27 · Mar 15 – Apr 9</span></div>
+      <div class="ph-b">
+        <div class="li"><span class="num-dot">1</span>Public launch of the web app</div>
+        <div class="li"><span class="num-dot">2</span>Shopify App Store listing + review</div>
+        <div class="li"><span class="num-dot">3</span>Help pages + short how-to videos</div>
+        <div class="li"><span class="num-dot">4</span>Support process and response times</div>
+      </div>
+      <div class="ph-f"><span class="dot d" data-i="check"></span>Done when anyone can sign up, pay and build without talking to us</div></div>
+  </div>
+  <div class="rec"><span class="ic" data-i="calendar"></span><span><b>Shopify's review sets the App Store date</b>, not us. The web app can launch on our own site first and join the App Store when approved.</span></div>
+</section>
+
+<!-- ================= 7. MONTHLY BILLS ================= -->
+<section class="page">
+  <div class="eyebrow">8 · Running costs · every service we pay</div>
+  <h2>The monthly bills</h2>
+  <p class="lead">Prices from each company's pricing page on 1 October 2026. Your own time is not included.</p>
+  <div class="card" style="padding:6px 8px">
+    <table class="vt">
+      <tr><th>Service</th><th>What it's for</th><th>Price</th><th>Desktop</th><th>Web</th></tr>
+      <tr class="grp"><td colspan="5">Servers &amp; data</td></tr>
+      <tr><td><b>Hostinger VPS · KVM 2</b><small>2 CPU · 8 GB · 100 GB</small></td><td>Licence &amp; recipe server; later the web app itself</td><td>$8.99/mo<small>2-year prepay · renews $14.99</small></td><td class="y">$8.99</td><td class="y">$8.99</td></tr>
+      <tr><td><b>Hostinger VPS · KVM 4</b><small>4 CPU · 16 GB · 200 GB</small></td><td>Build server: runs customers' builds online</td><td>$12.99/mo<small>2-year prepay · renews $28.99</small></td><td class="n">—</td><td class="y">$12.99</td></tr>
+      <tr><td><b>Supabase Pro</b><small>8 GB database · 100 GB files</small></td><td>Accounts, log-in, customer data</td><td>$25/mo<small>100k users included</small></td><td class="n">—</td><td class="y">$25</td></tr>
+      <tr><td><b>Cloudflare R2</b></td><td>Theme files &amp; screenshots</td><td>first 10 GB free<small>then $0.015/GB</small></td><td class="n">—</td><td class="y">~$0</td></tr>
+      <tr class="grp"><td colspan="5">AI</td></tr>
+      <tr><td><b>Claude Max</b></td><td>The AI you build the product with</td><td>from $100/mo<small>5× and 20× usage tiers</small></td><td class="y">$200</td><td class="y">$200</td></tr>
+      <tr><td><b>Claude API</b></td><td>AI for the cloud brain &amp; credits</td><td>per build<small>~$45 today → ~$18 target</small></td><td class="y">per build</td><td class="y">per build</td></tr>
+      <tr><td><b>OpenRouter</b></td><td>Cheaper AI for simple steps</td><td>5.5% on credits bought</td><td class="y">~$20</td><td class="y">~$20</td></tr>
+      <tr class="grp"><td colspan="5">Payments</td></tr>
+      <tr><td><b>Lemon Squeezy</b></td><td>Checkout, licence keys, sales tax handled for us</td><td>5% + 50¢ per sale</td><td class="y">per sale</td><td class="y">at start</td></tr>
+      <tr><td><b>Stripe</b></td><td>Web subscriptions once volume grows</td><td>2.9% + 30¢<small>+0.7% Billing · +0.5% Tax</small></td><td class="n">—</td><td class="y">later</td></tr>
+      <tr class="grp"><td colspan="5">Tools</td></tr>
+      <tr><td><b>Resend</b></td><td>Sign-up &amp; receipt emails</td><td>free 3,000/mo<small>then $20 for 50,000</small></td><td class="y">$0</td><td class="y">$0 → $20</td></tr>
+      <tr><td><b>Sentry</b></td><td>Crash &amp; error reports</td><td>free 5k errors<small>Team $26/mo</small></td><td class="y">$0</td><td class="y">$0 → $26</td></tr>
+      <tr><td><b>Google Workspace</b></td><td>Business email</td><td>$7/user/mo</td><td class="y">$7</td><td class="y">$7</td></tr>
+      <tr><td><b>Azure Artifact Signing</b></td><td>Signed Windows installer (no warning)</td><td>Basic tier<small>price not shown, confirm (~$10 budget)</small></td><td class="y">~$10</td><td class="n">—</td></tr>
+      <tr><td><b>Apple Developer</b></td><td>Mac version can be installed safely</td><td>$99/yr</td><td class="y">$8.25</td><td class="n">—</td></tr>
+      <tr><td><b>Domain</b></td><td>themebot-style web address</td><td>~$12/yr <small>estimate</small></td><td class="y">$1</td><td class="y">$1</td></tr>
+    </table>
+  </div>
+  <div class="rec"><span class="ic" data-i="coin"></span><span><b>Lock Hostinger's price:</b> the low rates need 2 years paid upfront: about $216 now for KVM 2 and $312 in January for KVM 4. Monthly billing costs more.</span></div>
+</section>
+
+<!-- ================= 8. BILLS BY PHASE ================= -->
+<section class="page">
+  <div class="eyebrow">9 · Running costs · by phase and per build</div>
+  <h2>What we pay, month by month</h2>
+  <p class="lead">About <b>$220 a month</b> now. It peaks near <b>$840</b> while the cloud brain is tested, then about <b>$600</b> while the web app is built. Each customer build adds its own cost.</p>
+  <div class="card">
+    <div class="burn" id="burn" style="grid-template-columns:repeat(5,1fr)"></div>
+    <div class="burn-l" style="grid-template-columns:repeat(5,1fr)"><div><b>Desktop v1</b><span>Oct – Nov</span></div><div><b>Cloud brain</b><span>Nov – Dec</span></div><div><b>Desktop v2</b><span>Dec – Jan</span></div><div><b>Web app</b><span>Jan – Mar</span></div><div><b>After launch</b><span>fixed part</span></div></div>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:9pt;color:var(--ink-2);margin-top:10px;justify-content:center"><span><i class="lg" style="background:var(--pink);border-radius:3px"></i>Servers &amp; database</span><span><i class="lg" style="background:var(--aqua);border-radius:3px"></i>Claude Max (building with AI)</span><span><i class="lg" style="background:var(--blue);border-radius:3px"></i>AI test builds</span><span><i class="lg" style="background:var(--yellow);border-radius:3px"></i>Tools (email, errors, signing, Apple, domain)</span></div>
+  </div>
+  <div class="row r2">
+    <div class="card">
+      <div class="ct" style="margin-bottom:6px">Each customer build costs us</div>
+      <table class="bt">
+        <tr><th>Build</th><th>AI</th><th>Server</th><th>Total</th></tr>
+        <tr><td>Web app build</td><td>~$18</td><td>~$0.25</td><td><b>~$18</b></td></tr>
+        <tr><td>Desktop, cloud brain</td><td>~$18</td><td>~$0.05</td><td><b>~$18</b></td></tr>
+        <tr><td>Desktop, their own AI</td><td>$0</td><td>~$0.05</td><td><b>~$0</b></td></tr>
+        <tr><td>Any build today</td><td>~$45</td><td>—</td><td><b>~$45</b></td></tr>
+      </table>
+      <p class="muted" style="font-size:8.6pt;margin-top:6px">Plus payment fees on each sale (Lemon Squeezy 5% + 50¢). One KVM 4 server runs a few builds at once. <span class="chip est">ESTIMATE</span></p>
+    </div>
+    <div class="card">
+      <div class="ct" style="margin-bottom:6px">One-off &amp; upfront costs</div>
+      <table class="bt">
+        <tr><th>Item</th><th>When</th><th>Cost</th></tr>
+        <tr><td>Hostinger KVM 2, 2 years</td><td>Oct</td><td>~$216</td></tr>
+        <tr><td>Hostinger KVM 4, 2 years</td><td>Jan</td><td>~$312</td></tr>
+        <tr><td>Apple Developer</td><td>Dec</td><td>$99/yr</td></tr>
+        <tr><td>Lawyer: terms &amp; contract</td><td>Oct</td><td>~$1,500 <small class="muted">est.</small></td></tr>
+      </table>
+      <p class="muted" style="font-size:8.6pt;margin-top:6px">The Hostinger prepay is the same money as its monthly figure, paid early.</p>
+    </div>
+  </div>
+  <div class="take"><b>Oct → Apr total:</b> about $3,500 in monthly bills plus about $1,600 one-off (lawyer ~$1,500 estimate, Apple $99). That's roughly <b>$5,100</b> to get both products launched, before your own time. <span class="chip est" style="background:#2b3a63;color:#ffd89c">ESTIMATE</span></div>
+</section>
+
+<!-- ================= 9. WHY IT TAKES TIME ================= -->
+<section class="page">
+  <div class="eyebrow">10 · "AI writes the code, so why does it take time?"</div>
+  <h2>Why not everything in 2 weeks?</h2>
+  <p class="lead">AI writes code in days. The time goes to proving it works, waiting on other companies, and letting customers try it.</p>
+  <div class="card">
+    <div class="cmp-plans" id="plans"></div>
+    <div style="display:flex;gap:16px;font-size:9pt;color:var(--ink-2);margin-top:4px;flex-wrap:wrap"><span><i class="lg" style="background:var(--orange)"></i>Desktop v1</span><span><i class="lg" style="background:var(--purple)"></i>Desktop v2</span><span><i class="lg" style="background:var(--pink)"></i>Web beta</span><span><i class="lg" style="background:var(--grey)"></i>Web launch</span><span class="chip est">ESTIMATE</span></div>
+  </div>
+  <div class="card">
+    <div class="ct" style="margin-bottom:8px">Where the time goes <span class="chip est">ESTIMATE</span></div>
+    <div class="split"><i style="width:35%;background:var(--aqua)">35%</i><i style="width:30%;background:var(--blue)">30%</i><i style="width:20%;background:var(--orange)">20%</i><i style="width:15%;background:var(--purple)">15%</i></div>
+    <div class="split-l">
+      <div><b style="color:var(--ok)">Writing code</b><span>AI makes this much faster</span></div>
+      <div><b style="color:#1d5bb8">Test builds on real stores</b><span>each build runs for hours</span></div>
+      <div><b style="color:var(--warn)">Waiting on others</b><span>Shopify, certificates, payments</span></div>
+      <div><b style="color:#5a3fb0">Customers trying it</b><span>feedback, then fixes</span></div>
+    </div>
+  </div>
+  <div class="why">
+    <div><span class="ic" style="background:var(--blue)" data-i="clock"></span><b>Builds take hours</b><span>The AI builds a store in hours, not seconds. Testing 10 stores takes days.</span></div>
+    <div><span class="ic" style="background:var(--blue)" data-i="check2"></span><b>It must pass the check</b><span>No store has fully passed yet, and we don't know how many fix rounds it takes.</span></div>
+    <div><span class="ic" style="background:var(--orange)" data-i="store"></span><b>Shopify sets its own pace</b><span>App Store review and approvals take weeks. We can't speed them up.</span></div>
+    <div><span class="ic" style="background:var(--orange)" data-i="shield"></span><b>Certificates &amp; payments</b><span>The installer certificate and payment account need outside approval.</span></div>
+    <div><span class="ic" style="background:var(--purple)" data-i="users"></span><b>One person</b><span>You build, sell, support and deliver client stores. Each one takes time.</span></div>
+    <div><span class="ic" style="background:var(--purple)" data-i="coin"></span><b>Taking money safely</b><span>Billing and online building must be tested before strangers pay.</span></div>
+  </div>
+  <div class="take"><b>Short answer:</b> AI makes the coding fast, which is why desktop v1 sells in 2 weeks. On a 60-hour week, both first versions arrive in about 4 weeks and everything in about 11. Testing, Shopify's review and customer feedback don't speed up with AI.</div>
+</section>
+
+<!-- ================= 10. RISKS & DECISIONS ================= -->
+<section class="page">
+  <div class="eyebrow">11 · Risks and decisions</div>
+  <h2>What could go wrong</h2>
+  <div class="risks">
+    <div class="risk"><span class="ic" data-i="users"></span><b>One person does it all</b><span>Biggest risk. Cap client stores at 2 a month and protect build days.</span></div>
+    <div class="risk"><span class="ic" data-i="warn"></span><b>Store doesn't pass</b><span>Everything waits on day 4.</span></div>
+    <div class="risk"><span class="ic" data-i="coin"></span><b>AI costs too much</b><span>Keep credits off; sell licences and the service.</span></div>
+    <div class="risk"><span class="ic" data-i="key"></span><b>Recipe copied (v1)</b><span>Contract-only sales until the cloud brain.</span></div>
+    <div class="risk"><span class="ic" data-i="store"></span><b>Shopify is slow</b><span>Launch on our own site first.</span></div>
+    <div class="risk"><span class="ic" data-i="spark"></span><b>AI rules change</b><span>Re-check provider terms before each launch.</span></div>
+  </div>
+  <div class="ct">Decisions we need from you</div>
+  <div class="ask">
+    <div><span class="ic" data-i="spark"></span>Product name &amp; domain</div>
+    <div><span class="ic" data-i="coin"></span>Approve the prices</div>
+    <div><span class="ic" data-i="key"></span>Payment provider</div>
+    <div><span class="ic" data-i="users"></span>First 1–2 agencies</div>
+    <div><span class="ic" data-i="shield"></span>Lawyer for the contract</div>
+  </div>
+  <div class="take"><b>Bottom line:</b> first desktop sale Oct 19. Desktop v2 with the protected recipe Jan 11. Web app beta Mar 1 and public launch around Apr 12. Bills run about $220–840 a month. On the speed run, both first versions are out in about 4 weeks.</div>
+</section>
+
+<script>
+const I = {
+  check: '<path d="M5 12l5 5L20 7"/>',
+  check2: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8.5 12l2.5 2.5 4.5-5"/>',
+  dash: '<path d="M7 12h10"/>',
+  dots: '<path d="M7 12h.01M12 12h.01M17 12h.01"/>',
+  x: '<path d="M7 7l10 10M17 7L7 17"/>',
+  flag: '<path d="M6 21V4M6 4h11l-2.5 4.5L17 13H6"/>',
+  monitor: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16.5 6.5l2.5 2.5M14 9l2 2"/>',
+  download: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
+  spark: '<path d="M12 3l2.2 5.8L20 11l-5.8 2.2L12 19l-2.2-5.8L4 11l5.8-2.2z"/>',
+  users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6M16 4.8a3.5 3.5 0 0 1 0 6.4M18 14.3c2 .7 3.5 2.6 3.5 5.7"/>',
+  calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
+  warn: '<path d="M12 3.5L21.5 20h-19z"/><path d="M12 10v4.5M12 17.5v.01"/>',
+  coin: '<circle cx="12" cy="12" r="9"/><path d="M14.8 9.2c-.4-1-1.5-1.7-2.8-1.7-1.6 0-2.8.9-2.8 2.1 0 2.9 5.6 1.6 5.6 4.6 0 1.2-1.2 2.2-2.8 2.2-1.4 0-2.5-.7-2.9-1.8M12 6v1.5M12 16.6V18"/>',
+  store: '<path d="M4 9l1.5-5h13L20 9M4 9h16v11H4zM10 20v-5h4v5"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/>',
+  shield: '<path d="M12 3l8 3v6c0 4.8-3.4 7.9-8 9-4.6-1.1-8-4.2-8-9V6z"/><path d="M9 12l2 2 4-4"/>',
+};
+document.querySelectorAll('[data-i]').forEach((el) => { el.innerHTML = `<svg viewBox="0 0 24 24">${I[el.dataset.i]}</svg>` + el.innerHTML; if (!el.classList.contains('dot') && !el.classList.contains('ic')) el.classList.add('ic'); });
+
+const W = 28, pct = (w) => (w / W * 100) + '%';
+const rows = [
+  ['Desktop v1', 'flag', 'var(--orange)', 0, 2, 2],
+  ['Protect &amp; sell', 'shield', 'var(--aqua)', 2, 5],
+  ['Cloud brain', 'spark', 'var(--blue)', 5, 11],
+  ['Desktop v2', 'monitor', 'var(--purple)', 11, 14, 14],
+  ['Web app', 'globe', 'var(--pink)', 14, 23, 21],
+  ['Launch', 'store', 'var(--grey)', 23, 27, 27],
+];
+let h = '<div></div><div class="axis">' + [[0, 'Oct 5'], [4, 'Nov 2'], [8, 'Nov 30'], [12, 'Dec 28'], [16, 'Jan 25'], [20, 'Feb 22'], [24, 'Mar 22'], [28, 'Apr 19']]
+  .map(([w, d]) => `<span style="left:${pct(w)}"><b>wk ${w}</b>${d}</span>`).join('') + '</div>';
+for (const [label, icon, c, s, e, ms] of rows) {
+  h += `<div class="l"><span class="ic" style="background:${c}"><svg viewBox="0 0 24 24">${I[icon]}</svg></span>${label}</div><div class="t" style="background:repeating-linear-gradient(90deg, transparent 0 calc(100% / 7 - 1px), #edf0f6 calc(100% / 7 - 1px) calc(100% / 7))"><i style="left:${pct(s)};width:${pct(e - s)};background:${c}"></i>${ms ? `<i class="ms" style="left:${pct(ms)}"></i>` : ''}</div>`;
+}
+document.getElementById('gantt').innerHTML = h;
+
+// bills by phase: servers & database, Claude Max, AI test builds, tools
+const burn = [
+  [8.99, 200, 0, 8],
+  [8.99, 200, 620, 8],
+  [8.99, 200, 220, 26.25],
+  [46.98, 200, 320, 26.25],
+  [46.98, 200, 120, 72.25],
+];
+const colors = ['var(--pink)', 'var(--aqua)', 'var(--blue)', 'var(--yellow)'];
+const scale = 165 / 900;
+document.getElementById('burn').innerHTML = burn.map((col) => {
+  const tot = Math.round(col.reduce((x, y) => x + y, 0));
+  return `<div class="col"><div class="tot">$${tot}</div>${col.map((v, i) => v ? `<i style="height:${Math.max(v * scale, 3)}px;background:${colors[i]}"></i>` : '').reverse().join('')}</div>`;
+}).join('');
+
+// plan comparison
+const plans = [
+  ['Normal pace', '40 h a week', [[2, 'var(--orange)'], [14, 'var(--purple)'], [21, 'var(--pink)'], [27, 'var(--grey)']], '~27 wk'],
+  ['Speed run', '60 h a week', [[2, 'var(--orange)'], [4, 'var(--pink)'], [9, 'var(--purple)'], [11, 'var(--grey)']], '~11 wk'],
+  ['2 weeks only', 'what really fits', [[2, 'var(--orange)']], 'Desktop v1'],
+];
+let ph = '<div></div><div class="axis">' + [0, 4, 8, 12, 16, 20, 24, 28].map((w) => `<span style="left:${pct(w)}">wk ${w}</span>`).join('') + '</div>';
+for (const [name, sub, pts, end] of plans) {
+  const last = pts[pts.length - 1][0];
+  ph += `<div class="l"><b>${name}</b><small>${sub}</small></div><div class="t" style="background:repeating-linear-gradient(90deg, transparent 0 calc(100% / 7 - 1px), #edf0f6 calc(100% / 7 - 1px) calc(100% / 7))"><span class="line" style="width:${pct(last)}"></span>${pts.map(([w, c]) => `<span class="pt" style="left:${pct(w)};background:${c}"></span>`).join('')}<span class="end" style="left:${pct(last)}">${end}</span></div>`;
+}
+document.getElementById('plans').innerHTML = ph;
+</script>
+</body>
+</html>

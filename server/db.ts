@@ -362,6 +362,13 @@ class Repository {
     const next = { ...current, status, ...extra, finished_at: now() }; memory.factoryIterations.set(id, next); persistFactoryMemory(); return next;
   }
 
+  /** Forget a job's rounds (Rebuild starts the timeline over). */
+  async clearFactoryIterations(jobId: string) {
+    if (this.pool) { await this.pool.query('DELETE FROM factory_iterations WHERE job_id=$1', [jobId]); return; }
+    for (const [iterId, item] of memory.factoryIterations) if (item.job_id === jobId) memory.factoryIterations.delete(iterId);
+    persistFactoryMemory();
+  }
+
   async listFactoryIterations(jobId: string) {
     if (this.pool) return (await this.pool.query<FactoryIterationRecord>('SELECT * FROM factory_iterations WHERE job_id=$1 ORDER BY started_at ASC', [jobId])).rows;
     return [...memory.factoryIterations.values()].filter((item) => item.job_id === jobId).sort((a,b) => a.started_at.localeCompare(b.started_at));

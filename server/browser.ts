@@ -218,6 +218,9 @@ class BrowserManager {
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private launching: Promise<void> | null = null;
   private closing = false;
+  /** Set while a probe() launches the browser on its own: no extensions (so it can run truly
+   *  headless with no window on screen) and it is closed again as soon as the probe finishes. */
+  private minimalLaunch = false;
   private subscribers = new Set<(message: unknown) => void>();
   private inputChain: Promise<void> = Promise.resolve();
   engine: EngineInfo | null = null;
@@ -243,7 +246,7 @@ class BrowserManager {
     const engine = resolveEngine();
     if (!engine) throw new Error('No browser engine available. Install the isolated browser or install Chrome/Edge.');
     this.engine = engine;
-    const extensions = resolveExtensions();
+    const extensions = this.minimalLaunch ? [] : resolveExtensions();
     this.loadedExtensions = extensions;
 
     const args = this.launchArgs();
@@ -457,6 +460,37 @@ class BrowserManager {
 
   // ---- programmatic control (active tab) — shared with MCP tools ----
   async screenshot(fullPage = false, id?: number): Promise<Buffer> { await this.ensure(); const tab = this.tabOr(id); if (!tab) throw new Error('No tab.'); return tab.page.screenshot({ type: 'png', fullPage }); }
+
+  /** Load a URL in a throwaway page and report where it ended up (redirect-aware), optionally
+   *  with a screenshot. Used by the factory's Shopify sign-in check and the project preview.
+   *  The page is closed before returning, so nothing lingers in the tab strip. Because the
+   *  context adopts every new page as a tab, the throwaway briefly appears and is then removed. */
+  async probe(url: string, opts: { timeoutMs?: number; screenshot?: boolean; settleMs?: number } = {}): Promise<{ finalUrl: string; title: string; screenshot: Buffer | null; loginForm: boolean }> {
+    // If nobody is using the browser, launch a quiet extension-free headless instance for this
+    // probe only and close it afterwards — never leave a stray window on the user's screen.
+    const launchedHere = !this.isRunning() && !this.launching;
+    if (launchedHere) this.minimalLaunch = true;
+    try {
+      await this.ensure();
+    } catch (error) { this.minimalLaunch = false; throw error; }
+    if (!this.context) { this.minimalLaunch = false; throw new Error('Browser not started.'); }
+    const page = await this.context.newPage();
+    try {
+      try { await page.goto(url, { waitUntil: 'load', timeout: opts.timeoutMs ?? 30000 }); } catch { /* keep whatever loaded */ }
+      try { await page.waitForLoadState('networkidle', { timeout: 6000 }); } catch { /* fine — SPA still polling */ }
+      if (opts.settleMs) await page.waitForTimeout(opts.settleMs);
+      const screenshot = opts.screenshot ? await page.screenshot({ type: 'png', fullPage: false }).catch(() => null) : null;
+      // A password field (or an email-only lookup form) on the landed page means "not signed in"
+      // even when the URL never left admin.shopify.com.
+      const loginForm = await page.evaluate(() => Boolean(document.querySelector('input[type="password"], form[action*="lookup"], form[action*="login"]'))).catch(() => false);
+      return { finalUrl: page.url(), title: await page.title().catch(() => ''), screenshot, loginForm };
+    } finally {
+      const tab = this.tabForPage(page);
+      if (tab) await this.closeTab(tab.id).catch(() => { /* ignore */ });
+      else await page.close().catch(() => { /* ignore */ });
+      if (launchedHere) { await this.stop().catch(() => { /* ignore */ }); this.minimalLaunch = false; }
+    }
+  }
   async click(target: { selector?: string; x?: number; y?: number }, id?: number) {
     await this.ensure(); const tab = this.tabOr(id); if (!tab) throw new Error('No tab.');
     if (target.selector) await tab.page.click(target.selector, { timeout: 8000 });

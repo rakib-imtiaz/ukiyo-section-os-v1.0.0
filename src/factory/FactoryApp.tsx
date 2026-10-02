@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { Cog, LayoutDashboard, Pause, Play, Plus, Settings2 } from 'lucide-react';
+import { Pause, Play, Plus } from 'lucide-react';
 import './theme.css';
-import { Badge, Button, LiveDot, Tabs, ToastProvider, useToast } from './ui';
+import { Button, LiveDot, ToastProvider, useToast } from './ui';
 import { api, usePoll } from './api';
 import { Dashboard } from './Dashboard';
 import { NewJobWizard } from './NewJobWizard';
@@ -11,24 +11,23 @@ import { STATUS_META, TERMINAL, type FactorySettings, type Job } from './types';
 
 /** Views the factory surface can hand off to (terminal "open here", browser compare). */
 export type FactoryNavigate = (view: 'terminal' | 'browser') => void;
+export type FactoryTab = 'dashboard' | 'new' | 'settings';
 
-function FactoryInner({ onNavigate }: { onNavigate?: FactoryNavigate }) {
+/** The factory surface is driven by the app sidebar: Builds → dashboard, "Build a new store" →
+ *  new, Settings → settings. It no longer draws its own brand bar or tab strip. */
+function FactoryInner({ onNavigate, tab, onTabChange, focusJobId }: {
+  onNavigate?: FactoryNavigate; tab: FactoryTab; onTabChange: (tab: FactoryTab) => void; focusJobId?: string | null;
+}) {
   const toast = useToast();
-  // Tab persists across refreshes so a reload drops you back exactly where you were
-  // (e.g. mid-wizard) instead of on a blank dashboard.
-  const [tab, setTab] = useState(() => {
-    const stored = localStorage.getItem('factory-tab');
-    return stored === 'new' || stored === 'settings' ? stored : 'dashboard';
-  });
-  useEffect(() => { localStorage.setItem('factory-tab', tab); }, [tab]);
-  const [openJobId, setOpenJobId] = useState<string | null>(null);
+  const [openJobId, setOpenJobId] = useState<string | null>(focusJobId ?? null);
+  useEffect(() => { if (focusJobId) setOpenJobId(focusJobId); }, [focusJobId]);
   const [defaults, setDefaults] = useState<FactorySettings | null>(null);
   const { data, loading, refresh } = usePoll(() => api.listJobs(), 3000);
   const previousStatuses = useRef(new Map<string, string>());
 
   useEffect(() => { void api.settings().then((response) => setDefaults(response.settings)).catch(() => {}); }, []);
 
-  // Toast on meaningful state transitions (converged, blocked, failed…)
+  // Toast on meaningful state transitions (done, needs you, failed…)
   useEffect(() => {
     const jobs = data?.jobs ?? [];
     for (const job of jobs) {
@@ -51,48 +50,40 @@ function FactoryInner({ onNavigate }: { onNavigate?: FactoryNavigate }) {
   const runningCount = data?.scheduler?.running.length ?? 0;
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-y-auto">
-      <div className="sticky top-0 z-20 flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border bg-background/85 px-6 py-3 backdrop-blur-md">
-        <div className="spin-on-hover mr-1 flex items-center gap-3">
-          <div className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-card shadow-sm">
-            <Cog className="spin-slow size-5 text-foreground" aria-hidden />
-          </div>
-          <div className="hidden leading-tight lg:block">
-            <p className="text-[15px] font-bold tracking-tight">ThemeBot</p>
-            <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">Autonomous builder</p>
-          </div>
-        </div>
-
-        <Tabs value={tab} onChange={setTab} tabs={[
-          { id: 'dashboard', label: <><LayoutDashboard className="size-4" /> Dashboard {jobs.length > 0 && <Badge variant="secondary">{jobs.length}</Badge>}</> },
-          { id: 'new', label: <><Plus className="size-4" /> New clone</> },
-          { id: 'settings', label: <><Settings2 className="size-4" /> Settings</> },
-        ]} />
-
-        <div className="ml-auto flex items-center gap-2.5">
-          {data?.scheduler && (
-            <span className="hidden items-center gap-2.5 rounded-full border border-border bg-card px-3.5 py-1.5 text-[13px] font-bold text-muted-foreground sm:inline-flex">
-              {runningCount > 0
-                ? <LiveDot className="text-success" />
-                : <span className="inline-flex size-2 shrink-0 rounded-full bg-muted-foreground/40" aria-hidden />}
-              <span><span className="tabular-nums text-foreground">{runningCount}</span> running{data.scheduler.queuePaused ? ' · queue paused' : ''}</span>
-            </span>
-          )}
-          {data?.scheduler && (
-            <Button size="sm" variant="outline" disabled={jobs.length === 0} aria-pressed={data.scheduler.queuePaused} title={jobs.length === 0 ? 'No clone jobs in the fleet yet' : undefined} onClick={() => { const paused = data.scheduler.queuePaused; void (paused ? api.resumeQueue() : api.pauseQueue()).then(() => { toast.push({ title: paused ? 'Queue resumed' : 'Queue paused', variant: 'default' }); void refresh(); }).catch((error) => toast.push({ title: 'Queue action failed', detail: error instanceof Error ? error.message : undefined, variant: 'destructive' })); }}>
-              {data.scheduler.queuePaused ? <><Play className="size-3.5" /> Resume queue</> : <><Pause className="size-3.5" /> Pause queue</>}
-            </Button>
-          )}
-          {/* Theme toggle lives once in the app-shell topbar (consistent across all pages). */}
-        </div>
-      </div>
-
-      <div key={tab} className="tab-panel mx-auto flex w-full max-w-6xl flex-col gap-6 p-6 md:p-8">
+    <div className="glass-page">
+      <div key={tab} className="tab-panel flex w-full flex-col gap-6">
         {tab === 'dashboard' && (
-          <Dashboard jobs={jobs} scheduler={data?.scheduler ?? null} loading={loading} refresh={refresh} onOpen={setOpenJobId} onNew={() => setTab('new')} />
+          <>
+            <div className="glass-heading">
+              <div>
+                <h2>Builds</h2>
+                <p>Every store ThemeBot is building or has built.</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2.5">
+                {data?.scheduler && (
+                  <span className="glass-pill">
+                    {runningCount > 0 ? <LiveDot className="text-success" /> : <span className="inline-flex size-2 shrink-0 rounded-full bg-muted-foreground/40" aria-hidden />}
+                    {runningCount > 0 ? `${runningCount} building now` : 'Nothing building'}{data.scheduler.queuePaused ? ' · queue paused' : ''}
+                  </span>
+                )}
+                {data?.scheduler && jobs.length > 0 && (
+                  <Button size="sm" variant="outline" aria-pressed={data.scheduler.queuePaused} onClick={() => { const paused = data.scheduler.queuePaused; void (paused ? api.resumeQueue() : api.pauseQueue()).then(() => { toast.push({ title: paused ? 'Queue resumed' : 'Queue paused', variant: 'default' }); void refresh(); }).catch((error) => toast.push({ title: 'Could not change the queue', detail: error instanceof Error ? error.message : undefined, variant: 'destructive' })); }}>
+                    {data.scheduler.queuePaused ? <><Play className="size-3.5" /> Resume queue</> : <><Pause className="size-3.5" /> Pause queue</>}
+                  </Button>
+                )}
+                <Button onClick={() => onTabChange('new')}><Plus /> Build a new store</Button>
+              </div>
+            </div>
+            <Dashboard jobs={jobs} scheduler={data?.scheduler ?? null} loading={loading} refresh={refresh} onOpen={setOpenJobId} onNew={() => onTabChange('new')} />
+          </>
         )}
-        {tab === 'new' && <NewJobWizard defaults={defaults} onCreated={() => { setTab('dashboard'); refresh(); }} onCancel={() => setTab('dashboard')} />}
-        {tab === 'settings' && <SettingsPanel jobs={jobs} refreshFleet={refresh} />}
+        {tab === 'new' && <NewJobWizard defaults={defaults} onCreated={() => { onTabChange('dashboard'); refresh(); }} onCancel={() => onTabChange('dashboard')} onOpenBrowser={onNavigate ? () => onNavigate('browser') : undefined} />}
+        {tab === 'settings' && (
+          <>
+            <div className="glass-heading"><div><h2>Settings</h2><p>How ThemeBot builds, checks, and keeps things safe.</p></div></div>
+            <SettingsPanel jobs={jobs} refreshFleet={refresh} />
+          </>
+        )}
       </div>
 
       <JobDetail jobId={openJobId} onClose={() => setOpenJobId(null)} onNavigate={onNavigate} />
@@ -100,12 +91,17 @@ function FactoryInner({ onNavigate }: { onNavigate?: FactoryNavigate }) {
   );
 }
 
-export default function FactoryApp({ onNavigate }: { onNavigate?: FactoryNavigate } = {}) {
+export default function FactoryApp({ onNavigate, tab = 'dashboard', onTabChange, focusJobId }: {
+  onNavigate?: FactoryNavigate; tab?: FactoryTab; onTabChange?: (tab: FactoryTab) => void; focusJobId?: string | null;
+} = {}) {
   const initial = typeof localStorage !== 'undefined' && localStorage.getItem('factory-theme') === 'dark' ? 'dark' : 'light';
+  const [localTab, setLocalTab] = useState<FactoryTab>(tab);
+  useEffect(() => { setLocalTab(tab); }, [tab]);
+  const changeTab = (next: FactoryTab) => { setLocalTab(next); onTabChange?.(next); };
   return (
-    <div className="factory-root h-full min-h-0" data-theme={initial}>
+    <div className="factory-root" data-theme={initial}>
       <ToastProvider>
-        <FactoryInner onNavigate={onNavigate} />
+        <FactoryInner onNavigate={onNavigate} tab={localTab} onTabChange={changeTab} focusJobId={focusJobId} />
       </ToastProvider>
     </div>
   );

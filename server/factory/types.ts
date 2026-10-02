@@ -1,6 +1,8 @@
 export type FactoryJobStatus =
   | 'draft' | 'queued' | 'scaffolding' | 'cloning' | 'qa_running' | 'fixing'
-  | 'converged' | 'exhausted' | 'blocked' | 'aborted' | 'failed' | 'paused' | 'canceled';
+  | 'converged' | 'exhausted' | 'blocked' | 'aborted' | 'failed' | 'paused' | 'canceled'
+  // After a check (or fix rounds) the user started by hand: resting, with a fresh match score.
+  | 'checked';
 
 export const TERMINAL_STATUSES: FactoryJobStatus[] = ['converged', 'exhausted', 'aborted', 'failed', 'canceled'];
 export const ACTIVE_STATUSES: FactoryJobStatus[] = ['scaffolding', 'cloning', 'qa_running', 'fixing'];
@@ -29,6 +31,7 @@ export interface JobIntake {
   reactFilesPath?: string;
   prefix?: string;
   devThemeName?: string;
+  qaEngine?: string;
   autoswap?: boolean;
   autoQa?: boolean;
   qaMode?: 'sections' | 'interactions' | 'both';
@@ -42,8 +45,10 @@ export type BotModel = 'opus' | 'sonnet' | 'haiku';
 export const BOT_MODELS: readonly BotModel[] = ['opus', 'sonnet', 'haiku'];
 
 /** How the wizard collects the Shopify app's Client ID + Secret. */
-export type CollectionMethod = 'llm' | 'scripted' | 'bookmarklet' | 'partnerapi' | 'manual';
-export const COLLECTION_METHODS: readonly CollectionMethod[] = ['manual', 'bookmarklet', 'scripted', 'llm', 'partnerapi'];
+/** 'managed' = a Claude agent drives ThemeBot's own built-in browser over the local MCP endpoint
+ *  (easy mode: the user signs in once in the Browser view, the bot does the rest there). */
+export type CollectionMethod = 'llm' | 'managed' | 'scripted' | 'bookmarklet' | 'partnerapi' | 'manual';
+export const COLLECTION_METHODS: readonly CollectionMethod[] = ['manual', 'bookmarklet', 'scripted', 'llm', 'managed', 'partnerapi'];
 
 export interface FactorySettings {
   /** Model for clone + fix sessions (the heavy theme work). */
@@ -65,6 +70,8 @@ export interface FactorySettings {
   keepIterations: number;
   secretScrub: boolean;
   extraAllow: string[];
+  /** One-time "check in my Chrome" setup (Chrome + Claude extension + sign-ins) confirmed by the user. */
+  browserQaSetup: { done: boolean; doneAt: string | null };
 }
 
 export const DEFAULT_SCORE_WEIGHTS = { presence: 0.5, text: 0.3, interaction: 0.2 };

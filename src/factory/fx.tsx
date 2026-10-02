@@ -3,10 +3,11 @@
 // prefers-reduced-motion and both themes.
 import { useEffect, useRef, useState, type HTMLAttributes, type ReactNode } from 'react';
 import { cn } from '../lib/utils';
+import { motionOff } from '../motion';
 import type { Job } from './types';
 
 export function useReducedMotion() {
-  const [reduced, setReduced] = useState(() => typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  const [reduced, setReduced] = useState(() => typeof window !== 'undefined' && motionOff());
   useEffect(() => {
     const query = window.matchMedia('(prefers-reduced-motion: reduce)');
     const onChange = () => setReduced(query.matches);
@@ -18,9 +19,10 @@ export function useReducedMotion() {
 
 /** Card with a cursor-tracking monochrome radial highlight + hover lift.
     Add `live` for the animated running border on in-progress jobs. */
-export function SpotlightCard({ className, children, live, ...props }: HTMLAttributes<HTMLDivElement> & { live?: boolean; children: ReactNode }) {
+export function SpotlightCard({ className, children, live, onMouseMove: onMove, ...props }: HTMLAttributes<HTMLDivElement> & { live?: boolean; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   const onMouseMove = (event: React.MouseEvent<HTMLDivElement>) => {
+    onMove?.(event);
     const element = ref.current;
     if (!element) return;
     const rect = element.getBoundingClientRect();
@@ -28,7 +30,7 @@ export function SpotlightCard({ className, children, live, ...props }: HTMLAttri
     element.style.setProperty('--spot-y', `${event.clientY - rect.top}px`);
   };
   return (
-    <div ref={ref} onMouseMove={onMouseMove} {...props}
+    <div ref={ref} {...props} onMouseMove={onMouseMove}
       className={cn('spotlight-card rounded-xl border border-border bg-card text-card-foreground shadow-sm', live && 'live-border', className)}>
       {children}
     </div>
@@ -108,5 +110,30 @@ export function ScoreRing({ value, size = 52, stroke = 4.5, className }: { value
         <CountUp value={clamped * 100} decimals={0} />
       </span>
     </div>
+  );
+}
+
+/** One flip-clock digit: when it changes, the old digit folds away and the new one flips down. */
+function FlipDigit({ digit }: { digit: string }) {
+  const [shown, setShown] = useState({ prev: '0', cur: '0', flips: 0 });
+  useEffect(() => {
+    setShown((state) => (state.cur === digit ? state : { prev: state.cur, cur: digit, flips: state.flips + 1 }));
+  }, [digit]);
+  return (
+    <span className="flipd">
+      <span className="flipd__sizer" aria-hidden>{shown.cur}</span>
+      {shown.flips > 0 && <span key={`out-${shown.flips}`} className="flipd__out" aria-hidden>{shown.prev}</span>}
+      <span key={`in-${shown.flips}`} className={`flipd__in${shown.flips > 0 ? ' is-flipping' : ''}`} aria-hidden>{shown.cur}</span>
+    </span>
+  );
+}
+
+/** A number shown as flip-clock digits (flips from 0 on first show, then on every change). */
+export function FlipNumber({ value, className }: { value: number; className?: string }) {
+  const digits = String(Math.max(0, Math.round(value))).split('');
+  return (
+    <span className={cn('flipn', className)} role="img" aria-label={String(value)}>
+      {digits.map((digit, index) => <FlipDigit key={digits.length - index} digit={digit} />)}
+    </span>
   );
 }

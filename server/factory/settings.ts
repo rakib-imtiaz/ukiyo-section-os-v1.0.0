@@ -29,6 +29,7 @@ export function factoryDefaults(): FactorySettings {
     keepIterations: 3,
     secretScrub: true,
     extraAllow: [],
+    browserQaSetup: { done: false, doneAt: null },
   };
 }
 
@@ -67,6 +68,8 @@ export function sanitizeSettings(input: Partial<FactorySettings>, base: FactoryS
   next.earlyStopOnNoProgress = bool(next.earlyStopOnNoProgress, base.earlyStopOnNoProgress);
   next.pauseQueueOnUsageLimit = bool(next.pauseQueueOnUsageLimit, base.pauseQueueOnUsageLimit);
   next.secretScrub = bool(next.secretScrub, base.secretScrub);
+  const setup = (next.browserQaSetup ?? base.browserQaSetup) as Partial<FactorySettings['browserQaSetup']> | undefined;
+  next.browserQaSetup = { done: bool(setup?.done, false), doneAt: typeof setup?.doneAt === 'string' ? setup.doneAt.slice(0, 40) : null };
   return next;
 }
 

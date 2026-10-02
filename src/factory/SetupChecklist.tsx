@@ -354,13 +354,13 @@ export function ChromeKeysCard({ storeUrl, projectName, keysOnFile, onKeys, onCh
           <ul className="mt-2.5 flex flex-col gap-1 text-[12.5px] font-medium leading-relaxed text-muted-foreground">
             <li><b className="text-foreground">1. Chrome (or Edge) installed</b> — used with your normal profile and logins.</li>
             <li><b className="text-foreground">2. Signed into your Shopify admin</b> in that browser (one normal login, no captcha trouble).</li>
-            <li><b className="text-foreground">3. Optional — Claude for Chrome extension:</b> with it installed, you can ask Claude to drive your Chrome through store + app creation and read the keys off the page for you, instead of copying them yourself.</li>
+            <li><b className="text-foreground">3. Optional — Claude for Chrome extension:</b> with it installed, you can ask the AI to drive your Chrome through store + app creation and read the keys off the page for you, instead of copying them yourself.</li>
           </ul>
           <div className="mt-3 flex flex-wrap items-center gap-2.5">
             {status?.claudeExtension.installed && browserReady && (
               <button
                 type="button" onClick={() => void startBot()} disabled={!shopHandle || botPhase === 'running' || keysOnFile}
-                title={keysOnFile ? 'Keys are already on file for this store — use "Change key" below to replace them' : shopHandle ? 'One click: a Claude bot drives your Chrome and fetches the keys — it even waits while you log in' : 'Fill the Shopify store in step 1 first'}
+                title={keysOnFile ? 'Keys are already on file for this store — use "Change key" below to replace them' : shopHandle ? 'One click: an AI bot drives your Chrome and fetches the keys — it even waits while you log in' : 'Fill the Shopify store in step 1 first'}
                 className={`inline-flex items-center gap-2.5 rounded-xl bg-success px-5 py-2.5 text-[14.5px] font-bold text-white transition-opacity hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-40 ${shopHandle && botPhase !== 'running' && !keysOnFile ? 'bot-cta' : ''}`}
               >
                 <Bot className="size-5" /> Feeling lazy? Send the bot

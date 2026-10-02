@@ -1,6 +1,6 @@
 export type JobStatus =
   | 'draft' | 'queued' | 'scaffolding' | 'cloning' | 'qa_running' | 'fixing'
-  | 'converged' | 'exhausted' | 'blocked' | 'aborted' | 'failed' | 'paused' | 'canceled';
+  | 'converged' | 'exhausted' | 'blocked' | 'aborted' | 'failed' | 'paused' | 'canceled' | 'checked';
 
 export const TERMINAL: JobStatus[] = ['converged', 'exhausted', 'aborted', 'failed', 'canceled'];
 
@@ -66,8 +66,45 @@ export function issueKindMeta(kind: string): { label: string; tone: 'destructive
 
 export type BotModel = 'opus' | 'sonnet' | 'haiku';
 
-/** How the wizard collects the Shopify app's Client ID + Secret. */
-export type CollectionMethod = 'llm' | 'scripted' | 'bookmarklet' | 'partnerapi' | 'manual';
+/** How the wizard collects the Shopify app's Client ID + Secret. 'managed' drives ThemeBot's
+ *  own built-in browser (easy mode); the others are the expert wizard's options. */
+export type CollectionMethod = 'llm' | 'managed' | 'scripted' | 'bookmarklet' | 'partnerapi' | 'manual';
+
+// ---------- Easy mode ("do it for me") ----------
+
+/** Result of GET /api/factory/shopify-login — is the built-in browser signed in to Shopify? */
+export interface LoginStatus { signedIn: boolean; checkedAt: number; url: string | null; detail: string; browserAvailable: boolean }
+
+export type Framework = 'next' | 'vite' | 'cra' | 'remix' | 'gatsby' | 'astro' | 'unknown';
+export interface ProjectInfo { root: string; name: string | null; framework: Framework; devScript: string | null; pages: string[]; hasNodeModules: boolean }
+export interface UploadResult { intakeId: string; reactFilesPath: string; info: ProjectInfo }
+
+export type PreviewPhase = 'queued' | 'installing' | 'starting' | 'capturing' | 'done' | 'failed' | 'stopped';
+export type ActivityKind = 'step' | 'cmd' | 'net' | 'out' | 'ok' | 'err' | 'info';
+export interface ActivityEvent { at: number; kind: ActivityKind; text: string }
+export type PreviewStageId = 'prepare' | 'install' | 'start' | 'check' | 'capture';
+export interface PreviewStage { id: PreviewStageId; label: string; state: 'pending' | 'active' | 'done' | 'failed' | 'skipped'; startedAt: number | null; endedAt: number | null }
+export interface PreviewRun { id: string; phase: PreviewPhase; source: { path?: string; url?: string }; keepAlive: boolean; url: string | null; log: string[]; events?: ActivityEvent[]; stages?: PreviewStage[]; error: string | null; elapsedSec: number; hasScreenshot: boolean }
+
+export type EasyStepId = 'signin' | 'store' | 'app' | 'keys' | 'test' | 'site' | 'clone';
+export type EasyStepState = 'pending' | 'active' | 'done' | 'failed' | 'skipped';
+export interface EasyStep { id: EasyStepId; label: string; state: EasyStepState; detail: string | null }
+export interface EasyRun {
+  id: string; phase: 'running' | 'needs_login' | 'done' | 'failed' | 'canceled';
+  storeName: string; siteUrl: string | null; reactFilesPath: string | null; intakeId: string | null;
+  shop: string | null; jobId: string | null; error: string | null; liveSiteId: string | null;
+  steps: EasyStep[]; startedAt: number; updatedAt: number;
+  /** 'scripted' = ThemeBot's own browser window (default); 'llm' = the AI bot in your Chrome. */
+  method?: 'scripted' | 'llm';
+}
+/** Read-only check: which Shopify login the ThemeBot window uses, and does it list this store? */
+export interface StoreAccess { shop: string; access: 'yes' | 'no' | 'signed-out' | 'unknown'; account: string | null; storeName: string | null; reason?: 'window-open' | 'busy' | 'launch-failed' | 'timeout'; checkedAt: number }
+export interface EasyStatus { run: EasyRun | null; collector: { running: boolean; log: Array<{ at: number; text: string; kind?: 'thought' | 'action' | 'system' }> } }
+
+/** Friendly framework label for the confirmation screen. */
+export const FRAMEWORK_LABEL: Record<Framework, string> = {
+  next: 'Next.js', vite: 'Vite + React', cra: 'Create React App', remix: 'Remix', gatsby: 'Gatsby', astro: 'Astro', unknown: 'a JavaScript project',
+};
 
 export interface FactorySettings {
   cloneModel: BotModel; collectorModel: BotModel;
@@ -76,7 +113,12 @@ export interface FactorySettings {
   scoreWeights: { presence: number; text: number; interaction: number };
   noProgressEpsilon: number; earlyStopOnNoProgress: boolean; pauseQueueOnUsageLimit: boolean;
   keepIterations: number; secretScrub: boolean; extraAllow: string[];
+  /** One-time "check in my Chrome" setup (Chrome + Claude extension + sign-ins) confirmed by the user. */
+  browserQaSetup: { done: boolean; doneAt: string | null };
 }
+
+/** How ThemeBot checks its work. */
+export type QaEngine = 'playwright' | 'headed' | 'chrome';
 
 export interface SchedulerStatus { running: string[]; queuePaused: boolean; queuePausedReason: string | null; }
 
@@ -89,16 +131,59 @@ export interface SettingsResponse {
 
 export const STATUS_META: Record<JobStatus, { label: string; tone: 'info' | 'success' | 'warning' | 'destructive' | 'secondary' }> = {
   draft: { label: 'Draft', tone: 'secondary' },
-  queued: { label: 'Queued', tone: 'secondary' },
-  scaffolding: { label: 'Scaffolding', tone: 'info' },
-  cloning: { label: 'Cloning', tone: 'info' },
-  qa_running: { label: 'QA running', tone: 'info' },
-  fixing: { label: 'Fixing', tone: 'info' },
-  converged: { label: 'Converged', tone: 'success' },
-  exhausted: { label: 'Needs review', tone: 'warning' },
-  blocked: { label: 'Blocked', tone: 'warning' },
-  aborted: { label: 'Aborted', tone: 'destructive' },
+  queued: { label: 'Waiting to start', tone: 'secondary' },
+  scaffolding: { label: 'Preparing', tone: 'info' },
+  cloning: { label: 'Building', tone: 'info' },
+  qa_running: { label: 'Checking', tone: 'info' },
+  fixing: { label: 'Fixing differences', tone: 'info' },
+  converged: { label: 'Done', tone: 'success' },
+  exhausted: { label: 'Needs a look', tone: 'warning' },
+  blocked: { label: 'Paused, needs you', tone: 'warning' },
+  aborted: { label: 'Stopped', tone: 'destructive' },
   failed: { label: 'Failed', tone: 'destructive' },
-  paused: { label: 'Paused', tone: 'secondary' },
-  canceled: { label: 'Canceled', tone: 'secondary' },
+  paused: { label: 'Paused by you', tone: 'secondary' },
+  canceled: { label: 'Cancelled', tone: 'secondary' },
+  checked: { label: 'Checked', tone: 'info' },
 };
+
+
+/** Turn scheduler/runner wording into a sentence a store owner understands. */
+export function plainDetail(detail: string | null | undefined): string {
+  if (!detail) return '';
+  return detail
+    .replace(/CLI stalled:\s*no CLI activity for (\d+)m/i, 'Paused: nothing happened for $1 minutes')
+    .replace(/no CLI activity for (\d+)m/i, 'nothing happened for $1 minutes')
+    .replace(/Headless \/clone-theme run in progress/i, 'Building the theme…')
+    .replace(/Waiting for a free slot/i, 'Waiting for its turn to start')
+    // The button for a paused/interrupted build says Resume, not Retry.
+    .replace(/Interrupted by server (restart|shutdown) — press Retry to resume/i, 'Paused because ThemeBot restarted')
+    .replace(/Paused by user — press Retry to resume/i, 'Paused by you')
+    .replace(/\bCLI\b/g, 'build session')
+    .replace(/\bQA\b/g, 'checking');
+}
+
+/** Status of one round, in plain words. */
+export function plainRoundStatus(status: string): string {
+  const map: Record<string, string> = {
+    running: 'in progress', interrupted: 'stopped part-way (paused or ThemeBot restarted)', killed: 'stopped (paused)', succeeded: 'done', failed: 'failed', timed_out: 'stopped — nothing happened for too long',
+    aborted: 'stopped', canceled: 'cancelled', regressed: 'got worse than the round before', blocked: 'paused, needs you',
+  };
+  return map[status] ?? status.replace(/_/g, ' ');
+}
+
+/** Developer mode (Connections page) reveals terminal/browser/log tools. */
+export const isDeveloperMode = () => { try { return localStorage.getItem('themebot-developer-mode') === '1'; } catch { return false; } };
+
+/** Live code: theme files the build changed (see GET /jobs/:id/code). */
+export interface LiveCodeFile { path: string; mtime: number; size: number; content: string; truncated: boolean }
+export interface LiveCodeResponse { files: LiveCodeFile[]; recent: Array<{ path: string; mtime: number; size: number }>; total: number; now: number }
+
+/** Build progress (GET /jobs/:id/progress): the plan against what exists on disk. */
+export interface BuildProgress {
+  step: { n: string; label: string } | null;
+  planned: boolean;
+  pages: Array<{ route: string; name: string; planned: number; built: number; hasTemplate: boolean }>;
+  totals: { pagesPlanned: number; pagesStarted: number; pagesDone: number; sectionsPlanned: number; sectionsBuilt: number; changedThisRun: number };
+  files: Record<string, number>;
+  startedAt: number; elapsedMs: number; etaMs: number | null;
+}

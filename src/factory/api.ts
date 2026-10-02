@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Job, Iteration, SchedulerStatus, SettingsResponse, FactorySettings, QaSelftestResult, CredCheckResult, FactoryStore, CollectionMethod } from './types';
+import type { Job, Iteration, SchedulerStatus, SettingsResponse, FactorySettings, QaSelftestResult, CredCheckResult, FactoryStore, CollectionMethod, LoginStatus, UploadResult, ProjectInfo, PreviewRun, EasyStatus, StoreAccess } from './types';
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api/factory${path}`, {
@@ -17,9 +17,18 @@ export const api = {
   createJob: (input: Record<string, unknown>) => request<{ job: Job }>('/jobs', { method: 'POST', body: JSON.stringify(input) }),
   retry: (id: string) => request<{ job: Job }>(`/jobs/${id}/retry`, { method: 'POST' }),
   start: (id: string) => request<{ job: Job }>(`/jobs/${id}/start`, { method: 'POST' }),
+  check: (id: string) => request<{ job: Job }>(`/jobs/${id}/check`, { method: 'POST' }),
+  fix: (id: string, rounds: number) => request<{ job: Job }>(`/jobs/${id}/fix`, { method: 'POST', body: JSON.stringify({ rounds }) }),
+  syncStatus: (id: string, force = false) => request<{ ok: boolean; error?: string; themeId: number | null; missing: string[]; changed: string[]; total: number }>(`/jobs/${id}/sync${force ? '?force=1' : ''}`),
+  syncUpload: (id: string) => request<{ uploaded: string[]; failed: Array<{ key: string; error: string }> }>(`/jobs/${id}/sync`, { method: 'POST' }),
+  rebuild: (id: string) => request<{ job: Job; alreadyBuilt?: { done: number; total: number } }>(`/jobs/${id}/rebuild`, { method: 'POST' }),
   pause: (id: string) => request<{ job: Job }>(`/jobs/${id}/pause`, { method: 'POST' }),
   cancel: (id: string) => request<{ job: Job }>(`/jobs/${id}/cancel`, { method: 'POST' }),
   remove: (id: string, purge: boolean) => fetch(`/api/factory/jobs/${id}${purge ? '?purgeWorkspace=1' : ''}`, { method: 'DELETE' }).then((response) => { if (!response.ok && response.status !== 204) throw new Error(`HTTP ${response.status}`); }),
+  codeFile: (id: string, file: string) => request<import('./types').LiveCodeResponse>(`/jobs/${id}/code?file=${encodeURIComponent(file)}`),
+  progress: (id: string) => request<import('./types').BuildProgress>(`/jobs/${id}/progress`),
+  code: (id: string, since = 0) => request<import('./types').LiveCodeResponse>(`/jobs/${id}/code?since=${since}`),
+  activity: (id: string) => request<{ events: import('./types').ActivityEvent[]; streaming: boolean }>(`/jobs/${id}/activity`),
   log: (id: string, kind: string, iter: number, tail = 300) => request<{ log: string; exists: boolean }>(`/jobs/${id}/log?kind=${kind}&iter=${iter}&tail=${tail}`),
   report: async (id: string, name: string) => {
     const response = await fetch(`/api/factory/jobs/${id}/reports/${name}`);
@@ -68,6 +77,42 @@ export const api = {
   deleteStore: (id: string) => fetch(`/api/factory/stores/${id}`, { method: 'DELETE' }).then((response) => { if (!response.ok && response.status !== 204) throw new Error(`HTTP ${response.status}`); }),
   /** Test a saved store using its server-side stored secret (never round-trips to the browser). */
   testStore: (id: string, canary = false) => request<CredCheckResult>(`/stores/${id}/test`, { method: 'POST', body: JSON.stringify({ canary }) }),
+
+  // ---------- Easy mode ----------
+  /** Is the built-in browser signed in to Shopify? (`fresh` skips the 45s server cache.) */
+  shopifyLogin: (fresh = false) => request<LoginStatus>(`/shopify-login${fresh ? '?fresh=1' : ''}`),
+  /** Open the Shopify sign-in page in a visible tab of the built-in browser. */
+  openShopifySignIn: () => request<{ ok: boolean }>('/shopify-login/open', { method: 'POST' }),
+  /** Upload a project .zip (raw body, with progress) — the server extracts + inspects it. */
+  uploadProject: (file: File, onProgress?: (fraction: number) => void) => new Promise<UploadResult>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `/api/factory/intake/upload?name=${encodeURIComponent(file.name)}`);
+    xhr.setRequestHeader('Content-Type', 'application/zip');
+    xhr.upload.onprogress = (event) => { if (event.lengthComputable && onProgress) onProgress(event.loaded / event.total); };
+    xhr.onerror = () => reject(new Error('The upload failed — check that ThemeBot is still running.'));
+    xhr.onload = () => {
+      let body: { error?: string } & Partial<UploadResult> = {};
+      try { body = JSON.parse(xhr.responseText) as typeof body; } catch { /* non-JSON */ }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(body as UploadResult);
+      else reject(new Error(body.error ?? `Upload failed (HTTP ${xhr.status}).`));
+    };
+    xhr.send(file);
+  }),
+  inspectProject: (path: string) => request<{ reactFilesPath: string; info: ProjectInfo }>('/intake/inspect', { method: 'POST', body: JSON.stringify({ path }) }),
+  startPreview: (source: { path?: string; url?: string }) => request<{ preview: PreviewRun }>('/intake/preview', { method: 'POST', body: JSON.stringify(source) }),
+  previewStatus: (id: string) => request<{ preview: PreviewRun }>(`/intake/preview/${id}`),
+  previewScreenshotUrl: (id: string) => `/api/factory/intake/preview/${id}/screenshot?t=${Date.now()}`,
+  stopPreview: (id: string) => request<{ stopped: boolean }>(`/intake/preview/${id}/stop`, { method: 'POST' }),
+  easyStart: (body: { storeName: string; siteUrl?: string; reactFilesPath?: string; intakeId?: string; qaEngine?: string; shop?: string; newStore?: boolean }) => request<EasyStatus>('/easy/start', { method: 'POST', body: JSON.stringify(body) }),
+  easyStatus: () => request<EasyStatus>('/easy/status'),
+  easySigninWindow: (page?: 'shopify' | 'shopify-accounts' | 'google-add' | 'google-manage', shop?: string, adminPath?: string) => request<{ ok: boolean; browser: string }>('/easy/signin-window', { method: 'POST', body: JSON.stringify({ ...(page ? { page } : {}), ...(shop ? { shop } : {}), ...(adminPath ? { adminPath } : {}) }) }),
+  easyRememberedStore: (name: string) => request<{ shop: string | null }>(`/easy/remembered-store?name=${encodeURIComponent(name)}`),
+  easyStoreCheck: (shop: string, force = false) => request<StoreAccess>('/easy/store-check', { method: 'POST', body: JSON.stringify({ shop, force }) }),
+  easyProfile: () => request<{ exists: boolean; path: string; inUse: boolean }>('/easy/profile'),
+  easyProfileReset: () => request<{ ok: boolean; backup: string | null }>('/easy/profile-reset', { method: 'POST' }),
+  easyResume: (method?: 'scripted' | 'llm') => request<EasyStatus>('/easy/resume', { method: 'POST', body: JSON.stringify(method ? { method } : {}) }),
+  easyCancel: () => request<{ canceled: boolean }>('/easy/cancel', { method: 'POST' }),
+  easyDismiss: () => request<{ ok: boolean }>('/easy/dismiss', { method: 'POST' }),
 };
 
 /** Poll a fetcher on an interval while the component is mounted (and the tab visible). */

@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently -k \"vite\" \"node --watch --import tsx server/index.ts\"",
+    "dev": "concurrently -k \"vite\" \"node --watch-path=server --import tsx server/index.ts\"",
     "build": "tsc --noEmit && vite build",
     "start": "NODE_ENV=production node --import tsx server/index.ts",
     "test": "vitest run",

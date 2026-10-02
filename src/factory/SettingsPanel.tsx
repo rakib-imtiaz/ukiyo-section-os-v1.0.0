@@ -1,7 +1,8 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Activity, Bot, Camera, CheckCircle2, ChevronDown, Clock3, Cpu, Eraser, FlaskConical, FolderCog, Gauge, Hammer, Hourglass, KeyRound, LayoutList, Layers, ListPlus, MousePointerClick, OctagonPause, PauseCircle, RefreshCw, Repeat2, Save, ScanSearch, ShieldCheck, Target, TimerReset, TrendingUp, TriangleAlert, Type, Wrench, XCircle } from 'lucide-react';
-import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle, ConfirmDialog, Field, Separator, Slider, Spinner, Switch, useToast } from './ui';
+import { Activity, Bot, Sparkles, Camera, CheckCircle2, ChevronDown, Chrome, ExternalLink, Globe, LogOut, Store, UserMinus, UserPlus, UserRound, Clock3, Cpu, Eraser, FlaskConical, FolderCog, Gauge, Hammer, Hourglass, KeyRound, LayoutList, Layers, ListPlus, MousePointerClick, OctagonPause, PauseCircle, RefreshCw, Repeat2, Save, ScanSearch, ShieldCheck, SlidersHorizontal, Target, TimerReset, TrendingUp, TriangleAlert, Type, Wrench, XCircle } from 'lucide-react';
+import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle, ConfirmDialog, Field, Separator, Slider, Spinner, Switch, Tabs, useToast } from './ui';
 import { api } from './api';
+import { animationsEnabled, setAnimationsEnabled, systemReducedMotion } from '../motion';
 import type { BotModel, FactorySettings, Job, QaSelftestResult, SettingsResponse } from './types';
 
 const MODEL_META: Record<BotModel, { label: string; hint: string }> = {
@@ -147,12 +148,120 @@ function QaSelfTest() {
   );
 }
 
+/** Settings → Speed: turn every animation off (slow machines). Applies instantly, per browser. */
+function AnimationsCard() {
+  const [on, setOn] = useState(animationsEnabled);
+  const system = systemReducedMotion();
+  return (
+    <Card>
+      <SectionHeader icon={<Sparkles />} title="Animations" description="Moving pictures, spinning cube, flowing lines and page transitions." />
+      <CardContent className="flex flex-col gap-3">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <p className="text-[15px] font-bold">Show animations</p>
+            <p className="mt-0.5 text-[13px] font-medium leading-relaxed text-muted-foreground">Turn this off if ThemeBot feels slow or your computer gets hot. Everything still works — it just stops moving.</p>
+          </div>
+          <Switch checked={on && !system} disabled={system} onCheckedChange={(value) => { setOn(value); setAnimationsEnabled(value); }} aria-label="Show animations" />
+        </div>
+        {system && <p className="text-[13px] font-semibold text-muted-foreground">Your computer is set to reduce motion, so animations are already off.</p>}
+      </CardContent>
+    </Card>
+  );
+}
+
+type BrowserPage = 'shopify' | 'shopify-accounts' | 'google-add' | 'google-manage';
+
+/** The ThemeBot browser: its own Chrome profile the setup script signs in with. Lets the user
+ *  open it on the account pages to add or remove Google / Shopify accounts, or sign out of all. */
+function ThemeBotBrowser() {
+  const toast = useToast();
+  const [profile, setProfile] = useState<{ exists: boolean; path: string; inUse: boolean } | null>(null);
+  const [opening, setOpening] = useState<BrowserPage | null>(null);
+  const [confirmReset, setConfirmReset] = useState(false);
+  const refresh = () => api.easyProfile().then(setProfile).catch(() => setProfile(null));
+  useEffect(() => { void refresh(); }, []);
+
+  const open = async (page: BrowserPage, title: string) => {
+    setOpening(page);
+    try { await api.easySigninWindow(page); toast.push({ title, detail: 'Look for the new Chrome window.', variant: 'success' }); void refresh(); }
+    catch (error) { toast.push({ title: 'Could not open the window', detail: error instanceof Error ? error.message : undefined, variant: 'destructive' }); }
+    finally { setOpening(null); }
+  };
+
+  const rows: { page: BrowserPage; icon: ReactNode; label: string; help: string; action: string }[] = [
+    { page: 'google-add', icon: <UserPlus />, label: 'Add a Google account', help: 'Sign in with another Google account the setup can use.', action: 'Add account' },
+    { page: 'google-manage', icon: <UserMinus />, label: 'Remove Google accounts', help: 'See which Google accounts are signed in and remove the ones you don’t want.', action: 'Manage' },
+    { page: 'shopify-accounts', icon: <Store />, label: 'Shopify accounts', help: 'Switch, add or log out of Shopify accounts.', action: 'Manage' },
+    { page: 'shopify', icon: <Globe />, label: 'Open Shopify admin', help: 'Opens the window on Shopify, the page the setup starts from.', action: 'Open' },
+  ];
+
+  return (
+    <Card>
+      <SectionHeader icon={<Chrome />} title="ThemeBot browser" description="The separate Chrome window ThemeBot signs in with when it sets up your stores. Your everyday Chrome is never touched." />
+      <CardContent className="flex flex-col gap-4">
+        {profile?.inUse && (
+          <p className="flex items-start gap-2 rounded-xl border border-warning/30 bg-warning/5 px-3.5 py-2.5 text-[13px] font-semibold leading-relaxed text-warning">
+            <TriangleAlert className="mt-0.5 size-4 shrink-0" /> The setup is using this browser right now. Wait for it to finish before changing accounts.
+          </p>
+        )}
+        {rows.map((row, index) => (
+          <div key={row.page} className="flex flex-col gap-4">
+            {index > 0 && <Separator />}
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                <p className="flex items-center gap-2 text-[15px] font-bold [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-muted-foreground">{row.icon} {row.label}</p>
+                <p className="mt-0.5 text-[13px] font-medium leading-relaxed text-muted-foreground">{row.help}</p>
+              </div>
+              <Button size="sm" variant="outline" disabled={opening != null || profile?.inUse} onClick={() => void open(row.page, row.label)}>
+                {opening === row.page ? <Spinner /> : <ExternalLink />} {row.action}
+              </Button>
+            </div>
+          </div>
+        ))}
+        <Separator />
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <p className="flex items-center gap-2 text-[15px] font-bold text-destructive [&_svg]:size-4 [&_svg]:shrink-0"><LogOut /> Sign out of everything</p>
+            <p className="mt-0.5 text-[13px] font-medium leading-relaxed text-muted-foreground">
+              {profile?.exists === false ? 'Nothing is signed in yet.' : 'Starts the ThemeBot browser fresh, signed out of every Google and Shopify account. Close its window first.'}
+            </p>
+          </div>
+          <Button size="sm" variant="outline" className="border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive" disabled={!profile?.exists || profile.inUse} onClick={() => setConfirmReset(true)}>Sign out</Button>
+        </div>
+      </CardContent>
+      <ConfirmDialog
+        open={confirmReset} destructive title="Sign out of every account?"
+        description="The ThemeBot browser forgets all its Google and Shopify sign-ins. Next time you set up a store you'll sign in again. Your stores and builds are not affected."
+        confirmLabel="Sign out of everything"
+        onCancel={() => setConfirmReset(false)}
+        onConfirm={async () => {
+          setConfirmReset(false);
+          try { await api.easyProfileReset(); toast.push({ title: 'Signed out of everything', detail: 'The ThemeBot browser starts fresh next time.', variant: 'success' }); }
+          catch (error) { toast.push({ title: 'Could not sign out', detail: error instanceof Error ? error.message : undefined, variant: 'destructive' }); }
+          void refresh();
+        }}
+      />
+    </Card>
+  );
+}
+
+type SettingsTab = 'accounts' | 'building' | 'quality' | 'advanced';
+const TAB_KEY = 'themebot-settings-tab';
+const SETTINGS_TABS: { id: SettingsTab; label: string; icon: ReactNode; intro: string }[] = [
+  { id: 'accounts', label: 'Accounts', icon: <UserRound />, intro: 'The Google and Shopify accounts ThemeBot signs in with to set up your stores.' },
+  { id: 'building', label: 'Speed', icon: <Gauge />, intro: 'Which AI builds your themes and how many stores are built at once.' },
+  { id: 'quality', label: 'Quality', icon: <Target />, intro: 'How closely the store must match your website before a build is done.' },
+  { id: 'advanced', label: 'Advanced', icon: <SlidersHorizontal />, intro: 'Time limits, system checks and developer options. The defaults suit most people.' },
+];
+
 export function SettingsPanel({ jobs, refreshFleet }: { jobs: Job[]; refreshFleet: () => void }) {
   const toast = useToast();
   const [response, setResponse] = useState<SettingsResponse | null>(null);
   const [draft, setDraft] = useState<FactorySettings | null>(null);
   const [saving, setSaving] = useState(false);
   const [danger, setDanger] = useState<'killAll' | 'clearQueue' | 'reset' | null>(null);
+  const [tab, setTab] = useState<SettingsTab>(() => { try { const saved = localStorage.getItem(TAB_KEY); return SETTINGS_TABS.some((entry) => entry.id === saved) ? saved as SettingsTab : 'accounts'; } catch { return 'accounts'; } });
+  const chooseTab = (next: SettingsTab) => { setTab(next); try { localStorage.setItem(TAB_KEY, next); } catch { /* per-viewer convenience only */ } };
 
   useEffect(() => { void api.settings().then((data) => { setResponse(data); setDraft(data.settings); }); }, []);
   if (!response || !draft) return <div className="flex justify-center py-20"><Spinner className="size-7" /></div>;
@@ -167,7 +276,7 @@ export function SettingsPanel({ jobs, refreshFleet }: { jobs: Job[]; refreshFlee
       const saved = await api.saveSettings(draft);
       setResponse((current) => current ? { ...current, settings: saved.settings } : current);
       setDraft(saved.settings);
-      toast.push({ title: 'Settings saved', detail: 'Applied live — the scheduler re-reads them immediately.', variant: 'success' });
+      toast.push({ title: 'Settings saved', detail: 'They apply straight away.', variant: 'success' });
     } catch (error) { toast.push({ title: 'Save failed', detail: error instanceof Error ? error.message : undefined, variant: 'destructive' }); }
     finally { setSaving(false); }
   };
@@ -179,107 +288,143 @@ export function SettingsPanel({ jobs, refreshFleet }: { jobs: Job[]; refreshFlee
   const activeJobs = jobs.filter((job) => ['scaffolding', 'cloning', 'qa_running', 'fixing'].includes(job.status) || job.running);
   const queuedJobs = jobs.filter((job) => job.status === 'queued');
 
+  const tabMeta = SETTINGS_TABS.find((entry) => entry.id === tab) ?? SETTINGS_TABS[0];
+
   return (
-    <div className="stagger mx-auto flex w-full max-w-2xl flex-col gap-5 pb-24">
+    <div className="mx-auto flex w-full max-w-2xl flex-col gap-5 pb-24">
+      <div className="flex flex-col gap-3">
+        <Tabs className="settings-tabs" value={tab} onChange={(id) => chooseTab(id as SettingsTab)}
+          tabs={SETTINGS_TABS.map((entry) => ({ id: entry.id, label: <>{entry.icon}{entry.label}</> }))} />
+        <p className="text-[13.5px] font-medium leading-relaxed text-muted-foreground">{tabMeta.intro}</p>
+      </div>
+
+      <div key={tab} className="stagger flex flex-col gap-5">
+      {tab === 'accounts' && <ThemeBotBrowser />}
+
+      {tab === 'building' && (<>
+      <AnimationsCard />
       <Card>
-        <SectionHeader icon={<Bot />} title="Models" description="Which Claude model each bot runs on — switch to compare speed against reliability." />
+        <SectionHeader icon={<Bot />} title="Which AI does the work" description="Pick speed or care. Opus is slower but makes the fewest mistakes." />
         <CardContent className="flex flex-col gap-5">
-          <Field icon={<Hammer />} label="Clone & fix sessions" help="The heavy theme work: cloning the React site and fix iterations. Opus is the most careful; Sonnet is a good speed experiment; Haiku is fastest but misses details.">
+          <Field icon={<Hammer />} label="Building your theme" help="The AI that turns your website into a Shopify theme and fixes what doesn't match.">
             <ModelPicker value={draft.cloneModel} onChange={(model) => set('cloneModel', model)} ariaLabel="Clone and fix model" />
           </Field>
           <Separator />
-          <Field icon={<KeyRound />} label="Key-collector bot (Chrome)" help="Drives your Chrome to create the app and fetch credentials.">
+          <Field icon={<KeyRound />} label="Store setup (AI helper)" help="Only used when you choose “Let the AI bot try instead” during store setup. The normal setup script doesn't use AI.">
             <ModelPicker value={draft.collectorModel} onChange={(model) => set('collectorModel', model)} ariaLabel="Key collector model" />
           </Field>
           {draft.collectorModel !== 'opus' && (
             <p className="flex items-start gap-2 rounded-xl border border-warning/30 bg-warning/5 px-3.5 py-2.5 text-[13px] font-semibold leading-relaxed text-warning">
               <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-              Heads up: in testing, Sonnet and Haiku refuse this bot's mission (they treat autonomous credential fetching as suspicious) and the run dies right after boot. Opus is the only model that reliably completes it.
+              Sonnet and Haiku usually refuse the store-setup job and stop straight away. Keep this on Opus.
             </p>
           )}
         </CardContent>
       </Card>
 
       <Card>
-        <SectionHeader icon={<Cpu />} title="Execution" description="How many stores run at once and how launches are spaced." />
+        <SectionHeader icon={<Cpu />} title="How many at once" description="Building more stores together finishes sooner but uses up your AI plan faster." />
         <CardContent className="flex flex-col gap-5">
-          <Field icon={<Layers />} label="Parallel clone slots" help={lockNote('concurrency') ?? 'Each slot is a full Claude session. 2 is a good balance; >3 burns usage limits fast.'}>
+          <Field icon={<Layers />} label="Stores built at the same time" help={lockNote('concurrency') ?? '2 is a good balance. More than 3 uses up your AI plan quickly.'}>
             <Slider value={draft.concurrency} onValueChange={(value) => set('concurrency', value)} min={1} max={5} disabled={locked.concurrency} />
           </Field>
-          <Field icon={<Hourglass />} label="Launch stagger (seconds)" help={lockNote('launchStaggerSec') ?? 'Delay between slot launches so simultaneous clones do not spike token spend.'}>
+          <Field icon={<Hourglass />} label="Wait between starting builds" help={lockNote('launchStaggerSec') ?? 'Spaces out new builds so they don’t all start at the same moment.'}>
             <Slider value={draft.launchStaggerSec} onValueChange={(value) => set('launchStaggerSec', value)} min={0} max={600} step={10} format={(value) => `${value}s`} disabled={locked.launchStaggerSec} />
           </Field>
           <div className="flex items-center justify-between gap-4">
             <div>
-              <p className="flex items-center gap-2 text-[15px] font-bold [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-muted-foreground"><PauseCircle /> Pause queue on usage limit</p>
-              <p className="mt-0.5 text-[13px] font-medium leading-relaxed text-muted-foreground">When a run hits the Claude usage limit, hold all queued jobs instead of burning through them.</p>
+              <p className="flex items-center gap-2 text-[15px] font-bold [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-muted-foreground"><PauseCircle /> Pause when my AI usage limit is reached</p>
+              <p className="mt-0.5 text-[13px] font-medium leading-relaxed text-muted-foreground">Waiting builds hold instead of starting and failing one after another.</p>
             </div>
             <Switch checked={draft.pauseQueueOnUsageLimit} onCheckedChange={(value) => set('pauseQueueOnUsageLimit', value)} aria-label="Pause queue on usage limit" />
           </div>
         </CardContent>
       </Card>
+      </>)}
+
+      {tab === 'quality' && (<>
+      <Card>
+        <SectionHeader icon={<Target />} title="When a build counts as done" description="After building, ThemeBot compares the store with your website and fixes differences until it's close enough." />
+        <CardContent className="flex flex-col gap-5">
+          <Field icon={<Target />} label="Match needed to finish" help="How closely the store must match your website. 92% is recommended; 100% is rarely reachable.">
+            <Slider value={draft.defaultScoreThreshold} onValueChange={(value) => set('defaultScoreThreshold', value)} min={0.5} max={1} step={0.01} format={(value) => `${Math.round(value * 100)}%`} />
+          </Field>
+          <Field icon={<Repeat2 />} label="Most fix rounds per build" help="Each round checks the store and fixes what's off. More rounds can mean a closer match but a longer build.">
+            <Slider value={draft.defaultMaxIterations} onValueChange={(value) => set('defaultMaxIterations', value)} min={1} max={10} />
+          </Field>
+          <Separator />
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <p className="flex items-center gap-2 text-[15px] font-bold [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-muted-foreground"><OctagonPause /> Stop early if it isn't improving</p>
+              <p className="mt-0.5 text-[13px] font-medium leading-relaxed text-muted-foreground">Ends the fix rounds when two in a row improve the match by less than {(draft.noProgressEpsilon * 100).toFixed(1)}%.</p>
+            </div>
+            <Switch checked={draft.earlyStopOnNoProgress} onCheckedChange={(value) => set('earlyStopOnNoProgress', value)} aria-label="Early-stop when stalled" />
+          </div>
+          {draft.earlyStopOnNoProgress && (
+            <Field icon={<TrendingUp />} label="Smallest improvement that counts" help="Below this, a round is treated as “not improving”.">
+              <Slider value={draft.noProgressEpsilon} onValueChange={(value) => set('noProgressEpsilon', value)} min={0} max={0.2} step={0.005} format={(value) => `${(value * 100).toFixed(1)}%`} />
+            </Field>
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
-        <SectionHeader icon={<TimerReset />} title="Timeouts" description="Watchdogs that kill stalled runs and mark the job blocked (resumable)." />
+        <SectionHeader icon={<ScanSearch />} title="What the match score looks at" description={`How much each check counts. They're balanced automatically on save (now ${Math.round((draft.scoreWeights.presence / weightTotal) * 100)}% / ${Math.round((draft.scoreWeights.text / weightTotal) * 100)}% / ${Math.round((draft.scoreWeights.interaction / weightTotal) * 100)}%).`} />
         <CardContent className="flex flex-col gap-5">
-          <Field icon={<Activity />} label="Inactivity watchdog (minutes)" help={lockNote('inactivityTimeoutMin') ?? 'Kill a CLI session with no output for this long.'}>
+          <Field icon={<LayoutList />} label="Every section is there" help="Does the store have all the parts of your website?">
+            <Slider value={draft.scoreWeights.presence} onValueChange={(value) => setWeight('presence', value)} min={0} max={1} step={0.05} format={(value) => value.toFixed(2)} />
+          </Field>
+          <Field icon={<Type />} label="Same words" help="Does the text match your website word for word?">
+            <Slider value={draft.scoreWeights.text} onValueChange={(value) => setWeight('text', value)} min={0} max={1} step={0.05} format={(value) => value.toFixed(2)} />
+          </Field>
+          <Field icon={<MousePointerClick />} label="Buttons and menus work the same" help="Do links, buttons and menus behave like on your website?">
+            <Slider value={draft.scoreWeights.interaction} onValueChange={(value) => setWeight('interaction', value)} min={0} max={1} step={0.05} format={(value) => value.toFixed(2)} />
+          </Field>
+        </CardContent>
+      </Card>
+      </>)}
+
+      {tab === 'advanced' && (<>
+      <Card>
+        <SectionHeader icon={<TimerReset />} title="Time limits" description="If a step runs longer than this, ThemeBot stops it and marks the build “Needs you”. You can press Retry to carry on." />
+        <CardContent className="flex flex-col gap-5">
+          <Field icon={<Activity />} label="Stop if nothing happens for" help={lockNote('inactivityTimeoutMin') ?? 'Catches a build that has frozen.'}>
             <Slider value={draft.inactivityTimeoutMin} onValueChange={(value) => set('inactivityTimeoutMin', value)} min={5} max={120} format={(value) => `${value}m`} disabled={locked.inactivityTimeoutMin} />
           </Field>
-          <Field icon={<Clock3 />} label="Clone wall-clock cap" help={lockNote('cloneTimeoutMin')}>
+          <Field icon={<Clock3 />} label="Longest first build" help={lockNote('cloneTimeoutMin') ?? 'The first full build of a store.'}>
             <Slider value={draft.cloneTimeoutMin} onValueChange={(value) => set('cloneTimeoutMin', value)} min={30} max={720} step={10} format={(value) => `${value}m`} disabled={locked.cloneTimeoutMin} />
           </Field>
-          <Field icon={<Wrench />} label="Fix session cap" help={lockNote('fixTimeoutMin')}>
+          <Field icon={<Wrench />} label="Longest fix round" help={lockNote('fixTimeoutMin')}>
             <Slider value={draft.fixTimeoutMin} onValueChange={(value) => set('fixTimeoutMin', value)} min={10} max={240} step={5} format={(value) => `${value}m`} disabled={locked.fixTimeoutMin} />
           </Field>
-          <Field icon={<Gauge />} label="QA run cap" help={lockNote('qaTimeoutMin')}>
+          <Field icon={<Gauge />} label="Longest check" help={lockNote('qaTimeoutMin') ?? 'Comparing the store with your website.'}>
             <Slider value={draft.qaTimeoutMin} onValueChange={(value) => set('qaTimeoutMin', value)} min={5} max={120} step={5} format={(value) => `${value}m`} disabled={locked.qaTimeoutMin} />
           </Field>
         </CardContent>
       </Card>
 
       <Card>
-        <SectionHeader icon={<ScanSearch />} title="QA & convergence" description="Defaults for new jobs, and how the composite match score is weighed." />
+        <SectionHeader icon={<ShieldCheck />} title="Privacy & storage" />
         <CardContent className="flex flex-col gap-5">
-          <Field icon={<Repeat2 />} label="Default max fix iterations">
-            <Slider value={draft.defaultMaxIterations} onValueChange={(value) => set('defaultMaxIterations', value)} min={1} max={10} />
-          </Field>
-          <Field icon={<Target />} label="Default convergence threshold">
-            <Slider value={draft.defaultScoreThreshold} onValueChange={(value) => set('defaultScoreThreshold', value)} min={0.5} max={1} step={0.01} format={(value) => `${Math.round(value * 100)}%`} />
-          </Field>
-          <Separator />
-          <p className="text-[13.5px] font-bold">Score weights <span className="font-semibold text-muted-foreground">(normalized on save — currently {Math.round((draft.scoreWeights.presence / weightTotal) * 100)}% / {Math.round((draft.scoreWeights.text / weightTotal) * 100)}% / {Math.round((draft.scoreWeights.interaction / weightTotal) * 100)}%)</span></p>
-          <Field icon={<LayoutList />} label="Section presence" help="Are all React sections there?">
-            <Slider value={draft.scoreWeights.presence} onValueChange={(value) => setWeight('presence', value)} min={0} max={1} step={0.05} format={(value) => value.toFixed(2)} />
-          </Field>
-          <Field icon={<Type />} label="Text match" help="Does the copy match, word for word?">
-            <Slider value={draft.scoreWeights.text} onValueChange={(value) => setWeight('text', value)} min={0} max={1} step={0.05} format={(value) => value.toFixed(2)} />
-          </Field>
-          <Field icon={<MousePointerClick />} label="Interaction parity" help="Do buttons, links, and menus behave the same?">
-            <Slider value={draft.scoreWeights.interaction} onValueChange={(value) => setWeight('interaction', value)} min={0} max={1} step={0.05} format={(value) => value.toFixed(2)} />
-          </Field>
-          <Separator />
           <div className="flex items-center justify-between gap-4">
             <div>
-              <p className="flex items-center gap-2 text-[15px] font-bold [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-muted-foreground"><OctagonPause /> Early-stop when stalled</p>
-              <p className="mt-0.5 text-[13px] font-medium leading-relaxed text-muted-foreground">Stop the loop after two iterations with less than {(draft.noProgressEpsilon * 100).toFixed(0)}% score movement.</p>
+              <p className="flex items-center gap-2 text-[15px] font-bold [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-muted-foreground"><Eraser /> Hide store keys in logs</p>
+              <p className="mt-0.5 text-[13px] font-medium leading-relaxed text-muted-foreground">Store passwords and access keys are replaced with *** before anything is saved. Keep this on.</p>
             </div>
-            <Switch checked={draft.earlyStopOnNoProgress} onCheckedChange={(value) => set('earlyStopOnNoProgress', value)} aria-label="Early-stop when stalled" />
+            <Switch checked={draft.secretScrub} onCheckedChange={(value) => set('secretScrub', value)} aria-label="Scrub secrets from logs" />
           </div>
-          <Field icon={<TrendingUp />} label="No-progress epsilon" help="Minimum score delta that counts as progress.">
-            <Slider value={draft.noProgressEpsilon} onValueChange={(value) => set('noProgressEpsilon', value)} min={0} max={0.2} step={0.005} format={(value) => `${(value * 100).toFixed(1)}%`} />
-          </Field>
-          <Field icon={<Camera />} label="Keep screenshot iterations" help="Older QA screenshot folders beyond this are eligible for pruning.">
+          <Field icon={<Camera />} label="Screenshot rounds to keep" help="Older comparison screenshots can be cleaned up to save disk space.">
             <Slider value={draft.keepIterations} onValueChange={(value) => set('keepIterations', value)} min={1} max={20} />
           </Field>
         </CardContent>
       </Card>
 
       <Card>
-        <SectionHeader icon={<FolderCog />} title="Paths & binaries" description="Where workspaces are created and which binaries the factory drives. Overridable via FACTORY_* env vars." />
+        <SectionHeader icon={<FolderCog />} title="System check" description="Make sure everything ThemeBot needs is installed on this computer." />
         <CardContent className="flex flex-col gap-5">
-          <PathCheck label="Workspace root" value={response.paths?.workspaceRoot ?? ''} kind="workspace" />
-          <PathCheck label="Claude CLI" value={response.paths?.claudePath ?? ''} kind="claude" />
-          <PathCheck label="Playwright root" value={response.paths?.playwrightRoot ?? ''} kind="playwright" />
+          <PathCheck label="Builds folder" value={response.paths?.workspaceRoot ?? ''} kind="workspace" />
+          <PathCheck label="AI engine program" value={response.paths?.claudePath ?? ''} kind="claude" />
+          <PathCheck label="Browser tools" value={response.paths?.playwrightRoot ?? ''} kind="playwright" />
           <BrowserStatus />
           <Separator />
           <QaSelfTest />
@@ -287,16 +432,9 @@ export function SettingsPanel({ jobs, refreshFleet }: { jobs: Job[]; refreshFlee
       </Card>
 
       <Card>
-        <SectionHeader icon={<ShieldCheck />} title="Safety" description="What spawned CLI sessions are allowed to do." />
+        <SectionHeader icon={<ListPlus />} title="Developer options" description="Only change these if you know what they do." />
         <CardContent className="flex flex-col gap-5">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <p className="flex items-center gap-2 text-[15px] font-bold [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-muted-foreground"><Eraser /> Scrub secrets from logs</p>
-              <p className="mt-0.5 text-[13px] font-medium leading-relaxed text-muted-foreground">Replace shpat_/shpss_/vso_live_ tokens with *** before logs hit disk.</p>
-            </div>
-            <Switch checked={draft.secretScrub} onCheckedChange={(value) => set('secretScrub', value)} aria-label="Scrub secrets from logs" />
-          </div>
-          <Field icon={<ListPlus />} label="Extra permission allowlist entries (advanced)" help="One per line, appended to each job's scoped .claude/settings.json — e.g. Bash(python:*). The base allowlist already covers node, npm, curl, and the two project domains.">
+          <Field icon={<ListPlus />} label="Extra allowed commands" help="One per line, e.g. Bash(python:*). Added to what each build is allowed to run. The defaults already cover node, npm and curl.">
             <textarea
               value={draft.extraAllow.join('\n')}
               onChange={(event) => set('extraAllow', event.target.value.split('\n').map((entry) => entry.trim()).filter(Boolean))}
@@ -308,13 +446,15 @@ export function SettingsPanel({ jobs, refreshFleet }: { jobs: Job[]; refreshFlee
       </Card>
 
       <Card className="border-destructive/30">
-        <SectionHeader danger icon={<TriangleAlert />} title="Danger zone" description="Irreversible or fleet-wide actions — each asks for confirmation." />
+        <SectionHeader danger icon={<TriangleAlert />} title="Danger zone" description="Each of these asks you to confirm first." />
         <CardContent className="flex flex-wrap gap-2.5">
-          <Button variant="outline" className="border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => setDanger('killAll')} disabled={!activeJobs.length}>Kill all running jobs ({activeJobs.length})</Button>
-          <Button variant="outline" className="border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => setDanger('clearQueue')} disabled={!queuedJobs.length}>Clear queue ({queuedJobs.length})</Button>
+          <Button variant="outline" className="border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => setDanger('killAll')} disabled={!activeJobs.length}>Stop all builds ({activeJobs.length})</Button>
+          <Button variant="outline" className="border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => setDanger('clearQueue')} disabled={!queuedJobs.length}>Cancel waiting builds ({queuedJobs.length})</Button>
           <Button variant="outline" className="border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => setDanger('reset')}>Reset settings to defaults</Button>
         </CardContent>
       </Card>
+      </>)}
+      </div>
 
       <div className="sticky bottom-5 z-10 flex justify-end">
         <div className={`flex items-center gap-4 rounded-xl border border-border bg-card/95 py-2 pl-5 pr-2 shadow-xl backdrop-blur transition-all duration-300 ${dirty ? 'translate-y-0 opacity-100' : 'pointer-events-none translate-y-3 opacity-0'}`}>
@@ -324,22 +464,22 @@ export function SettingsPanel({ jobs, refreshFleet }: { jobs: Job[]; refreshFlee
       </div>
 
       <ConfirmDialog
-        open={danger === 'killAll'} destructive title={`Kill ${activeJobs.length} running job(s)?`}
-        description="Every active Claude CLI session is terminated. Jobs become paused and can be resumed with Retry."
-        confirmLabel="Kill all"
+        open={danger === 'killAll'} destructive title={`Stop ${activeJobs.length} running build(s)?`}
+        description="Every running build stops where it is. You can carry on later with Retry."
+        confirmLabel="Stop all"
         onCancel={() => setDanger(null)}
         onConfirm={async () => { setDanger(null); for (const job of activeJobs) await api.pause(job.id).catch(() => {}); toast.push({ title: 'All running jobs paused', variant: 'warning' }); refreshFleet(); }}
       />
       <ConfirmDialog
-        open={danger === 'clearQueue'} destructive title={`Cancel ${queuedJobs.length} queued job(s)?`}
-        description="Queued jobs are canceled (their workspaces stay on disk). Running jobs are untouched."
-        confirmLabel="Clear queue"
+        open={danger === 'clearQueue'} destructive title={`Cancel ${queuedJobs.length} waiting build(s)?`}
+        description="Builds that haven't started yet are canceled. Their files stay on this computer, and running builds carry on."
+        confirmLabel="Cancel them"
         onCancel={() => setDanger(null)}
         onConfirm={async () => { setDanger(null); for (const job of queuedJobs) await api.cancel(job.id).catch(() => {}); toast.push({ title: 'Queue cleared', variant: 'warning' }); refreshFleet(); }}
       />
       <ConfirmDialog
-        open={danger === 'reset'} destructive title="Reset all factory settings?"
-        description="Restores every setting to its default (env-locked values stay as the environment defines them)."
+        open={danger === 'reset'} destructive title="Reset all settings?"
+        description="Every setting goes back to its recommended value. Your accounts and builds are not affected."
         confirmLabel="Reset"
         onCancel={() => setDanger(null)}
         onConfirm={async () => {

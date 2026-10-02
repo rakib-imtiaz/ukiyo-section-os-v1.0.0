@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
-import { access, appendFile, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { recordBuild, recordStage } from './engines';
+import { access, appendFile, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from '../config';
@@ -167,10 +168,15 @@ async function firstLines(target: string, count = 6) {
   try { return (await readFile(target, 'utf8')).split(/\r?\n/).filter(Boolean).slice(0, count).join(' | ').slice(0, 500); } catch { return ''; }
 }
 
-export interface DriveControl { signal: AbortSignal; registerKill: (kill: ((reason?: string) => void) | null) => void; onUsageLimit?: () => void; }
+/** A run the user started by hand from the build panel: one check, or fix rounds (each fix is
+ *  followed by a check). Both work from what is on disk and never re-run the first build step. */
+export type RunMode = { kind: 'check' } | { kind: 'fix'; rounds: number };
+export interface DriveControl { signal: AbortSignal; registerKill: (kill: ((reason?: string) => void) | null) => void; onUsageLimit?: () => void; mode?: RunMode; }
 
 async function transition(jobId: string, status: string, detail: string | null = null, extra: Partial<FactoryJobRecord> = {}) {
   const job = await db.updateFactoryJob(jobId, { status, status_detail: detail, ...extra });
+  // A finished build (converged / exhausted / failed / aborted / canceled) → one usage 'build' line.
+  if (job && extra.finished_at) void recordBuild(job, null).catch(() => {});
   // Keep the clone-project mirror (kind='clone', linked by factory_job_id) in step with the
   // job on every lifecycle transition — cloning/qa/fixing/converged/exhausted/blocked/failed.
   // Best-effort: a mirror hiccup must never break the convergence loop itself.
@@ -230,9 +236,18 @@ export async function driveJob(jobId: string, control: DriveControl) {
     // Ensure it on every run (idempotent) so resumed jobs are covered too.
     await trustWorkspace(job.workspace_path);
 
+    // Hand-started check / fix rounds: straight to the loop, never the first build step.
+    if (control.mode) { await runConvergenceLoop(job, settings, control); return; }
+
     // --- Stage 1: initial clone (skipped when final.md already exists) ---
     const finalPath = path.join(job.workspace_path, 'qa', 'reports', 'final.md');
-    if (!(await fileExists(finalPath))) {
+    // A blocked run can write final.md too ("run ended BLOCKED") — that is not a finished clone.
+    // Only a final.md with no blocker file beside it, and not itself reporting a block, counts.
+    const blockerLeft = (await Promise.all(cloneBlockerSignals(job).map(fileExists))).some(Boolean);
+    const finalText = await readFile(finalPath, 'utf8').catch(() => null);
+    const cloneDone = finalText !== null && !blockerLeft && !/status:\s*\**\s*(blocked|aborted)/i.test(finalText.slice(0, 1500));
+    if (!cloneDone) {
+      if (finalText !== null) await rm(finalPath, { force: true }).catch(() => {});
       // A prior blocked/aborted run leaves BLOCKED.md/ABORTED.md on disk; without clearing
       // them the signal poller would instantly re-settle the fresh CLI on the stale file,
       // making retry-after-block impossible. Clear before re-spawning.
@@ -278,6 +293,10 @@ export async function driveJob(jobId: string, control: DriveControl) {
         return;
       }
       await db.finishFactoryIteration(iterationRow.id, 'succeeded', { report_path: path.join('qa', 'reports', 'final.md') });
+      // Check rounds from before this clone compared an empty theme — set them aside, start over.
+      const roundReports = path.join(job.workspace_path, 'qa', 'reports', 'factory');
+      if (await fileExists(roundReports)) await rename(roundReports, `${roundReports}-before-clone-${Date.now()}`).catch(() => {});
+      await db.updateFactoryJob(job.id, { score_history: [], last_score: null });
     }
 
     job = (await db.getFactoryJob(jobId))!;
@@ -303,25 +322,45 @@ async function runConvergenceLoop(job: FactoryJobRecord, settings: FactorySettin
   let best: { iteration: number; score: number } | null = null;
   for (const entry of history) if (!best || entry.score > best.score) best = { iteration: entry.iter, score: entry.score };
 
-  const startIteration = (await lastCompletedQaIteration(job)) + 1;
+  const lastDone = await lastCompletedQaIteration(job);
+  const startIteration = lastDone + 1;
+  const mode = control.mode;
+  // The pass that ends the run: one check → that check; N fix rounds → the check after the Nth fix.
+  let limit = mode?.kind === 'check' ? startIteration : mode?.kind === 'fix' ? startIteration + mode.rounds : job.max_iterations;
+  let fixesDone = 0;
+  const fixLabel = (iteration: number) => mode?.kind === 'fix' ? `Fix round ${++fixesDone} of ${mode.rounds}` : `Iteration ${iteration}/${job.max_iterations}`;
+  // Fix rounds right after a check: the theme hasn't changed since, so fix from that report
+  // instead of paying for (well, waiting on) the same check again.
+  if (mode?.kind === 'fix' && lastDone > 0 && job.last_score != null) {
+    const summaryPath = path.join('qa', 'reports', 'factory', `qa-summary-${lastDone}.md`);
+    const checkedAt = await stat(path.join(job.workspace_path, summaryPath)).then((info) => info.mtimeMs, () => 0);
+    if (checkedAt && (await newestThemeChange(job)) <= checkedAt) {
+      const lastRow = (await db.listFactoryIterations(job.id)).filter((row) => row.kind === 'qa' && row.iteration === lastDone).at(-1);
+      const issues = Number((lastRow?.breakdown as { issues?: number } | null)?.issues ?? 0);
+      if (!(await runFixSession(job, lastDone, summaryPath, issues, false, settings, control, fixLabel(lastDone)))) return;
+      limit = startIteration + mode.rounds - 1;
+    }
+  }
   // Retrying an already-exhausted job (all iterations used) would skip the loop entirely
   // and strand the job in the transient 'scaffolding' status. Give it more headroom so a
   // manual retry actually runs at least one more QA+fix pass.
-  if (startIteration > job.max_iterations) {
+  if (!mode && startIteration > job.max_iterations) {
     const bumped = job.max_iterations + Math.max(1, settings.defaultMaxIterations);
     await db.updateFactoryJob(job.id, { max_iterations: bumped });
     job = { ...job, max_iterations: bumped };
   }
 
-  for (let iteration = startIteration; iteration <= job.max_iterations; iteration++) {
+  for (let iteration = startIteration; iteration <= limit; iteration++) {
     if (control.signal.aborted) return;
 
     // a) QA pass
-    await transition(job.id, 'qa_running', `Iteration ${iteration}/${job.max_iterations} — running QA comparison`, { iteration });
+    await transition(job.id, 'qa_running', mode ? 'Checking against your website' : `Iteration ${iteration}/${job.max_iterations} — running QA comparison`, { iteration });
     const qaRow = await recordIteration(job, iteration, 'qa', path.join('factory', 'logs', `qa-${iteration}.log`));
     let qa;
     try {
-      qa = await runQa(job, iteration, settings, control.signal);
+      const qaStarted = Date.now();
+      try { qa = await runQa(job, iteration, settings, control.signal); }
+      finally { void recordStage({ kind: `check ${iteration}`, jobId: job.id, jobName: job.name, durationMs: Date.now() - qaStarted, score: qa?.score ?? null, ok: qa != null }).catch(() => {}); }
     } catch (error) {
       await db.finishFactoryIteration(qaRow.id, 'failed');
       if (control.signal.aborted) return; // user paused/canceled mid-QA — don't overwrite their status
@@ -374,42 +413,63 @@ async function runConvergenceLoop(job: FactoryJobRecord, settings: FactorySettin
         return;
       }
     }
+    if (mode && iteration === limit) {
+      // A hand-started check / fix run ends here, resting with the fresh score.
+      await transition(job.id, 'checked', `${mode.kind === 'check' ? 'Checked' : `Checked after ${mode.rounds} fix round${mode.rounds === 1 ? '' : 's'}`} — ${(qa.score * 100).toFixed(1)}% match, ${qa.issueCount} difference${qa.issueCount === 1 ? '' : 's'} left`, { finished_at: new Date().toISOString() });
+      return;
+    }
     if (iteration === job.max_iterations) {
       const restoreNote = await maybeRestoreBest(job, best, qa.score, iteration, qaLogPath);
       await transition(job.id, 'exhausted', `Iterations exhausted at ${(qa.score * 100).toFixed(1)}% (< ${(job.score_threshold * 100).toFixed(0)}%). Report: ${qa.summaryPath}${restoreNote}`, { finished_at: new Date().toISOString() });
       return;
     }
 
-    // Snapshot the scored dev-theme state BEFORE the fix session mutates it, so a later
-    // keep-BEST restore can bring this exact state back. Non-fatal on failure (logged).
-    await runSnapshot(job, 'save', iteration, qaLogPath);
-
-    // c) Fix session
-    await transition(job.id, 'fixing', `Iteration ${iteration}/${job.max_iterations} — fixing ${qa.issueCount} issue(s)`);
-    await renderFixPrompt(job, iteration, qa.summaryPath, regressed);
-    // Clear a prior run's sentinel so this fix session isn't instantly re-settled by it.
-    await clearSignalFiles([path.join(job.workspace_path, 'qa', 'reports', `fix-complete-${iteration}.md`)]);
-    const fixRow = await recordIteration(job, iteration, 'fix', path.join('factory', 'logs', `fix-${iteration}.log`));
-    const outcome = await awaitRun(spawnFix(job, iteration, settings.secretScrub, { inactivityMs: min(settings.inactivityTimeoutMin), wallClockMs: min(settings.fixTimeoutMin) }, settings.cloneModel), control);
-
-    if (outcome.outcome === 'killed') { await db.finishFactoryIteration(fixRow.id, 'killed'); return; }
-    if (outcome.outcome === 'spawn_error') {
-      await db.finishFactoryIteration(fixRow.id, 'failed');
-      await transition(job.id, 'failed', outcome.detail ?? 'Could not launch the Claude CLI for the fix session.', { error: outcome.detail ?? null, finished_at: new Date().toISOString() });
-      return;
-    }
-    if (outcome.outcome === 'usage_limit') {
-      await db.finishFactoryIteration(fixRow.id, 'failed');
-      await transition(job.id, 'blocked', 'Usage limit reached during fix session — retry later');
-      control.onUsageLimit?.();
-      return;
-    }
-    if (outcome.outcome === 'timeout' || outcome.outcome === 'inactivity') {
-      await db.finishFactoryIteration(fixRow.id, 'timed_out');
-      await transition(job.id, 'blocked', `Fix session stalled: ${outcome.detail ?? outcome.outcome}`);
-      return;
-    }
-    // sentinel or exit-without-sentinel: proceed to re-QA either way — QA is the ground truth.
-    await db.finishFactoryIteration(fixRow.id, outcome.outcome === 'sentinel' ? 'succeeded' : 'failed', { report_path: path.join('qa', 'reports', `fix-complete-${iteration}.md`) });
+    // c) Fix session (then the next pass re-checks)
+    if (!(await runFixSession(job, iteration, qa.summaryPath, qa.issueCount, regressed, settings, control, fixLabel(iteration)))) return;
   }
+}
+
+/** One fix session for `iteration`'s check report. Returns false when the run must stop. */
+async function runFixSession(job: FactoryJobRecord, iteration: number, summaryPath: string, issueCount: number, regressed: boolean, settings: FactorySettings, control: DriveControl, label: string): Promise<boolean> {
+  const qaLogPath = path.join(job.workspace_path, 'factory', 'logs', `qa-${iteration}.log`);
+  // Snapshot the scored dev-theme state BEFORE the fix session mutates it, so a later
+  // keep-BEST restore can bring this exact state back. Non-fatal on failure (logged).
+  await runSnapshot(job, 'save', iteration, qaLogPath);
+  await transition(job.id, 'fixing', `${label} — fixing ${issueCount} issue(s)`);
+  await renderFixPrompt(job, iteration, summaryPath, regressed);
+  // Clear a prior run's sentinel so this fix session isn't instantly re-settled by it.
+  await clearSignalFiles([path.join(job.workspace_path, 'qa', 'reports', `fix-complete-${iteration}.md`)]);
+  const fixRow = await recordIteration(job, iteration, 'fix', path.join('factory', 'logs', `fix-${iteration}.log`));
+  const outcome = await awaitRun(spawnFix(job, iteration, settings.secretScrub, { inactivityMs: min(settings.inactivityTimeoutMin), wallClockMs: min(settings.fixTimeoutMin) }, settings.cloneModel), control);
+  if (outcome.outcome === 'killed') { await db.finishFactoryIteration(fixRow.id, 'killed'); return false; }
+  if (outcome.outcome === 'spawn_error') {
+    await db.finishFactoryIteration(fixRow.id, 'failed');
+    await transition(job.id, 'failed', outcome.detail ?? 'Could not launch the AI for the fix session.', { error: outcome.detail ?? null, finished_at: new Date().toISOString() });
+    return false;
+  }
+  if (outcome.outcome === 'usage_limit') {
+    await db.finishFactoryIteration(fixRow.id, 'failed');
+    await transition(job.id, 'blocked', 'Usage limit reached during fix session — retry later');
+    control.onUsageLimit?.();
+    return false;
+  }
+  if (outcome.outcome === 'timeout' || outcome.outcome === 'inactivity') {
+    await db.finishFactoryIteration(fixRow.id, 'timed_out');
+    await transition(job.id, 'blocked', `Fix session stalled: ${outcome.detail ?? outcome.outcome}`);
+    return false;
+  }
+  // sentinel or exit-without-sentinel: proceed to re-QA either way — QA is the ground truth.
+  await db.finishFactoryIteration(fixRow.id, outcome.outcome === 'sentinel' ? 'succeeded' : 'failed', { report_path: path.join('qa', 'reports', `fix-complete-${iteration}.md`) });
+  return true;
+}
+
+/** Newest change to any theme file on disk (ms). */
+async function newestThemeChange(job: FactoryJobRecord) {
+  let newest = 0;
+  for (const dir of ['layout', 'sections', 'blocks', 'snippets', 'templates', 'config', 'locales', 'assets']) {
+    let names: string[] = [];
+    try { names = await readdir(path.join(job.workspace_path, dir)); } catch { continue; }
+    for (const name of names) newest = Math.max(newest, await stat(path.join(job.workspace_path, dir, name)).then((info) => info.mtimeMs, () => 0));
+  }
+  return newest;
 }

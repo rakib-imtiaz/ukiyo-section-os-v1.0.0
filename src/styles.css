@@ -1181,3 +1181,5 @@ html[data-app-theme='dark'] .browser-qa-issue { color: #fca5a5; }
 .issue--error .issue__line:hover { border-color: var(--red-text); }
 .issue--clickable { cursor: pointer; }
 .issue--clickable:hover { border-color: var(--blue-line); }
+.settings-toggle { display: flex; align-items: center; gap: 10px; margin-top: 14px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.settings-toggle input { width: 16px; height: 16px; accent-color: var(--blue); }

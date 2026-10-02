@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ThemeBot — How we make money</title>
+<style>
+  :root {
+    --ink: #0f1b3d; --ink-2: #44506b; --ink-3: #6b7690; --line: #e3e8f2; --soft: #f4f7fc;
+    --blue: #2a78d6; --orange: #eb6834; --aqua: #1baf7a; --yellow: #eda100; --red: #e34948;
+    --ok: #15803d; --warn: #b45309; --bad: #b42318;
+  }
+  @page { size: A4; margin: 14mm 14mm 16mm; }
+  * { box-sizing: border-box; }
+  body { margin: 0; color: var(--ink); font: 10.5pt/1.45 "Segoe UI", system-ui, Arial, sans-serif; }
+  h1, h2, h3, p { margin: 0; }
+  .page { page-break-after: always; display: flex; flex-direction: column; gap: 12px; }
+  .page:last-child { page-break-after: auto; }
+  .eyebrow { color: var(--blue); font-size: 8.5pt; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+  h2 { font-size: 21pt; letter-spacing: -.02em; line-height: 1.1; }
+  .lead { color: var(--ink-2); font-size: 11pt; }
+  .muted { color: var(--ink-3); }
+  .small { font-size: 8.6pt; }
+  .card { border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; background: #fff; break-inside: avoid; }
+  .soft { background: var(--soft); }
+  .row { display: grid; gap: 10px; }
+  .r2 { grid-template-columns: 1fr 1fr; } .r3 { grid-template-columns: repeat(3, 1fr); } .r4 { grid-template-columns: repeat(4, 1fr); } .r5 { grid-template-columns: repeat(5, 1fr); }
+  .chip { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 8pt; font-weight: 800; letter-spacing: .04em; }
+  .chip.go { background: #e3f6ec; color: var(--ok); } .chip.next { background: #e6effc; color: #1d5bb8; } .chip.no { background: #fde9e9; color: var(--bad); }
+  .chip.est { background: #fdf1e3; color: var(--warn); } .chip.ver { background: #e3f6ec; color: var(--ok); }
+  .big { font-size: 26pt; font-weight: 800; letter-spacing: -.03em; line-height: 1; }
+  .mid { font-size: 15pt; font-weight: 800; letter-spacing: -.02em; }
+  .ct { font-weight: 800; font-size: 11pt; }
+  .cs { color: var(--ink-3); font-size: 8.6pt; margin: 2px 0 6px; }
+  svg text { font-family: "Segoe UI", system-ui, Arial, sans-serif; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 8.6pt; color: var(--ink-2); }
+  .legend i { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  .take { border-radius: 12px; padding: 10px 14px; background: var(--ink); color: #fff; font-size: 10.5pt; }
+  .take b { color: #9cc3ff; }
+
+  /* cover */
+  .cover { height: 262mm; justify-content: space-between; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 15pt; }
+  .brand i { width: 30px; height: 30px; border-radius: 9px; background: linear-gradient(140deg, #4d82ff, #2f6bff); display: grid; place-items: center; }
+  .brand i::after { content: ''; width: 12px; height: 12px; border: 3px solid #fff; border-radius: 50%; }
+  .cover h1 { font-size: 40pt; line-height: 1.02; letter-spacing: -.03em; }
+  .answer { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .answer .card { padding: 14px; }
+  .answer .icon { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; font-size: 17px; font-weight: 800; color: #fff; margin-bottom: 8px; }
+
+  /* pricing cards */
+  .price .tier { font-weight: 800; font-size: 11pt; }
+  .price .amt { font-size: 22pt; font-weight: 800; letter-spacing: -.03em; margin: 4px 0 2px; }
+  .price .amt small { font-size: 9pt; color: var(--ink-3); font-weight: 600; }
+  .price ul { margin: 8px 0 0; padding: 0; list-style: none; font-size: 9pt; }
+  .price li { padding: 3px 0; border-top: 1px dashed var(--line); }
+  .price.pop { border: 2px solid var(--blue); box-shadow: 0 8px 20px -12px rgba(42, 120, 214, .6); }
+
+  .matrix td, .matrix th { padding: 6px 8px; font-size: 9.2pt; border-bottom: 1px solid var(--line); text-align: center; }
+  .matrix td:first-child, .matrix th:first-child { text-align: left; }
+  .matrix th { font-size: 8pt; color: var(--ink-3); text-transform: uppercase; letter-spacing: .06em; }
+  .matrix { width: 100%; border-collapse: collapse; }
+  .y { color: var(--ok); font-weight: 800; } .n { color: #c3c8d4; }
+
+  .src { font-size: 7.8pt; color: var(--ink-3); columns: 2; column-gap: 16px; word-break: break-all; }
+  .src p { margin: 0 0 3px; break-inside: avoid; }
+
+  /* recommendations */
+  .recs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .rec-card { display: grid; grid-template-columns: 30px 1fr; gap: 10px; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; break-inside: avoid; }
+  .rec-card .num { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; color: #fff; font-weight: 800; font-size: 12pt; }
+  .rec-card b.t { display: block; font-size: 10.6pt; margin-bottom: 2px; }
+  .rec-card .why { color: var(--ink-2); font-size: 8.8pt; }
+  .rec-card .meta { margin-top: 5px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 8.4pt; color: var(--ink-3); }
+  .rec-card .meta strong { color: var(--ink); }
+  .now { background: var(--aqua); } .next { background: var(--blue); } .later { background: var(--ink-3); }
+  .chip.now { background: #e3f6ec; color: var(--ok); } .chip.next { background: #e6effc; color: #1d5bb8; } .chip.later { background: #eef0f4; color: var(--ink-2); }
+  .dont { border: 1px solid #f5c2c2; background: #fff6f6; border-radius: 12px; padding: 10px 14px; }
+  .dont p { font-size: 9.2pt; margin: 3px 0; }
+  .rec { display: flex; gap: 10px; align-items: flex-start; border-radius: 12px; padding: 10px 14px; background: #eef5ff; border: 1px solid #c8dcfa; font-size: 10pt; break-inside: avoid; }
+  .rec .badge { flex: 0 0 auto; padding: 3px 9px; border-radius: 999px; background: var(--blue); color: #fff; font-size: 8pt; font-weight: 800; letter-spacing: .06em; margin-top: 1px; }
+</style>
+</head>
+<body>
+
+<!-- ================= COVER ================= -->
+<section class="page cover">
+  <div class="brand"><i></i> ThemeBot</div>
+  <div style="display:flex;flex-direction:column;gap:14px">
+    <div class="eyebrow">Business plan · 1 October 2026</div>
+    <h1>How ThemeBot<br>makes money</h1>
+    <p class="lead" style="max-width:150mm">The short version on one page. Everything after this is a picture of why.</p>
+    <div class="answer">
+      <div class="card"><div class="icon" style="background:var(--aqua)">1</div><div class="mid">Sell a service now</div><p class="muted small" style="margin-top:4px">We convert clients' websites to Shopify for a fee — and earn Shopify's referral cut on every store for 4 years.</p></div>
+      <div class="card"><div class="icon" style="background:var(--blue)">2</div><div class="mid">Then sell the tool</div><p class="muted small" style="margin-top:4px">SaaS with build credits for freelancers & studios. A licence for agencies that use their own AI account.</p></div>
+      <div class="card"><div class="icon" style="background:var(--red)">✕</div><div class="mid">Don't mass-sell themes</div><p class="muted small" style="margin-top:4px">Shopify's Theme Store rejects themes derived from Horizon or similar to others.</p></div>
+    </div>
+    <div class="row r3">
+      <div class="card soft"><div class="big">$12–20</div><p class="muted small">AI cost per store after optimisation (today ~$45)</p></div>
+      <div class="card soft"><div class="big">3–4×</div><p class="muted small">more profit per agency when we sell credits vs. they bring their own AI</p></div>
+      <div class="card soft"><div class="big">~$34k</div><p class="muted small">monthly revenue by month 12 in our scenario <span class="chip est">ESTIMATE</span></p></div>
+    </div>
+  </div>
+  <p class="muted small">Sources: two fact-checked research runs (each claim reviewed by 3 independent checkers), Anthropic / Shopify / OpenAI documentation, vendor pricing pages, and ThemeBot's own recorded AI usage. <span class="chip ver">VERIFIED</span> = fact-checked · <span class="chip est">ESTIMATE</span> = our calculation.</p>
+</section>
+
+
+<!-- ================= RECOMMENDATIONS ================= -->
+<section class="page">
+  <div class="eyebrow">Our recommendations</div>
+  <h2>What we should do, in order</h2>
+  <p class="lead">Eight actions. <span class="chip now">NOW</span> = start immediately · <span class="chip next">NEXT</span> = next 3–5 months · <span class="chip later">LATER</span> = after the SaaS launches.</p>
+  <div class="recs">
+    <div class="rec-card"><div class="num now">1</div><div><b class="t">Prove it on one store first</b><div class="why">Finish ECO ELI end-to-end with a passing match score; record real AI cost, fix rounds and hours. Nothing is sold before this.</div><div class="meta"><span class="chip now">NOW</span><span>Impact: <strong>unlocks everything</strong></span><span>· weeks 0–2</span></div></div></div>
+    <div class="rec-card"><div class="num now">2</div><div><b class="t">Launch the done-for-you service</b><div class="why">Convert clients’ sites at ~$2,000 a store (far below agency rates). Register as a Shopify Partner and refer every store.</div><div class="meta"><span class="chip now">NOW</span><span>Impact: <strong>~$12k/mo + referral income</strong></span><span>· from week 2</span></div></div></div>
+    <div class="rec-card"><div class="num now">3</div><div><b class="t">Add an ownership check</b><div class="why">Customers confirm they own the site or have the rights to it. Get a short legal review of copying websites.</div><div class="meta"><span class="chip now">NOW</span><span>Impact: <strong>removes copyright risk</strong></span><span>· before first client</span></div></div></div>
+    <div class="rec-card"><div class="num next">4</div><div><b class="t">Cut the AI cost per store</b><div class="why">Sonnet 5.5 by default, cheap models for planning and summaries, overnight batch builds, a cost cap per build.</div><div class="meta"><span class="chip next">NEXT</span><span>Impact: <strong>$45 → ~$11–21</strong></span><span>· weeks 4–10</span></div></div></div>
+    <div class="rec-card"><div class="num next">5</div><div><b class="t">Move the SaaS engine to Claude’s API</b><div class="why">Anthropic doesn’t allow reselling Claude usage through Claude Code. Selling credits needs our own agent on the API (plus OpenRouter).</div><div class="meta"><span class="chip next">NEXT</span><span>Impact: <strong>makes credits legal</strong></span><span>· weeks 4–10</span></div></div></div>
+    <div class="rec-card"><div class="num next">6</div><div><b class="t">Launch the agency licence</b><div class="why">$3,995 once + $1,195/yr. Agencies use their own Claude login or API key through Claude Code — allowed today, zero AI cost for us.</div><div class="meta"><span class="chip next">NEXT</span><span>Impact: <strong>10 licences ≈ $40k yr 1</strong></span><span>· weeks 8–14</span></div></div></div>
+    <div class="rec-card"><div class="num next">7</div><div><b class="t">Launch SaaS plans with credits</b><div class="why">Freelancer $99, Studio $349, Agency $999. Cap builds and fix rounds; keep checks and previews free; top-ups at 2× cost.</div><div class="meta"><span class="chip next">NEXT</span><span>Impact: <strong>~$16k/mo by month 12</strong></span><span>· weeks 12–20</span></div></div></div>
+    <div class="rec-card"><div class="num later">8</div><div><b class="t">List on the Shopify App Store</b><div class="why">Billing through Shopify (0% on the first $1M). Keep Stripe for agencies on development stores. Apply to OpenAI’s plan-sharing programme.</div><div class="meta"><span class="chip later">LATER</span><span>Impact: <strong>discovery + trust</strong></span><span>· after week 20</span></div></div></div>
+  </div>
+  <div class="dont">
+    <div class="ct" style="color:var(--bad);margin-bottom:4px">✕ Don’t do</div>
+    <p><b>Don’t mass-produce themes for the Theme Store</b> — Horizon-based or look-alike themes are rejected. At most 1–2 original themes on Skeleton, later.</p>
+    <p><b>Don’t sell "unlimited" plans</b> — AI cost makes them lose money (Replit, Windsurf, Cursor all had to switch to usage pricing).</p>
+    <p><b>Don’t build our own "Sign in with Claude"</b> or store customers’ Claude logins — Anthropic forbids it.</p>
+    <p><b>Don’t resell Claude usage while running Claude Code</b> — credits only on our own API agent.</p>
+    <p><b>Don’t price close to cost</b> — every build and fix round at about 2× what it costs us.</p>
+  </div>
+  <div class="take"><b>Bottom line:</b> earn now with the service, use that time to make the engine cheaper and legal for credits, then sell the tool two ways — credits for small teams, a licence for agencies.</div>
+</section>
+
+<!-- ================= 1. PATHS ================= -->
+<section class="page">
+  <div class="eyebrow">1 · Three ways to make money</div>
+  <h2>Which path wins</h2>
+  <p class="lead">Reward vs. risk for each path. Bubble size = how soon it can make money.</p>
+  <div class="card"><svg id="c-matrix" width="100%" height="430"></svg></div>
+  <div class="row r3">
+    <div class="card"><span class="chip go">START NOW</span><div class="mid" style="margin-top:6px">C · Service</div><p class="small muted">Project fee + <b>20% of the store's Shopify fee + 0.1% of its sales for 4 years</b> <span class="chip ver">VERIFIED</span></p></div>
+    <div class="card"><span class="chip next">BUILD NEXT</span><div class="mid" style="margin-top:6px">A · Sell the tool</div><p class="small muted">Credits must be metered — Replit's margin swung <b>+36% → −14%</b> on flat plans <span class="chip ver">VERIFIED</span></p></div>
+    <div class="card"><span class="chip no">SKIP</span><div class="mid" style="margin-top:6px">B · Theme Store</div><p class="small muted">No Dawn/Horizon derivatives; each theme <b>fundamentally different</b>, even from your own <span class="chip ver">VERIFIED</span></p></div>
+  </div>
+  <div class="rec"><span class="badge">RECOMMENDATION</span><span>Lead with the service (C), build the tool (A) on the same engine, and drop the Theme Store factory (B).</span></div>
+</section>
+
+<!-- ================= 2. COST ================= -->
+<section class="page">
+  <div class="eyebrow">2 · What one store costs us in AI</div>
+  <h2>Where the AI money goes</h2>
+  <div class="row r2" style="align-items:stretch">
+    <div class="card">
+      <div class="ct">What the AI spends tokens on</div>
+      <div class="cs">ECO ELI build sessions · 26.9M tokens</div>
+      <svg id="c-donut" width="100%" height="200"></svg>
+      <p class="small muted">The AI mostly <b>re-reads the project</b> (cheap cached tokens). Writing code is only ~1%.</p>
+    </div>
+    <div class="card">
+      <div class="ct">Cost per store by AI model</div>
+      <div class="cs">List prices · <span class="chip est">ESTIMATE</span> · cheaper models untested</div>
+      <svg id="c-engines" width="100%" height="240"></svg>
+    </div>
+  </div>
+  <div class="card">
+    <div class="ct">How we cut the cost: $45 → ~$21 instant, ~$11 overnight</div>
+    <div class="cs">Each step applied on top of the previous one <span class="chip est">ESTIMATE</span></div>
+    <svg id="c-waterfall" width="100%" height="210"></svg>
+  </div>
+  <div class="take">At a $149–199 price, <b>an 85–90% margin</b> — even when we pay for the AI.</div>
+  <div class="rec"><span class="badge">RECOMMENDATION</span><span>Make Sonnet 5.5 the default, route simple steps to cheap models, offer an overnight half-price build, and cap AI spend per build.</span></div>
+</section>
+
+<!-- ================= 3. WHO PAYS ================= -->
+<section class="page">
+  <div class="eyebrow">3 · Who pays for the AI</div>
+  <h2>Credits, or their own AI account?</h2>
+  <p class="lead">Anthropic's rules decide which engine each model needs <span class="chip ver">VERIFIED — Claude Code legal page</span></p>
+  <div class="card"><svg id="c-flow" width="100%" height="300"></svg></div>
+  <div class="row r2">
+    <div class="card">
+      <div class="ct">Profit from one heavy agency</div>
+      <div class="cs">20 stores a month · <span class="chip est">ESTIMATE</span></div>
+      <svg id="c-agency" width="100%" height="150"></svg>
+    </div>
+    <div class="card">
+      <div class="ct">The rules in one look</div>
+      <p class="small" style="margin-top:6px"><span class="y">✓</span> Customer signs in to unmodified Claude Code with <b>their own</b> Claude plan or key</p>
+      <p class="small" style="margin-top:4px"><span class="y">✓</span> We sell credits on <b>our own agent using Claude's API</b> (or OpenRouter)</p>
+      <p class="small" style="margin-top:4px"><span style="color:var(--bad);font-weight:800">✕</span> Our own "log in with Claude" screen or storing their login</p>
+      <p class="small" style="margin-top:4px"><span style="color:var(--bad);font-weight:800">✕</span> Reselling Claude usage while running Claude Code</p>
+      <p class="small" style="margin-top:4px"><span style="color:var(--warn);font-weight:800">!</span> "Sign in with ChatGPT" plans: 16 approved partners only</p>
+    </div>
+  </div>
+  <div class="rec"><span class="badge">RECOMMENDATION</span><span>Small teams buy credits from us (needs our own Claude API agent); agencies bring their own Claude login or key through Claude Code.</span></div>
+</section>
+
+<!-- ================= 4. PRICING ================= -->
+<section class="page">
+  <div class="eyebrow">4 · What we charge</div>
+  <h2>SaaS plans</h2>
+  <p class="lead">Priced like Replo (closest Shopify tool: $99 / $499) and the 2× rule: a build costs us ~$15, so it sells for ~$80+. <span class="chip est">OUR PRICES</span></p>
+  <div class="row r4">
+    <div class="card price"><div class="tier">Free preview</div><div class="amt">$0</div><p class="small muted">See the plan first</p><ul><li>Site analysis + quote</li><li>Free visual check</li><li>14-day trial: 1 build</li></ul></div>
+    <div class="card price"><div class="tier">Freelancer</div><div class="amt">$99<small>/mo</small></div><p class="small muted">1 person</p><ul><li>1 build / month</li><li>25 fix rounds</li><li>No ThemeBot branding</li></ul></div>
+    <div class="card price pop"><div class="tier" style="color:var(--blue)">Studio ★</div><div class="amt">$349<small>/mo</small></div><p class="small muted">Small team · 3 seats</p><ul><li>3 builds / month</li><li>75 fix rounds</li><li>Your brand on reports</li></ul></div>
+    <div class="card price"><div class="tier">Agency</div><div class="amt">$999<small>/mo</small></div><p class="small muted">10 seats</p><ul><li>8 builds / month</li><li>200 fix rounds</li><li>White-label, API, priority</li></ul></div>
+  </div>
+  <div class="row r3">
+    <div class="card soft"><div class="mid">$79–99</div><p class="small muted">each extra build</p></div>
+    <div class="card soft"><div class="mid">~$1.25–1.50</div><p class="small muted">per extra fix round (cost to us ~$0.70)</p></div>
+    <div class="card soft"><div class="mid">−17–20%</div><p class="small muted">for yearly billing</p></div>
+  </div>
+  <div class="card">
+    <div class="ct">What each plan caps</div>
+    <div class="cs">Cap what costs us money; give away what's free for us.</div>
+    <svg id="c-caps" width="100%" height="250"></svg>
+  </div>
+  <div class="rec"><span class="badge">RECOMMENDATION</span><span>Launch Freelancer $99 / Studio $349 / Agency $999 with a card-required 14-day trial; push Studio as the main plan; keep checks free.</span></div>
+</section>
+
+<!-- ================= 5. LICENCE ================= -->
+<section class="page">
+  <div class="eyebrow">5 · Selling to agencies</div>
+  <h2>The agency licence</h2>
+  <p class="lead">Agencies run ThemeBot themselves with their own AI account. However many stores they build, our AI cost stays $0.</p>
+  <div class="row r2">
+    <div class="card price"><div class="tier">Studio licence</div><div class="amt">$1,495<small> once</small></div><p class="small muted">+ $495 / year for updates</p><ul><li>2 seats</li><li>Up to 10 client stores a year</li><li>12 months updates & support</li></ul></div>
+    <div class="card price pop"><div class="tier" style="color:var(--blue)">Agency licence ★</div><div class="amt">$3,995<small> once</small></div><p class="small muted">+ $1,195 / year for updates · or $1,995 / year</p><ul><li>10 seats</li><li>Unlimited client stores</li><li>White-label + resale rights</li></ul></div>
+  </div>
+  <p class="small muted">Benchmarks <span class="chip ver">VERIFIED</span>: agency CMS licence $999 one-time (unlimited sites, resale); bring-your-own-key desktop AI app $39–$395.</p>
+  <div class="card">
+    <div class="ct">SaaS vs. licence — who gets what</div>
+    <table class="matrix" style="margin-top:6px">
+      <tr><th>Feature</th><th>Freelancer / Studio</th><th>SaaS Agency</th><th>Agency licence</th></tr>
+      <tr><td>Builds, checks, live code, Rebuild</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
+      <tr><td>Who pays for the AI</td><td>We do (credits)</td><td>We do (credits)</td><td><b>Agency</b></td></tr>
+      <tr><td>Builds per month</td><td>1–3</td><td>8 + top-ups</td><td><b>Unlimited</b></td></tr>
+      <tr><td>White-label reports / client portal</td><td class="n">—</td><td class="y">✓</td><td class="y">✓</td></tr>
+      <tr><td>Resale rights</td><td class="n">—</td><td class="n">—</td><td class="y">✓</td></tr>
+      <tr><td>Priority queue, API</td><td class="n">—</td><td class="y">✓</td><td class="n">n/a</td></tr>
+      <tr><td>Runs on their machines, data stays local</td><td class="n">—</td><td class="n">—</td><td class="y">✓</td></tr>
+    </table>
+  </div>
+  <div class="rec"><span class="badge">RECOMMENDATION</span><span>Sell the Agency licence ($3,995 + $1,195/yr) to agencies that build a lot — their volume runs on their own AI bill.</span></div>
+</section>
+
+<!-- ================= 6. GROWTH ================= -->
+<section class="page">
+  <div class="eyebrow">6 · The first year</div>
+  <h2>How revenue could grow</h2>
+  <p class="lead">Monthly revenue by stream. The service pays first; the SaaS takes over once launched. <span class="chip est">ESTIMATE</span></p>
+  <div class="card">
+    <div class="legend" id="lg-growth"></div>
+    <svg id="c-growth" width="100%" height="360"></svg>
+  </div>
+  <div class="row r4">
+    <div class="card soft"><div class="mid">6 / mo</div><p class="small muted">migrations at $2,000 (from month 6)</p></div>
+    <div class="card soft"><div class="mid">50</div><p class="small muted">SaaS customers by month 12</p></div>
+    <div class="card soft"><div class="mid">10</div><p class="small muted">agency licences in year one</p></div>
+    <div class="card soft"><div class="mid">57</div><p class="small muted">stores earning us referral income</p></div>
+  </div>
+  <div class="card">
+    <div class="ct">Market facts behind it</div>
+    <div class="row r3" style="margin-top:6px">
+      <div><div class="mid">0%</div><p class="small muted">Shopify's cut on the first $1M of app revenue (then 15%) <span class="chip ver">VERIFIED</span></p></div>
+      <div><div class="mid">$16–30</div><p class="small muted">entry price of every AI builder — all metered <span class="chip ver">VERIFIED</span></p></div>
+      <div><div class="mid">~$394</div><p class="small muted">referral income per store per year (example store) <span class="chip est">ESTIMATE</span></p></div>
+    </div>
+    <p class="small muted" style="margin-top:6px">Not verified: Shopify store count (2.8–6.9M), agency build prices ($5k–40k). Refuted: Lovable's ~$500M ARR.</p>
+  </div>
+  <div class="rec"><span class="badge">RECOMMENDATION</span><span>Use the service income to fund the engine work; aim for 50 SaaS customers and 10 licences in year one.</span></div>
+</section>
+
+<!-- ================= 7. ROADMAP ================= -->
+<section class="page">
+  <div class="eyebrow">7 · Roadmap</div>
+  <h2>What's built, what's next</h2>
+  <div class="card">
+    <div class="ct">How ready is the product?</div>
+    <div class="cs">From our review of the app</div>
+    <svg id="c-ready" width="100%" height="175"></svg>
+  </div>
+  <div class="card">
+    <div class="ct">Milestones · next 24 weeks</div>
+    <div class="cs">Each bar is one milestone; the service starts earning while the product is finished</div>
+    <svg id="c-gantt" width="100%" height="300"></svg>
+  </div>
+  <div class="row r4">
+    <div class="card soft"><b>Keep in sync</b><p class="small muted">Theme updates when the source site changes — a monthly add-on</p></div>
+    <div class="card soft"><b>Multi-store dashboard</b><p class="small muted">For agencies, with a client portal</p></div>
+    <div class="card soft"><b>A/B tests & CRO</b><p class="small muted">What page builders charge extra for</p></div>
+    <div class="card soft"><b>Original themes</b><p class="small muted">Built on Skeleton — the only way into the Theme Store</p></div>
+  </div>
+  <div class="rec"><span class="badge">RECOMMENDATION</span><span>Do milestone M1 before anything else — every number in this report assumes a store can be finished end-to-end.</span></div>
+</section>
+
+<!-- ================= 8. RISKS & SOURCES ================= -->
+<section class="page">
+  <div class="eyebrow">8 · Risks</div>
+  <h2>What could go wrong</h2>
+  <div class="card"><svg id="c-risks" width="100%" height="340"></svg></div>
+  <div class="take"><b>First step before selling anything:</b> finish one store end-to-end with a passing match score, and record its real cost and time.</div>
+  <div class="card">
+    <div class="ct" style="margin-bottom:6px">Sources</div>
+    <div class="src">
+      <p>Anthropic — Claude Code legal & compliance: code.claude.com/docs/en/legal-and-compliance</p>
+      <p>Anthropic model prices: Claude API reference (models table, 25 Sep 2026)</p>
+      <p>Shopify Theme Store requirements: shopify.dev/docs/storefronts/themes/store/requirements</p>
+      <p>Shopify Theme Store revenue share: shopify.dev/docs/storefronts/themes/store/revenue-share</p>
+      <p>Shopify App Store revenue share: shopify.dev/docs/apps/launch/distribution/revenue-share</p>
+      <p>Shopify app billing: shopify.dev/docs/apps/launch/billing</p>
+      <p>Shopify partner earning model: shopify.com/partners/blog/a-new-partner-earning-model</p>
+      <p>Archetype acquisition: theygotacquired.com · investors.tiny.com</p>
+      <p>Replit margins: sacra.com/c/replit · blog.replit.com/effort-based-pricing</p>
+      <p>AI coding margins: techcrunch.com/2025/08/07/the-high-costs-and-thin-margins-threatening-ai-coding-startups</p>
+      <p>AI builder pricing: productos.dev/blog/ai-app-builder-pricing-compared · lovable.dev · bolt.new · v0.app · replit.com</p>
+      <p>Replo: replo.app/pricing · docs.replo.app/getting-started/plans</p>
+      <p>Bessemer AI pricing playbook: bvp.com/atlas/the-ai-pricing-and-monetization-playbook</p>
+      <p>Licensing: unfoldcms.com/pricing · typingmind.com/buy · licensespring.com</p>
+      <p>OpenAI Sign in with ChatGPT: developers.openai.com/siwc/quickstart · thenewstack.io/sign-in-with-chatgpt</p>
+      <p>OpenRouter: glamdringresearch.com/post/openrouter-pricing · github.com/OpenRouterTeam/sign-in-with-openrouter</p>
+      <p>Model prices: pricepertoken.com (GPT-5.3 Codex) · dev.to/eagerspark (Kimi, GLM)</p>
+      <p>ThemeBot usage: shopify_works/.factory/usage.jsonl (27–28 Sep 2026)</p>
+    </div>
+  </div>
+  <p class="small muted">Not legal or financial advice. Prices and terms change often — re-check before launch.</p>
+</section>
+
+<script>
+const C = { blue: '#2a78d6', orange: '#eb6834', aqua: '#1baf7a', yellow: '#eda100', red: '#e34948', ink: '#0f1b3d', ink2: '#44506b', ink3: '#6b7690', line: '#e3e8f2', soft: '#f4f7fc' };
+const $ = (id) => document.getElementById(id);
+const size = (svg) => { const w = svg.getBoundingClientRect().width, h = +svg.getAttribute('height'); svg.setAttribute('viewBox', `0 0 ${w} ${h}`); return [w, h]; };
+const t = (x, y, s, o = {}) => `<text x="${x}" y="${y}" font-size="${(o.size || 10) * 1.25}" fill="${o.fill || C.ink}" font-weight="${o.weight || 500}" text-anchor="${o.anchor || 'start'}">${s}</text>`;
+const usd = (v) => '$' + Math.round(v).toLocaleString('en-US');
+
+// 1. Risk vs reward bubbles
+(() => { const svg = $('c-matrix'), [W, H] = size(svg); const L = 60, B = H - 40, R = W - 20, T = 16;
+  let o = `<rect x="${L}" y="${T}" width="${R - L}" height="${B - T}" rx="10" fill="${C.soft}"/>`;
+  o += `<rect x="${L}" y="${T}" width="${(R - L) / 2}" height="${(B - T) / 2}" rx="10" fill="#e8f6ef"/>`;
+  o += t(L + 10, T + 18, 'Best corner: high reward, low risk', { size: 9, fill: '#15803d', weight: 700 });
+  o += `<line x1="${L}" y1="${B}" x2="${R}" y2="${B}" stroke="${C.ink3}"/><line x1="${L}" y1="${T}" x2="${L}" y2="${B}" stroke="${C.ink3}"/>`;
+  o += t((L + R) / 2, H - 10, 'Risk →', { anchor: 'middle', fill: C.ink3, size: 9.5, weight: 700 });
+  o += `<text x="18" y="${(T + B) / 2}" font-size="12" fill="${C.ink3}" font-weight="700" text-anchor="middle" transform="rotate(-90 18 ${(T + B) / 2})">Reward →</text>`;
+  const pts = [ { n: 'C · Service', s: 'cash in weeks', x: .22, y: .55, r: 30, c: C.aqua }, { n: 'A · SaaS + licence', s: 'biggest upside', x: .48, y: .2, r: 22, c: C.blue }, { n: 'B · Theme Store', s: 'blocked by rules', x: .74, y: .62, r: 12, c: C.red } ];
+  pts.forEach((p) => { const x = L + p.x * (R - L), y = T + p.y * (B - T);
+    o += `<circle cx="${x}" cy="${y}" r="${p.r}" fill="${p.c}" fill-opacity=".9" stroke="#fff" stroke-width="2"/>`;
+    o += t(x + p.r + 8, y - 2, p.n, { size: 11, weight: 800 }) + t(x + p.r + 8, y + 12, p.s, { size: 9, fill: C.ink3 }); });
+  svg.innerHTML = o; })();
+
+// 2a. Donut of token mix
+(() => { const svg = $('c-donut'), [W, H] = size(svg); const cx = 95, cy = H / 2, r = 70, sw = 26; const parts = [ { v: 93, c: C.blue, n: 'Re-reading project (cache read)' }, { v: 6, c: C.orange, n: 'Saving context (cache write)' }, { v: 1, c: C.aqua, n: 'Writing code (output)' } ];
+  let a0 = -Math.PI / 2, o = ''; const circ = 2 * Math.PI * r;
+  parts.forEach((p) => { const len = circ * p.v / 100 - 2; o += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${p.c}" stroke-width="${sw}" stroke-dasharray="${Math.max(len, 1.5)} ${circ}" stroke-dashoffset="${-((a0 + Math.PI / 2) / (2 * Math.PI)) * circ}" transform="rotate(-90 ${cx} ${cy})"/>`; a0 += 2 * Math.PI * p.v / 100; });
+  o += t(cx, cy + 4, '93%', { anchor: 'middle', size: 20, weight: 800 }) + t(cx, cy + 20, 're-reading', { anchor: 'middle', size: 8.5, fill: C.ink3 });
+  parts.forEach((p, i) => { const y = 50 + i * 36; o += `<rect x="${cx + r + 30}" y="${y - 9}" width="11" height="11" rx="3" fill="${p.c}"/>` + t(cx + r + 48, y, `${p.v}%`, { size: 12, weight: 800 }) + t(cx + r + 48, y + 14, p.n, { size: 8.6, fill: C.ink2 }); });
+  svg.innerHTML = o; })();
+
+// Horizontal bars helper
+function hbars(id, rows, fmt, { labelW = 120 } = {}) { const svg = $(id), [W, H] = size(svg); const rowH = H / rows.length, max = Math.max(...rows.map((r) => r.v)), plotW = W - labelW - 50; let o = '';
+  rows.forEach((r, i) => { const y = i * rowH, bw = Math.max(3, r.v / max * plotW), c = r.c || C.blue;
+    o += t(0, y + rowH / 2 - 1, r.n, { size: 9.5, weight: r.bold ? 800 : 600 }) + (r.s ? t(0, y + rowH / 2 + 11, r.s, { size: 8, fill: C.ink3 }) : '');
+    o += `<rect x="${labelW}" y="${y + rowH / 2 - 9}" width="${bw}" height="16" rx="4" fill="${c}"/>` + t(labelW + bw + 6, y + rowH / 2 + 4, fmt(r.v), { size: 10, weight: 800 }); });
+  svg.innerHTML = o; }
+hbars('c-engines', [ { n: 'Claude Opus 5.5', s: 'today', v: 45, c: C.orange, bold: true }, { n: 'Claude Sonnet 5.5', v: 28 }, { n: 'GPT-5.3 Codex', v: 26 }, { n: 'Kimi K2', s: 'untested', v: 13 }, { n: 'GLM-4.6', s: 'untested', v: 9 } ], (v) => '~$' + v, { labelW: 140 });
+
+// 2b. Waterfall $45 -> ~$11
+(() => { const svg = $('c-waterfall'), [W, H] = size(svg); const steps = [ { n: 'Today', s: 'Opus 5.5', v: 45, total: true }, { n: 'Use Sonnet 5.5', s: 'for most steps', d: -17 }, { n: 'Cheap models', s: 'planning & summaries', d: -7 }, { n: 'Instant build', s: 'what customers wait for', v: 21, total: true, c: C.aqua }, { n: 'Batch mode', s: 'overnight builds', d: -10.5 }, { n: 'Overnight build', s: 'half price', v: 10.5, total: true, c: C.aqua } ];
+  const L = 10, B = H - 42, T = 20, colW = (W - L) / steps.length, max = 45, sc = (B - T) / max; let run = 0, o = '';
+  steps.forEach((s, i) => { const x = L + i * colW + colW * .2, w = colW * .6; let y0, y1, c;
+    if (s.total) { y0 = B - s.v * sc; y1 = B; run = s.v; c = s.c || C.orange; } else { const top = run, bot = run + s.d; y0 = B - top * sc; y1 = B - bot * sc; run = bot; c = C.blue; }
+    o += `<rect x="${x}" y="${y0}" width="${w}" height="${Math.max(2, y1 - y0)}" rx="4" fill="${c}"/>`;
+    o += t(x + w / 2, y0 - 6, s.total ? '$' + s.v : '−$' + Math.abs(s.d), { anchor: 'middle', size: 10.5, weight: 800 });
+    o += t(x + w / 2, B + 15, s.n, { anchor: 'middle', size: 9, weight: 700 }) + t(x + w / 2, B + 28, s.s, { anchor: 'middle', size: 7.8, fill: C.ink3 });
+    if (i < steps.length - 1) { const yy = B - run * sc; o += `<line x1="${x + w}" y1="${yy}" x2="${x + colW}" y2="${yy}" stroke="${C.ink3}" stroke-dasharray="3 3"/>`; } });
+  o += `<line x1="${L}" y1="${B}" x2="${W}" y2="${B}" stroke="${C.line}"/>`; svg.innerHTML = o; })();
+
+// 3a. Decision flow
+(() => { const svg = $('c-flow'), [W, H] = size(svg); let o = `<defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="${C.ink3}"/></marker></defs>`;
+  const box = (x, y, w, h, title, sub, fill, color = C.ink) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="12" fill="${fill}" stroke="${C.line}"/>` + t(x + w / 2, y + h / 2 - (sub ? 3 : -4), title, { anchor: 'middle', size: 10.5, weight: 800, fill: color }) + (sub ? t(x + w / 2, y + h / 2 + 13, sub, { anchor: 'middle', size: 8.6, fill: color === '#fff' ? '#dbe7ff' : C.ink2 }) : '');
+  const arrow = (x1, y1, x2, y2) => `<path d="M${x1},${y1} C${x1},${(y1 + y2) / 2} ${x2},${(y1 + y2) / 2} ${x2},${y2}" fill="none" stroke="${C.ink3}" stroke-width="1.6" marker-end="url(#ar)"/>`;
+  const cw = W * .3, x1 = W * .1, x2 = W * .6;
+  o += box(W / 2 - 110, 6, 220, 42, 'Who is the customer?', null, C.ink, '#fff');
+  o += arrow(W / 2 - 40, 48, x1 + cw / 2, 78) + arrow(W / 2 + 40, 48, x2 + cw / 2, 78);
+  o += box(x1, 78, cw, 46, 'Freelancer / Studio', 'self-serve SaaS', '#e6effc');
+  o += box(x2, 78, cw, 46, 'Agency', 'licence / desktop', '#e8f6ef');
+  o += arrow(x1 + cw / 2, 124, x1 + cw / 2, 150) + arrow(x2 + cw / 2, 124, x2 + cw / 2, 150);
+  o += box(x1, 150, cw, 50, 'We sell credits', 'we pay the AI, ~2× markup', C.blue, '#fff');
+  o += box(x2, 150, cw, 50, 'Their own AI account', 'their Claude plan or API key', C.aqua, '#fff');
+  o += arrow(x1 + cw / 2, 200, x1 + cw / 2, 226) + arrow(x2 + cw / 2, 200, x2 + cw / 2, 226);
+  o += box(x1, 226, cw, 54, 'Engine: our own agent', 'on Claude’s API + OpenRouter', '#fff');
+  o += box(x2, 226, cw, 54, 'Engine: Claude Code', 'what ThemeBot uses today', '#fff');
+  o += t(x1 + cw / 2, H - 2, 'needs engine work (milestone M3)', { anchor: 'middle', size: 8.4, fill: C.orange, weight: 700 });
+  o += t(x2 + cw / 2, H - 2, 'allowed today ✓', { anchor: 'middle', size: 8.4, fill: '#15803d', weight: 700 });
+  svg.innerHTML = o; })();
+
+hbars('c-agency', [ { n: 'Credits, today', s: 'AI ≈ $850', v: 1217 }, { n: 'Credits, after cost cuts', s: 'AI ≈ $350', v: 1717, c: C.aqua, bold: true }, { n: 'Their own AI', s: 'flat fee', v: 470, c: C.ink3 } ], usd, { labelW: 165 });
+
+// 4. Caps matrix (dots)
+(() => { const svg = $('c-caps'), [W, H] = size(svg); const cols = ['Freelancer', 'Studio', 'Agency']; const rows = [ ['Builds / month', [1, 3, 8], 8, 'costs us money'], ['Fix rounds', [25, 75, 200], 200, 'costs us money'], ['Seats', [1, 3, 10], 10, 'stops account sharing'], ['White-label', [0, .5, 1], 1, 'first upgrade trigger'], ['Checks & previews', [1, 1, 1], 1, 'free for us → unlimited'] ];
+  const L = 160, colW = (W - L - 160) / 3, rowH = (H - 26) / rows.length; let o = '';
+  cols.forEach((c, i) => o += t(L + colW * i + colW / 2, 14, c, { anchor: 'middle', size: 9.5, weight: 800, fill: C.ink2 }));
+  rows.forEach(([n, vals, max, why], r) => { const y = 26 + r * rowH + rowH / 2; o += t(0, y + 4, n, { size: 9.8, weight: 700 }) + t(W - 155, y + 4, why, { size: 8.4, fill: C.ink3 });
+    vals.forEach((v, i) => { const cx = L + colW * i + colW / 2, rr = 4 + 10 * (v / max); const isFree = n.startsWith('Checks');
+      o += `<circle cx="${cx}" cy="${y}" r="${rr}" fill="${isFree ? C.aqua : C.blue}" fill-opacity="${.35 + .65 * (v / max)}"/>`;
+      o += t(cx + rr + 4, y + 4, n === 'White-label' ? ['—', 'branding', 'full'][i] : isFree ? '∞' : String(v), { size: 9, weight: 700, fill: C.ink2 }); }); });
+  svg.innerHTML = o; })();
+
+// 6. Stacked monthly revenue (4 series, fixed order)
+(() => { const svg = $('c-growth'), [W, H] = size(svg);
+  const series = [ { n: 'Migration service', c: C.aqua, d: [2000, 4000, 6000, 8000, 10000, 12000, 12000, 12000, 12000, 12000, 12000, 12000] },
+    { n: 'SaaS subscriptions', c: C.blue, d: [0, 0, 0, 0, 1500, 3000, 5000, 7000, 9000, 11500, 13500, 15800] },
+    { n: 'Agency licences', c: C.orange, d: [0, 0, 0, 3995, 3995, 3995, 3995, 3995, 3995, 7990, 3995, 3995] },
+    { n: 'Referral income', c: C.yellow, d: [33, 99, 198, 330, 495, 693, 891, 1089, 1287, 1485, 1683, 1881] } ];
+  $('lg-growth').innerHTML = series.map((s) => `<span><i style="background:${s.c}"></i>${s.n}</span>`).join('');
+  const L = 46, B = H - 24, T = 12, n = 12, colW = (W - L - 10) / n, max = 36000, sc = (B - T) / max; let o = '';
+  [0, 10000, 20000, 30000].forEach((g) => { const y = B - g * sc; o += `<line x1="${L}" y1="${y}" x2="${W}" y2="${y}" stroke="${C.line}"/>` + t(L - 6, y + 3, g ? '$' + g / 1000 + 'k' : '$0', { anchor: 'end', size: 8.5, fill: C.ink3 }); });
+  for (let m = 0; m < n; m++) { let base = 0; const x = L + m * colW + colW * .18, w = colW * .64;
+    series.forEach((s) => { const v = s.d[m]; if (!v) return; const h = v * sc; o += `<rect x="${x}" y="${B - (base + v) * sc + 1}" width="${w}" height="${Math.max(h - 2, 1)}" rx="2" fill="${s.c}"/>`; base += v; });
+    if (m % 2 === 1 || m === 11) o += t(x + w / 2, B - base * sc - 5, usd(base / 1000 * 1000).replace(/,\d{3}$/, 'k').replace('$', '$'), { anchor: 'middle', size: 8.4, weight: 800 });
+    o += t(x + w / 2, B + 14, 'M' + (m + 1), { anchor: 'middle', size: 8.5, fill: C.ink3 }); }
+  svg.innerHTML = o; })();
+
+// 7a. Readiness bar
+(() => { const svg = $('c-ready'), [W, H] = size(svg); const built = ['Site intake', 'Store creation', 'AI build + checks', 'Fix rounds', 'Live code & progress', 'Usage tracking']; const left = ['End-to-end proof', 'API engine + cost caps', 'Shopify OAuth app', 'Accounts & billing', 'Cloud + installer', 'Publish & legal'];
+  const pad = 34, segW = (W - pad - 4) / 12; let o = '';
+  [...built, ...left].forEach((n, i) => { const done = i < 6, x = pad + i * segW + 2; o += `<rect x="${x}" y="40" width="${segW - 4}" height="26" rx="5" fill="${done ? C.aqua : '#fdebdc'}" stroke="${done ? 'none' : C.orange}" stroke-dasharray="${done ? '' : '3 3'}"/>`;
+    o += `<text x="${x + (segW - 4) / 2}" y="${84}" font-size="10" fill="${C.ink2}" text-anchor="end" transform="rotate(-35 ${x + (segW - 4) / 2} 82)">${n}</text>`; });
+  o += t(pad + 2, 26, 'Built', { size: 10, weight: 800, fill: '#15803d' }) + t(pad + 6 * segW + 2, 26, 'Left before selling', { size: 10, weight: 800, fill: C.orange });
+  o += t(W - 2, 26, '6 of 12 done', { anchor: 'end', size: 10, weight: 800 });
+  svg.innerHTML = o; })();
+
+// 7b. Gantt
+(() => { const svg = $('c-gantt'), [W, H] = size(svg); const items = [ ['M1 · Proof: one store end-to-end', 0, 2, C.orange], ['M2 · Service launch, 3–5 clients', 2, 6, C.aqua], ['M3 · AI engine + cost ≤ $20/store', 4, 10, C.blue], ['M4 · Agency licence beta', 8, 14, C.blue], ['M5 · SaaS beta + billing', 12, 20, C.blue], ['M6 · Shopify App Store listing', 20, 24, C.ink3] ];
+  const L = 250, R = W - 8, wk = (R - L) / 24, rowH = (H - 26) / items.length; let o = '';
+  for (let w = 0; w <= 24; w += 4) { const x = L + w * wk; o += `<line x1="${x}" y1="18" x2="${x}" y2="${H}" stroke="${C.line}"/>` + t(x, 12, 'wk ' + w, { anchor: w === 24 ? 'end' : w === 0 ? 'start' : 'middle', size: 8.4, fill: C.ink3 }); }
+  items.forEach(([n, a, b, c], i) => { const y = 24 + i * rowH; o += t(0, y + rowH / 2 + 4, n, { size: 9.4, weight: 700 }); o += `<rect x="${L + a * wk}" y="${y + rowH / 2 - 8}" width="${(b - a) * wk}" height="16" rx="5" fill="${c}"/>`; });
+  svg.innerHTML = o; })();
+
+// 8. Risks: likelihood x impact
+(() => { const svg = $('c-risks'), [W, H] = size(svg); const L = 60, B = H - 34, T = 10, R = W - 10; let o = `<rect x="${L}" y="${T}" width="${R - L}" height="${B - T}" rx="10" fill="${C.soft}"/><rect x="${(L + R) / 2}" y="${T}" width="${(R - L) / 2}" height="${(B - T) / 2}" rx="10" fill="#fdecec"/>`;
+  o += t((L + R) / 2 + 10, T + 16, 'Act on these first', { size: 9, fill: '#b42318', weight: 700 }) + t((L + R) / 2, H - 6, 'Likelihood →', { anchor: 'middle', size: 9.5, fill: C.ink3, weight: 700 });
+  o += `<text x="18" y="${(T + B) / 2}" font-size="12" fill="${C.ink3}" font-weight="700" text-anchor="middle" transform="rotate(-90 18 ${(T + B) / 2})">Impact →</text>`;
+  const risks = [ ['Unproven quality', 'no full passing build yet', .78, .2, C.red], ['AI terms', 'no reselling via Claude Code', .6, .3, C.red], ['Copyright', 'copying sites they don’t own', .35, .25, C.orange], ['AI cost spikes', 'complex sites', .62, .62, C.orange], ['Shopify UI changes', 'store bot breaks', .8, .55, C.yellow], ['Price changes', 'AI tools move fast', .3, .72, C.blue] ];
+  risks.forEach(([n, s, lx, iy, c]) => { const x = L + lx * (R - L), y = T + iy * (B - T); o += `<circle cx="${x}" cy="${y}" r="9" fill="${c}"/>` + t(x + 14, y - 1, n, { size: 9.8, weight: 800 }) + t(x + 14, y + 12, s, { size: 8.2, fill: C.ink3 }); });
+  svg.innerHTML = o; })();
+</script>
+</body>
+</html>

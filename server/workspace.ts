@@ -27,7 +27,7 @@ export interface ProjectEntry {
   mtimeKey: number; summary: string; sectionsCount: number; scannedAt: string | null; error: string | null;
 }
 interface Marker { version: number; id: string; name: string; createdAt: string; lastOpenedAt: string; projects: Record<string, ProjectEntry> }
-export interface WorkspaceState { path: string | null; name: string | null; ready: boolean; scanning: boolean; returning?: boolean; projects: ProjectEntry[] }
+export interface WorkspaceState { path: string | null; name: string | null; ready: boolean; scanning: boolean; returning?: boolean; projects: Array<ProjectEntry & { createdAt: string | null; updatedAt: string | null }> }
 
 const SCAN_PROMPT = 'Index this Shopify clone project folder for a dashboard. You may READ job.json, TARGET_SITE_INFO.txt, seed/CONVENTIONS.md and LIST the sections/, templates/ and react_files/ directories. Do not open large files. Do not modify anything. Reply ONLY with minified JSON, no prose: {"summary":"2-3 sentence description of the project and its state","target_site":"url or empty","store":"url or empty","sections_count":<number of .liquid files in sections/>,"has_react_source":<bool>,"state":"cloned"|"partial"|"fresh"}';
 
@@ -246,6 +246,13 @@ export async function getWorkspaceState(): Promise<WorkspaceState> {
   const workspace = await activeWorkspace();
   if (!workspace || !(await exists(workspace))) return { path: null, name: null, ready: false, scanning, projects: [] };
   const marker = await readMarker(workspace);
-  const projects = Object.values(marker?.projects ?? {}).sort((a, b) => b.mtimeKey - a.mtimeKey);
+  const entries = Object.values(marker?.projects ?? {}).sort((a, b) => b.mtimeKey - a.mtimeKey);
+  // Dates for the Projects page: when the folder was created, and its latest real work.
+  const projects = await Promise.all(entries.map(async (entry) => {
+    const info = await stat(entry.path).catch(() => null);
+    const created = info ? (info.birthtimeMs > 0 ? info.birthtimeMs : info.ctimeMs) : 0;
+    const updated = Math.max(entry.mtimeKey || 0, 0) || (info?.mtimeMs ?? 0);
+    return { ...entry, createdAt: created ? new Date(created).toISOString() : null, updatedAt: updated ? new Date(updated).toISOString() : null };
+  }));
   return { path: workspace, name: marker?.name ?? path.basename(workspace), ready: true, scanning, projects };
 }
