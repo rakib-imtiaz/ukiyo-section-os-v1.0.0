@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>ThemeBot — Licence</title>
+<style>
+  :root { --bg: #f4f6fb; --card: #fff; --ink: #0f1b3d; --muted: #6b7690; --line: #dfe5f0; --accent: #2f6bff; --bad: #b42318; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #0d1220; --card: #151c2e; --ink: #e8ecf6; --muted: #8b95ad; --line: #26304a; --bad: #f97066; } }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; display: grid; place-items: center; }
+  form { width: min(440px, calc(100vw - 48px)); background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 28px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 20px 50px -30px rgba(15, 27, 61, .35); }
+  .logo { width: 44px; height: 44px; border-radius: 13px; background: linear-gradient(140deg, #5a86ff, #2a55d0); display: grid; place-items: center; }
+  .logo .mark { width: 58%; height: 58%; }
+  h1 { margin: 0; font-size: 20px; }
+  p { margin: 0; color: var(--muted); }
+  label { font-weight: 600; font-size: 13px; }
+  input { font: 15px ui-monospace, "Cascadia Code", Menlo, monospace; padding: 11px 12px; border-radius: 10px; border: 1px solid var(--line); background: transparent; color: var(--ink); outline: none; }
+  input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(47, 107, 255, .2); }
+  button { font: 600 15px system-ui, sans-serif; padding: 11px; border-radius: 10px; border: 0; background: var(--accent); color: #fff; cursor: pointer; }
+  button:disabled { opacity: .6; cursor: default; }
+  .error { color: var(--bad); min-height: 1.5em; }
+  .small { font-size: 12.5px; }
+</style>
+</head>
+<body>
+  <form id="form">
+    <div class="logo"><svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z" fill="#fff"/><path d="M20 3v4M22 5h-4M4 17v2M5 18H3" stroke="#fff" stroke-width="2" stroke-linecap="round" fill="none"/></svg></div>
+    <h1>Activate ThemeBot</h1>
+    <p id="intro">Enter the licence key from your purchase email. Each key covers the number of computers (seats) you bought.</p>
+    <label for="key">Licence key</label>
+    <input id="key" autocomplete="off" spellcheck="false" placeholder="XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX" required>
+    <div class="error" id="error" role="alert"></div>
+    <button id="go" type="submit">Activate</button>
+    <p class="small">Need a key or a new seat? Contact the person or agency that sold you ThemeBot.</p>
+  </form>
+<script>
+  const params = new URLSearchParams(location.search);
+  const error = document.getElementById('error');
+  if (params.get('reason')) document.getElementById('intro').textContent = params.get('reason');
+  document.getElementById('form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const go = document.getElementById('go');
+    go.disabled = true; go.textContent = 'Activating…'; error.textContent = '';
+    const result = await window.themebotDesktop.activateLicence(document.getElementById('key').value);
+    if (!result.ok) { error.textContent = result.reason; go.disabled = false; go.textContent = 'Activate'; }
+    // On success the app window moves on to ThemeBot by itself.
+  });
+</script>
+</body>
+</html>

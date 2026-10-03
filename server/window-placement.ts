@@ -1,7 +1,7 @@
 // Where ThemeBot's own Chrome windows open: centred on the main screen instead of wherever Chrome
 // last left them. Read once per server run (the screen rarely changes mid-session).
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 let area: { x: number; y: number; width: number; height: number } | null | undefined;
@@ -9,6 +9,11 @@ let area: { x: number; y: number; width: number; height: number } | null | undef
 function workArea() {
   if (area !== undefined) return area;
   area = null;
+  // The desktop app passes the primary screen's work area (Electron knows it on every OS).
+  try {
+    const fromHost = JSON.parse(process.env.THEMEBOT_SCREEN_WORKAREA || 'null') as { x: number; y: number; width: number; height: number } | null;
+    if (fromHost && fromHost.width > 0 && fromHost.height > 0) { area = fromHost; return area; }
+  } catch { /* fall through */ }
   if (process.platform !== 'win32') return area;
   try {
     const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command',
@@ -32,13 +37,32 @@ export function centeredWindowArgs(width = 1300, height = 1000): string[] {
   return [`--window-position=${left},${top}`, `--window-size=${w},${h}`];
 }
 
+/** True while a running Chrome holds this profile folder.
+ *  Windows: Chrome keeps `lockfile` open, so deleting it fails while it runs (a stale one is removed).
+ *  macOS/Linux: Chrome keeps a `SingletonLock` symlink pointing at "<host>-<pid>"; it is in use
+ *  only if that process is still alive. */
+export function chromeProfileInUse(userDataDir: string): boolean {
+  if (process.platform === 'win32') {
+    try { if (existsSync(path.join(userDataDir, 'lockfile'))) rmSync(path.join(userDataDir, 'lockfile')); return false; }
+    catch { return true; }
+  }
+  const lock = path.join(userDataDir, 'SingletonLock');
+  try { lstatSync(lock); } catch { return false; }
+  try {
+    const pid = Number(/-(\d+)$/.exec(readlinkSync(lock))?.[1]);
+    if (!pid) return true;
+    process.kill(pid, 0); // throws if that process is gone
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'; // alive but not ours
+  }
+}
+
 /** Make ThemeBot's own Chrome profile open a clean window: no tabs brought back from last time
  *  (a force-closed or crashed window otherwise restores them). Skipped while that Chrome is
  *  running — it holds its lockfile, and a new window then joins the running instance anyway. */
 export function prepareFreshWindow(userDataDir: string): void {
-  try {
-    if (existsSync(path.join(userDataDir, 'lockfile'))) rmSync(path.join(userDataDir, 'lockfile'));   // throws while Chrome runs
-  } catch { return; }
+  if (chromeProfileInUse(userDataDir)) return;
   let profiles = ['Default'];
   try {
     const state = JSON.parse(readFileSync(path.join(userDataDir, 'Local State'), 'utf8')) as { profile?: { info_cache?: Record<string, unknown> } };

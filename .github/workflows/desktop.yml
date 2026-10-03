@@ -1,0 +1,45 @@
+# Builds the ThemeBot desktop installers on each OS (an installer can only be built on its own OS).
+# Produces downloadable workflow artifacts only — nothing is published or released from here.
+name: Desktop installers
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [desktop-electron]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest   # ThemeBot-Setup-<v>-x64.exe
+          - os: macos-latest     # Apple Silicon .dmg/.zip
+          - os: macos-13         # Intel .dmg/.zip
+          - os: ubuntu-22.04     # .AppImage + .deb
+    runs-on: ${{ matrix.os }}
+    env:
+      THEMEBOT_EDITION: customer
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'   # unsigned until the signing certificates exist
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install (node-pty is compiled here on Linux)
+        run: npm ci
+      - name: Tests
+        run: npm test
+      - name: Build installer
+        run: npm run desktop:pack
+      - uses: actions/upload-artifact@v4
+        with:
+          name: themebot-${{ matrix.os }}
+          if-no-files-found: error
+          path: |
+            release/*.exe
+            release/*.dmg
+            release/*.zip
+            release/*.AppImage
+            release/*.deb

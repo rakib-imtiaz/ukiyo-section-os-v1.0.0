@@ -7,6 +7,8 @@ import { existsSync } from 'node:fs';
 import { config } from '../config';
 import type { FactoryJobRecord } from '../db';
 import type { BotModel, RunResult } from './types';
+import { claudeEnv } from '../claude-connect';
+import { killTree, ownProcessGroup } from '../platform/proc';
 
 const SECRET_PATTERNS = [/shpat_[a-zA-Z0-9]+/g, /shpss_[a-zA-Z0-9]+/g, /shpca_[a-zA-Z0-9]+/g, /vso_live_[a-zA-Z0-9]+/g, /sk-ant-[\w-]+/g];
 // Narrowly scoped so ordinary prose like "respects rate limits" does not false-positive:
@@ -41,16 +43,19 @@ export function scrubSecrets(text: string) {
 // LLM-driven process running semi-trusted instructions; inheriting the app's environment
 // hands it (and anything it spawns) APP_ENCRYPTION_KEY, SESSION_SECRET, API_KEY_PEPPER,
 // DATABASE_URL, and Shopify secrets. Build a minimal allowlisted env instead: the OS/tooling
-// basics a Windows/node CLI needs, plus CLAUDE_*/ANTHROPIC_* so CLI auth/config still works.
+// basics a Windows/macOS/Linux CLI needs, plus CLAUDE_*/ANTHROPIC_* so CLI auth/config still works.
 const SPAWN_ENV_EXACT = new Set([
   'PATH', 'PATHEXT', 'SYSTEMROOT', 'SYSTEMDRIVE', 'COMSPEC', 'WINDIR',
   'TEMP', 'TMP', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'HOME',
   'APPDATA', 'LOCALAPPDATA', 'PROGRAMFILES', 'PROGRAMFILES(X86)', 'PROGRAMDATA',
   'NUMBER_OF_PROCESSORS', 'OS', 'USERNAME', 'USERDOMAIN',
+  // macOS / Linux: temp dir, user, locale, and the display/session a visible browser needs.
+  'TMPDIR', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'TERM',
+  'DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS',
   'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY',
   'PLAYWRIGHT_BROWSERS_PATH', // non-secret; QA breaks on machines that relocate the browser cache without it
 ]);
-const SPAWN_ENV_PREFIXES = ['PROCESSOR_', 'CLAUDE_', 'ANTHROPIC_'];
+const SPAWN_ENV_PREFIXES = ['PROCESSOR_', 'CLAUDE_', 'ANTHROPIC_', 'LC_', 'XDG_'];
 // Defense in depth: even if an allow rule ever matches one of these (e.g. a future
 // CLAUDE_-prefixed secret), they must NEVER reach a child process.
 const SPAWN_ENV_NEVER = new Set([
@@ -154,11 +159,6 @@ export function describeStreamEvent(message: Record<string, unknown>, cwd: strin
   return out;
 }
 
-function killTree(child: ChildProcess) {
-  if (child.pid == null || child.exitCode !== null) return;
-  if (process.platform === 'win32') spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { shell: false, windowsHide: true, env: buildSpawnEnv() });
-  else child.kill('SIGKILL');
-}
 
 function run(spec: RunSpec): RunHandle {
   let child: ChildProcess;
@@ -178,7 +178,8 @@ function run(spec: RunSpec): RunHandle {
     writeLog(`\n[factory ${new Date().toISOString()}] spawn ${config.factory.claudePath} ${spec.args.join(' ')}\n`);
 
     try {
-      child = spawn(engineCommand('claude'), spec.args, { cwd: spec.cwd, shell: false, windowsHide: true, env: buildSpawnEnv({ CLAUDE_FACTORY_JOB: '1' }) });
+      // claudeEnv(): an API key the user connected in the app (otherwise the CLI's own sign-in).
+      child = spawn(engineCommand('claude'), spec.args, { cwd: spec.cwd, shell: false, windowsHide: true, detached: ownProcessGroup, env: buildSpawnEnv({ ...(await claudeEnv()), CLAUDE_FACTORY_JOB: '1' }) });
     } catch (error) {
       logClosed = true; log.end();
       return { outcome: 'spawn_error', exitCode: null, detail: error instanceof Error ? error.message : 'spawn failed' };

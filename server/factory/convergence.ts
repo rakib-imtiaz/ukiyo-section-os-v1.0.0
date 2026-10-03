@@ -2,7 +2,6 @@ import { spawn } from 'node:child_process';
 import { recordBuild, recordStage } from './engines';
 import { access, appendFile, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { config } from '../config';
 import { db, type FactoryJobRecord } from '../db';
 import { decrypt } from '../security';
@@ -11,10 +10,12 @@ import { buildSpawnEnv, clearSignalFiles, cloneBlockerSignals, spawnClone, spawn
 import { trustWorkspace } from './scaffolder';
 import { getFactorySettings } from './settings';
 import type { FactorySettings } from './types';
+import { resourcePath } from '../runtime-paths';
+import { killTree, ownProcessGroup } from '../platform/proc';
 
 const min = (minutes: number) => minutes * 60_000;
 
-const PROMPT_TEMPLATE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../templates/factory/prompts/fix-session.md');
+const PROMPT_TEMPLATE = resourcePath('templates', 'factory', 'prompts', 'fix-session.md');
 
 async function fileExists(target: string) { return access(target).then(() => true, () => false); }
 
@@ -81,9 +82,7 @@ const BEST_RESTORE_EPSILON = 0.005;
 
 /** Kill a snapshot node process and any children (plain kill orphans them on Windows). */
 function killSnapshotTree(child: ReturnType<typeof spawn>) {
-  if (child.pid == null || child.exitCode !== null) return;
-  if (process.platform === 'win32') spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { shell: false, windowsHide: true, env: buildSpawnEnv() });
-  else child.kill('SIGKILL');
+  killTree(child);
 }
 
 /**
@@ -105,7 +104,7 @@ async function runSnapshot(job: FactoryJobRecord, action: 'save' | 'restore', it
   return new Promise((resolve) => {
     const finish = (ok: boolean, detail: string) => { void log(`[factory ${new Date().toISOString()}] snapshot ${action} ${iteration}: ${ok ? 'ok' : `FAILED — ${detail}`}\n`); resolve({ ok, detail }); };
     let child: ReturnType<typeof spawn>;
-    try { child = spawn(process.execPath, [script, action, String(iteration)], { cwd: job.workspace_path, shell: false, windowsHide: true, env: buildSpawnEnv() }); }
+    try { child = spawn(process.execPath, [script, action, String(iteration)], { cwd: job.workspace_path, shell: false, windowsHide: true, detached: ownProcessGroup, env: buildSpawnEnv() }); }
     catch (error) { finish(false, error instanceof Error ? error.message : 'spawn failed'); return; }
     let settled = false;
     const once = (ok: boolean, detail: string) => { if (!settled) { settled = true; clearTimeout(timer); finish(ok, detail); } };

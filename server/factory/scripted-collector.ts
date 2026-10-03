@@ -36,6 +36,7 @@ import os from 'node:os';
 import { detectEngines } from '../browser';
 import { centeredWindowArgs, prepareFreshWindow } from '../window-placement';
 import type { CollectorResult } from './partner-api';
+import { config } from '../config';
 
 export interface ScriptedInput {
   shop: string;            // full myshopify domain, e.g. acme.myshopify.com ('' when createStore)
@@ -127,7 +128,8 @@ function isChromeRunning(): boolean {
  *  code 21 for this on Windows, which Playwright reports only as "browser has been closed". */
 function isProfileInUse(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error ?? '');
-  return /ProcessSingleton|user data directory is already in use|profile.*in use|exitCode=21\b/i.test(message);
+  // macOS/Linux: a second launch on a locked profile hands off to the running Chrome instead.
+  return /ProcessSingleton|user data directory is already in use|profile.*in use|Opening in existing browser session|exitCode=21\b/i.test(message);
 }
 
 export interface ScriptedHandle {
@@ -181,7 +183,10 @@ export function runScriptedCollector(input: ScriptedInput): ScriptedHandle {
         log(`Opening your Chrome profile "${real.profile}" (already signed in — no login needed)…`);
         context = await chromium.launchPersistentContext(real.userDataDir, {
           headless: false,
-          channel: chrome ? 'chrome' : undefined,
+          executablePath: chrome?.executablePath,
+          // macOS/Linux: the everyday profile's cookies are encrypted with the OS keychain; Playwright's
+          // default flags swap in a fake one, which would open the profile signed out.
+          ignoreDefaultArgs: process.platform === 'win32' ? undefined : ['--password-store=basic', '--use-mock-keychain'],
           viewport: { width: 1280, height: 900 },
           args: [`--profile-directory=${real.profile}`, '--no-first-run', '--no-default-browser-check', '--hide-crash-restore-bubble', ...centeredWindowArgs()],
         });
@@ -195,7 +200,7 @@ export function runScriptedCollector(input: ScriptedInput): ScriptedHandle {
             prepareFreshWindow(input.profileDir);
             context = await chromium.launchPersistentContext(input.profileDir, {
               headless: false,
-              channel: chrome ? 'chrome' : undefined,
+              executablePath: chrome?.executablePath,
               viewport: { width: 1280, height: 900 },
               args: ['--no-first-run', '--no-default-browser-check', ...centeredWindowArgs()],
             });
@@ -251,9 +256,12 @@ export function runScriptedCollector(input: ScriptedInput): ScriptedHandle {
         throwIfAborted();
       }
 
-      // 0b. Every store ThemeBot builds gets the standard storefront password, so the build's page
-      //     checks can pass the "Private mode" gate. Runs for new AND reused stores.
-      const password = await ensureStorefrontPassword(page, shop, DEFAULT_STOREFRONT_PASSWORD, log);
+      // 0b. The build's page checks need the storefront password to get past "Private mode".
+      //     Stores ThemeBot creates get the standard password. In the customer edition a store the
+      //     agency already had keeps its own password — we only read it, never change a client's
+      //     store behind their back. (Our internal edition sets the standard one everywhere.)
+      const keepExisting = config.edition === 'customer' && !createNow;
+      const password = await ensureStorefrontPassword(page, shop, keepExisting ? null : DEFAULT_STOREFRONT_PASSWORD, log);
       if (password) input.onShop?.(shop, password);
       throwIfAborted();
 
@@ -473,8 +481,9 @@ async function findPasswordBox(page: Page) {
 }
 
 /** Set the storefront password to `wanted`, save, and read it back. Returns the password that is
- *  actually in place (the old one if saving failed), or null if the store has no password box. */
-async function ensureStorefrontPassword(page: Page, shop: string, wanted: string, log: (t: string) => void): Promise<string | null> {
+ *  actually in place (the old one if saving failed), or null if the store has no password box.
+ *  With `wanted` null it only reads the current password. */
+async function ensureStorefrontPassword(page: Page, shop: string, wanted: string | null, log: (t: string) => void): Promise<string | null> {
   const handle = shop.replace(/^https?:\/\//, '').replace(/\.myshopify\.com.*$/i, '');
   const url = `https://admin.shopify.com/store/${handle}/online_store/preferences`;
   try {
@@ -482,6 +491,7 @@ async function ensureStorefrontPassword(page: Page, shop: string, wanted: string
     let box = await findPasswordBox(page);
     if (!box) { log('No storefront password box found (the store may already be open to everyone).'); return null; }
     const current = (await box.inputValue().catch(() => '')).trim();
+    if (wanted === null) { log(current ? "Using the store's existing storefront password." : 'This store has no storefront password set.'); return current || null; }
     if (current === wanted) { log(`Storefront password is already "${wanted}".`); return wanted; }
     log(`Setting the storefront password to "${wanted}"…`);
     await box.fill(wanted).catch(() => {});
@@ -738,7 +748,7 @@ export async function renameStoreInProfile(profileDir: string, shop: string, sto
   const chrome = detectEngines().find((e) => e.id === 'chrome' && e.available);
   prepareFreshWindow(profileDir);
   const context = await chromium.launchPersistentContext(profileDir, {
-    headless: false, channel: chrome ? 'chrome' : undefined, viewport: { width: 1280, height: 900 },
+    headless: false, executablePath: chrome?.executablePath, viewport: { width: 1280, height: 900 },
     args: ['--no-first-run', '--no-default-browser-check', ...centeredWindowArgs()],
   });
   const messages: string[] = [];
@@ -769,7 +779,7 @@ export async function checkStoreAccess(profileDir: string, shop: string): Promis
   try {
     await mkdir(profileDir, { recursive: true });
     const chrome = detectEngines().find((e) => e.id === 'chrome' && e.available);
-    context = await chromium.launchPersistentContext(profileDir, { headless: true, channel: chrome ? 'chrome' : undefined, args: ['--no-first-run', '--no-default-browser-check'] });
+    context = await chromium.launchPersistentContext(profileDir, { headless: true, executablePath: chrome?.executablePath, args: ['--no-first-run', '--no-default-browser-check'] });
   } catch (error) {
     const message = error instanceof Error ? error.message : '';
     return { ...base, access: 'unknown', reason: isProfileInUse(error) ? 'window-open' : 'launch-failed' };
@@ -800,7 +810,7 @@ export async function setStorefrontPasswordInProfile(profileDir: string, shop: s
   const chrome = detectEngines().find((e) => e.id === 'chrome' && e.available);
   prepareFreshWindow(profileDir);
   const context = await chromium.launchPersistentContext(profileDir, {
-    headless: false, channel: chrome ? 'chrome' : undefined, viewport: { width: 1280, height: 900 },
+    headless: false, executablePath: chrome?.executablePath, viewport: { width: 1280, height: 900 },
     args: ['--no-first-run', '--no-default-browser-check', ...centeredWindowArgs()],
   });
   try {

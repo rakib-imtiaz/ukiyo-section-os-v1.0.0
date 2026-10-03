@@ -101,7 +101,7 @@ describe('FactoryScheduler', () => {
     await expect(scheduler.retry(done.id)).rejects.toThrow(/Cannot retry/);
   });
 
-  it('boot recovery marks interrupted jobs blocked and leaves terminal ones alone', async () => {
+  it('boot recovery requeues interrupted jobs (and relaunches them), leaving terminal ones alone', async () => {
     const driver = new FakeDriver();
     const scheduler = new FactoryScheduler(driver.drive);
     await updateFactorySettings({ concurrency: 0 as never }); // clamped to 1; keeps launches minimal
@@ -110,9 +110,25 @@ describe('FactoryScheduler', () => {
     const finished = await db.createFactoryJob(jobInput(`bf_${Math.random().toString(36).slice(2, 6)}`));
     await db.updateFactoryJob(finished.id, { status: 'converged' });
     await scheduler.boot(); await flush();
-    expect((await db.getFactoryJob(interrupted.id))!.status).toBe('blocked');
-    expect((await db.getFactoryJob(interrupted.id))!.status_detail).toMatch(/restart/i);
+    expect((await db.getFactoryJob(interrupted.id))!.status).not.toBe('blocked');
+    expect(driver.started).toContain(interrupted.id); // picked straight back up — no Resume needed
+    expect(driver.started).not.toContain(finished.id);
     expect((await db.getFactoryJob(finished.id))!.status).toBe('converged');
+    driver.finish(interrupted.id);
+  });
+
+  it('boot recovery parks a job as blocked after more than 3 restarts within 30 minutes', async () => {
+    const driver = new FakeDriver();
+    const scheduler = new FactoryScheduler(driver.drive);
+    await updateFactorySettings({ concurrency: 0 as never });
+    const looping = await db.createFactoryJob(jobInput(`bl_${Math.random().toString(36).slice(2, 6)}`));
+    await db.updateFactoryJob(looping.id, { status: 'cloning' });
+    const now = Date.now();
+    await db.setSetting('factory_restart_history', JSON.stringify({ [looping.id]: [now - 3000, now - 2000, now - 1000] }));
+    await scheduler.boot(); await flush();
+    expect((await db.getFactoryJob(looping.id))!.status).toBe('blocked');
+    expect((await db.getFactoryJob(looping.id))!.status_detail).toMatch(/restart/i);
+    expect(driver.started).not.toContain(looping.id);
   });
 
   it('queue pause holds launches; resume releases them', async () => {

@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=DM+Mono:wght@300;400;500&family=Newsreader:opsz,wght@6..72,300;6..72,400&display=swap');
+/* Fonts (Inter, DM Mono, Newsreader) are bundled — imported in main.tsx. */
 
 /* ————————————————————————————————————————————————————————————————
    TOKENS — light-first (matches the HOME dashboard: soft #f3f5f9 canvas,

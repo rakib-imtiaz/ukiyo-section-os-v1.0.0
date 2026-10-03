@@ -103,7 +103,7 @@ export const api = {
   previewStatus: (id: string) => request<{ preview: PreviewRun }>(`/intake/preview/${id}`),
   previewScreenshotUrl: (id: string) => `/api/factory/intake/preview/${id}/screenshot?t=${Date.now()}`,
   stopPreview: (id: string) => request<{ stopped: boolean }>(`/intake/preview/${id}/stop`, { method: 'POST' }),
-  easyStart: (body: { storeName: string; siteUrl?: string; reactFilesPath?: string; intakeId?: string; qaEngine?: string; shop?: string; newStore?: boolean }) => request<EasyStatus>('/easy/start', { method: 'POST', body: JSON.stringify(body) }),
+  easyStart: (body: { storeName: string; siteUrl?: string; reactFilesPath?: string; intakeId?: string; qaEngine?: string; shop?: string; newStore?: boolean; rightsConfirmed?: boolean }) => request<EasyStatus>('/easy/start', { method: 'POST', body: JSON.stringify(body) }),
   easyStatus: () => request<EasyStatus>('/easy/status'),
   easySigninWindow: (page?: 'shopify' | 'shopify-accounts' | 'google-add' | 'google-manage', shop?: string, adminPath?: string) => request<{ ok: boolean; browser: string }>('/easy/signin-window', { method: 'POST', body: JSON.stringify({ ...(page ? { page } : {}), ...(shop ? { shop } : {}), ...(adminPath ? { adminPath } : {}) }) }),
   easyRememberedStore: (name: string) => request<{ shop: string | null }>(`/easy/remembered-store?name=${encodeURIComponent(name)}`),

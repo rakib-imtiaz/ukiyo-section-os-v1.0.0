@@ -5,12 +5,13 @@
 //   1. Disabled in production (config.terminal.enabled defaults off when NODE_ENV=production).
 //   2. Localhost-only — connections whose Host/Origin isn't a loopback address are rejected.
 // Never expose the server port publicly with this enabled.
-import { statSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import type { IncomingMessage } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
-import pty from 'node-pty';
+import type { IPty } from 'node-pty';
+import { loadPty } from './platform/pty';
 import { config } from './config';
 import { addWsRoute } from './ws-hub';
 
@@ -22,7 +23,9 @@ type ClientMessage =
 function defaultShell(): { file: string; args: string[] } {
   if (config.terminal.shell) return { file: config.terminal.shell, args: [] };
   if (process.platform === 'win32') return { file: process.env.COMSPEC?.includes('powershell') ? process.env.COMSPEC : 'powershell.exe', args: ['-NoLogo'] };
-  return { file: process.env.SHELL || 'bash', args: [] };
+  // macOS/Linux: the user's login shell, started as a login shell so Homebrew/npm/~/.local/bin are on PATH.
+  const fallback = process.platform === 'darwin' ? '/bin/zsh' : existsSync('/bin/bash') ? '/bin/bash' : '/bin/sh';
+  return { file: process.env.SHELL || fallback, args: ['-l'] };
 }
 
 /** Only loopback hosts may connect (defence-in-depth on top of the prod gate). */
@@ -53,7 +56,7 @@ function resolveSessionCwd(requestUrl: string | undefined): string {
   try { requested = new URL(requestUrl, 'http://localhost').searchParams.get('cwd'); } catch { return fallback; }
   if (!requested || !requested.trim()) return fallback;
   const resolved = path.resolve(requested.trim());
-  const allowedRoots = [path.resolve(config.factory.workspaceRoot), path.resolve('.')];
+  const allowedRoots = [path.resolve(config.factory.workspaceRoot), path.resolve(config.terminal.cwd)];
   const inside = allowedRoots.some((root) => {
     const relative = path.relative(root, resolved);
     return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
@@ -99,12 +102,12 @@ export function attachTerminal() {
   });
   addWsRoute('/terminal', wss);
 
-  wss.on('connection', (socket: WebSocket, request: IncomingMessage) => {
+  wss.on('connection', async (socket: WebSocket, request: IncomingMessage) => {
     const { file, args } = defaultShell();
     const cwd = resolveSessionCwd(request.url);
-    let term: pty.IPty;
+    let term: IPty;
     try {
-      term = pty.spawn(file, args, {
+      term = (await loadPty()).spawn(file, args, {
         name: 'xterm-256color',
         cols: 80,
         rows: 24,

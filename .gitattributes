@@ -1,0 +1,10 @@
+# Same line endings on Windows, macOS and Linux (scripts and templates run on all three).
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
+*.icns binary
+*.mp4 binary
+*.woff binary
+*.woff2 binary
+*.zip binary

@@ -10,7 +10,9 @@ import fs from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
-import pty from 'node-pty';
+import type { IPty } from 'node-pty';
+import { loadPty } from './platform/pty';
+import { claudeInstallCommand, findClaudePath } from './platform/claude-path';
 import { config } from './config';
 import { db } from './db';
 import { encrypt, decrypt } from './security';
@@ -18,6 +20,7 @@ import { scrubSecrets } from './factory/runner';
 import { trustWorkspace } from './factory/scaffolder';
 import { installPtyCrashGuard } from './terminal';
 import { addProgress, beginTask } from './progress';
+import { killTree, ownProcessGroup } from './platform/proc';
 
 const KEY_SETTING = 'claude_api_key_cipher';
 // Explicit opt-in to use the CLI's OAuth sign-in. CLI credentials are NEVER adopted
@@ -39,11 +42,6 @@ export interface ClaudeStatus {
 
 export interface QuickRunResult { ok: boolean; exitCode: number | null; stdout: string; stderr: string; timedOut: boolean }
 
-function killTree(child: ChildProcess) {
-  if (child.pid == null || child.exitCode !== null) return;
-  if (process.platform === 'win32') spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { shell: false, windowsHide: true });
-  else child.kill('SIGKILL');
-}
 
 /** Spawn the Claude CLI headlessly, capture output, enforce a hard timeout. */
 export function runQuickClaude(options: { args: string[]; cwd?: string; env?: Record<string, string>; timeoutMs?: number }): Promise<QuickRunResult> {
@@ -51,7 +49,7 @@ export function runQuickClaude(options: { args: string[]; cwd?: string; env?: Re
     let child: ChildProcess;
     try {
       child = spawn(config.factory.claudePath, options.args, {
-        cwd: options.cwd ?? process.cwd(), shell: false, windowsHide: true,
+        cwd: options.cwd ?? tmpdir(), shell: false, windowsHide: true, detached: ownProcessGroup,
         env: { ...process.env, ...options.env },
       });
     } catch (error) {
@@ -82,7 +80,15 @@ function probeDir(): Promise<string> {
   return probeDirReady;
 }
 
+/** Re-checks for Claude Code when it isn't where we last looked (e.g. installed after launch). */
+function refreshClaudePath() {
+  if (!fs.existsSync(config.factory.claudePath)) config.factory.claudePath = findClaudePath();
+}
+
 function credentialsFileExists(): boolean {
+  // macOS keeps the CLI's sign-in in the Keychain, not in a file — there the connection probe
+  // is the only real test, so treat the sign-in as "maybe present".
+  if (process.platform === 'darwin') return true;
   try { const file = path.join(process.env.CLAUDE_CONFIG_DIR || path.join(homedir(), '.claude'), '.credentials.json'); return fs.existsSync(file) && fs.statSync(file).size > 2; } catch { return false; }
 }
 
@@ -96,7 +102,7 @@ async function probe(env?: Record<string, string>): Promise<{ ok: boolean; detai
 
 // ---- status (cached) ----
 let cached: { at: number; status: ClaudeStatus } | null = null;
-let loginChild: pty.IPty | null = null;
+let loginChild: IPty | null = null;
 
 export function invalidateClaudeStatus() { cached = null; }
 
@@ -119,6 +125,7 @@ export async function claudeEnv(): Promise<Record<string, string>> {
  */
 export async function getClaudeStatusQuick(): Promise<ClaudeStatus> {
   if (cached && Date.now() - cached.at < STATUS_TTL_MS) return { ...cached.status, loginActive: !!loginChild };
+  refreshClaudePath();
   const cliPresent = fs.existsSync(config.factory.claudePath);
   const cliCredentialsPresent = credentialsFileExists();
   const key = await storedKey();
@@ -137,6 +144,7 @@ export async function getClaudeStatus(force = false): Promise<ClaudeStatus> {
 }
 
 async function computeClaudeStatus(): Promise<ClaudeStatus> {
+  refreshClaudePath();
   const cliPresent = fs.existsSync(config.factory.claudePath);
   const cliCredentialsPresent = credentialsFileExists();
   const base = { cliPresent, cliCredentialsPresent, claudePath: config.factory.claudePath, loginActive: !!loginChild };
@@ -144,7 +152,7 @@ async function computeClaudeStatus(): Promise<ClaudeStatus> {
   const key = await storedKey();
   const cliEnabled = (await db.getSetting(CLI_ENABLED_SETTING)) === '1';
   if (!cliPresent) {
-    status = { ...base, connected: false, method: null, reason: 'Claude Code CLI was not found. Install it, or set FACTORY_CLAUDE_PATH.' };
+    status = { ...base, connected: false, method: null, reason: `Claude Code isn't installed yet. Install it with: ${claudeInstallCommand()}` };
   } else if (key) {
     // An app-stored API key is an explicit choice — use it.
     const result = await probe({ ANTHROPIC_API_KEY: key });
@@ -168,13 +176,14 @@ async function computeClaudeStatus(): Promise<ClaudeStatus> {
 // ---- login (OAuth via the CLI, under a PTY) ----
 export async function startLogin(): Promise<{ started: boolean; error?: string }> {
   if (loginChild) return { started: true };
-  if (!fs.existsSync(config.factory.claudePath)) return { started: false, error: 'Claude Code CLI not found.' };
+  refreshClaudePath();
+  if (!fs.existsSync(config.factory.claudePath)) return { started: false, error: `Claude Code isn't installed yet. Install it with: ${claudeInstallCommand()}` };
   installPtyCrashGuard();
   const done = beginTask();
   try {
     addProgress('Starting Claude sign-in — a browser window will open…');
     const cwd = await probeDir();
-    loginChild = pty.spawn(config.factory.claudePath, ['login'], { name: 'xterm-256color', cols: 120, rows: 30, cwd, env: { ...process.env } as Record<string, string> });
+    loginChild = (await loadPty()).spawn(config.factory.claudePath, ['login'], { name: 'xterm-256color', cols: 120, rows: 30, cwd, env: { ...process.env } as Record<string, string> });
   } catch (error) {
     done(); loginChild = null;
     return { started: false, error: error instanceof Error ? error.message : 'Could not start claude login.' };

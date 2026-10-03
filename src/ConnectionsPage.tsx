@@ -9,6 +9,8 @@ interface Props {
   claudeConnected: boolean;
   workspaceName: string | null;
   developerMode: boolean;
+  /** False in the customer edition: the terminal and browser tools aren't shipped there. */
+  showDeveloperTools?: boolean;
   onDeveloperMode: (on: boolean) => void;
   onSwitchWorkspace: () => void;
   onLogoutClaude: () => void;
@@ -124,10 +126,10 @@ export default function ConnectionsPage(props: Props) {
           </div>
         </ConnCard>
 
-        <ConnCard wide icon={<TerminalSquare size={18} />} title="Developer tools" usedFor="fixing ThemeBot itself. Adds Terminal and Browser to the sidebar. You don't need them to build stores."
+        {props.showDeveloperTools !== false && <ConnCard wide icon={<TerminalSquare size={18} />} title="Developer tools" usedFor="fixing ThemeBot itself. Adds Terminal and Browser to the sidebar. You don't need them to build stores."
           pill={<Pill ok={props.developerMode}>{props.developerMode ? 'Shown' : 'Hidden'}</Pill>}>
           <label className="settings-toggle"><input type="checkbox" checked={props.developerMode} onChange={(event) => props.onDeveloperMode(event.target.checked)} /> Show developer tools</label>
-        </ConnCard>
+        </ConnCard>}
       </div>
     </section>
   );

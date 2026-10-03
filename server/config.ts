@@ -2,19 +2,35 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { dataRoot, desktop, readDesktopSettings, resourceRoot } from './runtime-paths';
+import { findClaudePath } from './platform/claude-path';
 
 const production = process.env.NODE_ENV === 'production';
+// The customer edition (the desktop app agencies install) leaves out the operator tools: the
+// integrated terminal and browser. The internal edition (this repo, our own builds) keeps them.
+const edition = process.env.THEMEBOT_EDITION === 'customer' ? 'customer' : 'internal';
+const operatorToolsDefault = production || edition === 'customer' ? 'false' : 'true';
 
 function value(name: string, fallback = '') {
   return process.env[name]?.trim() || fallback;
 }
 
-// Per-install secret material for LOCAL DEV only. Persisted OUTSIDE the repo (under
-// ~/.themebot) so it is never committed and the dev file-watcher never sees it churn.
+// Where builds go: an explicit env var, else the folder chosen in onboarding (desktop app),
+// else a per-user default. The old hard-coded folder is kept only for repo runs on Windows.
+function defaultWorkspaceRoot() {
+  const chosen = readDesktopSettings().workspaceRoot;
+  if (chosen) return chosen;
+  if (!desktop && process.platform === 'win32') return 'C:/patrick_workspace/shopify_works';
+  return path.join(homedir(), 'ThemeBot Builds');
+}
+
+// Per-install secret material for LOCAL DEV and the desktop app. Persisted OUTSIDE the repo
+// (under ~/.themebot, or the desktop app's data folder) so it is never committed and the dev
+// file-watcher never sees it churn.
 // This replaces the old shared, hard-coded development fallbacks — those were identical
 // on every machine, so any dev-stored secret (Shopify tokens, session cookies, API-key
 // peppers) was trivially forgeable/decryptable by anyone who read the source.
-const devSecretDir = path.join(homedir(), '.themebot', 'secrets');
+const devSecretDir = path.join(dataRoot, 'secrets');
 
 function persistedDevSecret(name: string): string {
   const file = path.join(devSecretDir, name);
@@ -26,7 +42,7 @@ function persistedDevSecret(name: string): string {
   } catch { /* unreadable — regenerate below */ }
   const generated = randomBytes(32).toString('base64url');
   try {
-    mkdirSync(devSecretDir, { recursive: true });
+    mkdirSync(devSecretDir, { recursive: true, mode: 0o700 });
     writeFileSync(file, generated, { mode: 0o600 });
   } catch { /* ephemeral fallback: a fresh random per boot still beats a shared known key */ }
   return generated;
@@ -57,6 +73,8 @@ function encryptionKey(): Buffer {
 
 export const config = {
   production,
+  desktop,
+  edition,
   port: Number(value('PORT', '8787')),
   // Bind address. Defaults to loopback so the API (incl. factory/terminal/browser operator
   // routes) is never exposed to the LAN by accident. Set HOST=0.0.0.0 (or a specific
@@ -88,9 +106,9 @@ export const config = {
   // Clone Factory — local operator tool: disabled in production unless explicitly enabled.
   factory: {
     enabled: value('FACTORY_ENABLED', production ? 'false' : 'true') === 'true',
-    workspaceRoot: value('FACTORY_WORKSPACE_ROOT', 'C:/patrick_workspace/shopify_works'),
-    claudePath: value('FACTORY_CLAUDE_PATH', path.join(homedir(), '.local', 'bin', 'claude.exe')),
-    playwrightRoot: value('FACTORY_PW_ROOT', path.resolve('node_modules')),
+    workspaceRoot: path.resolve(value('FACTORY_WORKSPACE_ROOT', defaultWorkspaceRoot())),
+    claudePath: findClaudePath(),
+    playwrightRoot: value('FACTORY_PW_ROOT', path.join(resourceRoot, 'node_modules')),
     defaultConcurrency: Number(value('FACTORY_CONCURRENCY', '2')),
     launchStaggerSec: Number(value('FACTORY_LAUNCH_STAGGER_SEC', '90')),
     inactivityTimeoutMin: Number(value('FACTORY_INACTIVITY_TIMEOUT_MIN', '20')),
@@ -101,15 +119,15 @@ export const config = {
   // Integrated PTY terminal — LOCAL OPERATOR TOOL. A browser-reachable real shell:
   // enabled in dev, OFF in production, and connections are localhost-only (see terminal.ts).
   terminal: {
-    enabled: value('TERMINAL_ENABLED', production ? 'false' : 'true') === 'true',
-    cwd: value('TERMINAL_CWD', path.resolve('.')),
+    enabled: value('TERMINAL_ENABLED', operatorToolsDefault) === 'true',
+    cwd: value('TERMINAL_CWD', desktop ? homedir() : resourceRoot),
     shell: value('TERMINAL_SHELL', ''),
   },
   // Integrated browser — LOCAL OPERATOR TOOL. A managed Playwright browser streamed into
   // the app (live view + Claude-drivable via local MCP). Enabled in dev, OFF in production,
   // localhost-only (see browser.ts). engine: auto | chromium (isolated) | chrome | msedge.
   browser: {
-    enabled: value('BROWSER_ENABLED', production ? 'false' : 'true') === 'true',
+    enabled: value('BROWSER_ENABLED', operatorToolsDefault) === 'true',
     engine: value('BROWSER_ENGINE', 'auto'),
     headless: value('BROWSER_HEADLESS', 'true') === 'true',
     width: Number(value('BROWSER_WIDTH', '1280')),
@@ -118,7 +136,7 @@ export const config = {
     // Persistent profile: cookies/sign-ins/extension state survive stop/start and app restarts.
     // MUST live outside the project tree — Chrome writes here constantly and the dev file-watcher
     // (vite / node --watch) crashes with EBUSY if it tries to watch these churning files.
-    profileDir: value('BROWSER_PROFILE_DIR', path.join(homedir(), '.themebot', 'browser-profile')),
+    profileDir: value('BROWSER_PROFILE_DIR', path.join(dataRoot, 'browser-profile')),
     // Extra unpacked extension dirs (';'-separated). The Claude extension is auto-detected
     // from the user's real Chrome profiles on top of these.
     extensions: value('BROWSER_EXTENSIONS', ''),

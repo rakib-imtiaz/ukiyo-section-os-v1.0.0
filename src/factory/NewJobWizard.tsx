@@ -5,6 +5,7 @@ import { api } from './api';
 import { ChromeKeysCard, SetupChecklist } from './SetupChecklist';
 import { EasyFlow, clearEasyDraft, getEasyDraft, type ManualHandoff } from './EasyFlow';
 import { QaChoice } from './QaChoice';
+import { RightsCheck } from './RightsCheck';
 import { WatchVideoButton } from '../SetupVideo';
 import type { CredCheckResult, FactorySettings, FactoryStore, QaEngine } from './types';
 
@@ -251,6 +252,7 @@ function ExpertFlow({ defaults, onCreated, onCancel, embedded }: { defaults: Fac
     setMaxIterations(defaults?.defaultMaxIterations ?? 5); setThreshold(defaults?.defaultScoreThreshold ?? 0.92);
   };
 
+  const [rightsOk, setRightsOk] = useState(false);
   const submit = async () => {
     setBusy(true);
     try {
@@ -267,7 +269,7 @@ function ExpertFlow({ defaults, onCreated, onCancel, embedded }: { defaults: Fac
         storefrontPassword: storefrontPassword || undefined,
         reactFilesPath: reactFilesPath || undefined,
         prefix, devThemeName: devThemeName.trim(), autoswap, autoQa, qaMode, qaEngine,
-        maxIterations, scoreThreshold: threshold,
+        maxIterations, scoreThreshold: threshold, rightsConfirmed: rightsOk,
       });
       localStorage.removeItem(DRAFT_KEY);
       setClientId(''); setClientSecret(''); setStorefrontPassword(''); // never keep secrets in form state
@@ -535,6 +537,8 @@ function ExpertFlow({ defaults, onCreated, onCancel, embedded }: { defaults: Fac
         </Card>
       )}
 
+      {step === 2 && <RightsCheck checked={rightsOk} onChange={setRightsOk} />}
+
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Button variant="ghost" onClick={() => { if (dirty) setDiscardConfirm(true); else { resetWizard(); onCancel?.(); } }} disabled={busy}>Cancel</Button>
@@ -542,7 +546,7 @@ function ExpertFlow({ defaults, onCreated, onCancel, embedded }: { defaults: Fac
         </div>
         {step < 2
           ? <Button onClick={goNext}>Next <ArrowRight /></Button>
-          : <Button size="lg" onClick={trySubmit} disabled={busy}>{busy ? <Spinner className="text-primary-foreground" /> : <Rocket />} Start building</Button>}
+          : <Button size="lg" onClick={trySubmit} disabled={busy || !rightsOk} title={!rightsOk ? 'Confirm you have the rights to this site first' : undefined}>{busy ? <Spinner className="text-primary-foreground" /> : <Rocket />} Start building</Button>}
       </div>
 
       <ConfirmDialog

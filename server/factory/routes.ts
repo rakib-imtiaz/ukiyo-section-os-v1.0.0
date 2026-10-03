@@ -5,13 +5,14 @@ import type { NextFunction, Request, Response } from 'express';
 import { Router, raw as rawBody } from 'express';
 import { config } from '../config';
 import { detectEngines, resolveExtensions } from '../browser';
-import { centeredWindowArgs, prepareFreshWindow } from '../window-placement';
+import { centeredWindowArgs, chromeProfileInUse, prepareFreshWindow } from '../window-placement';
 import { db, type FactoryJobRecord } from '../db';
 import { decrypt, encrypt, newSecret, normalizeShop, rateLimit, secureEqual } from '../security';
 import { TEMPLATES_ROOT, containsPackageJson, derivePrefix, isZipPath, mintKeyFor, resolveWorkspacePath, scaffoldWorkspace, slugify, trustWorkspace } from './scaffolder';
 import { factoryScheduler } from './scheduler';
 import { getFactorySettings, lockedFields, updateFactorySettings } from './settings';
 import { buildSpawnEnv, scrubSecrets } from './runner';
+import { claudeEnv } from '../claude-connect';
 import { TERMINAL_STATUSES, type CollectionMethod, type JobIntake } from './types';
 import { checkStoreAccess, runScriptedCollector, listChromeProfiles, type ScriptedHandle, type StoreAccess } from './scripted-collector';
 import { fetchAppSecretViaPartnerApi } from './partner-api';
@@ -19,6 +20,7 @@ import { pageProgress, writeAlreadyBuilt } from './progress';
 import { syncStatus, uploadToDraft } from './theme-sync';
 import { KEY_SPECS, accountStatuses, activeEngine, clearLimit, keyStatuses, linkAccount, listEngines, readUsage, recordUsage, removeProviderKey, setActiveEngine, setProviderKey, usageSummary, type AccountProvider, type EngineId, type KeyProvider } from './engines';
 import { awaitPreview, checkShopifyLogin, forgetLoginStatus, getPreview, ingestUpload, inspectProject, openShopifySignIn, publicPreview, startPreview, stopPreview } from './intake';
+import { killTree, ownProcessGroup } from '../platform/proc';
 
 type AsyncHandler = (request: Request, response: Response, next: NextFunction) => Promise<unknown>;
 const handle = (handler: AsyncHandler) => (request: Request, response: Response, next: NextFunction) => handler(request, response, next).catch(next);
@@ -91,16 +93,14 @@ interface CalibrationOutcome {
 
 /** Kill the calibration node process and its Chromium children (plain kill orphans them on Windows). */
 function killSelftestTree(child: ReturnType<typeof spawn>) {
-  if (child.pid == null || child.exitCode !== null) return;
-  if (process.platform === 'win32') spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { shell: false, windowsHide: true, env: buildSpawnEnv() });
-  else child.kill('SIGKILL');
+  killTree(child);
 }
 
 /** Run calibrate.mjs (bounded) and parse its trailing `CALIBRATE_RESULT <json>` line. */
 function runCalibration(script: string): Promise<CalibrationOutcome> {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [script], {
-      shell: false, windowsHide: true, cwd: path.dirname(script),
+      shell: false, windowsHide: true, detached: ownProcessGroup, cwd: path.dirname(script),
       // Allowlisted env (no process.env spread) — app secrets never reach the QA pipeline.
       env: buildSpawnEnv({ PW_ROOT: config.factory.playwrightRoot, FACTORY_PW_ROOT: config.factory.playwrightRoot }),
     });
@@ -218,7 +218,13 @@ export function createFactoryRouter() {
     return { status: 201, payload: { job: publicJob((await db.getFactoryJob(job.id))!) } };
   };
 
+  // Customer builds need the "I own this site / have permission" confirmation, kept as a record.
+  const rightsMissing = (body: { rightsConfirmed?: unknown } | undefined) => config.edition === 'customer' && body?.rightsConfirmed !== true;
+  const recordRights = (site: string, store: string) => db.audit(null, 'build.rights_confirmed', 'user', { site, store, at: new Date().toISOString() }).catch(() => {});
+
   router.post('/jobs', handle(async (request, response) => {
+    if (rightsMissing(request.body)) { response.status(422).json({ error: "Confirm that you own this website or have the owner's permission before building." }); return; }
+    void recordRights(String(request.body?.reactUrl ?? request.body?.reactFilesPath ?? ''), String(request.body?.storeUrl ?? ''));
     const result = await intakeJob(request.body as JobIntake);
     response.status(result.status).json(result.payload);
   }));
@@ -559,10 +565,8 @@ export function createFactoryRouter() {
     const pwRoot = config.factory.playwrightRoot;
     const cliCandidates = [path.join(pwRoot, 'playwright', 'cli.js'), path.join(pwRoot, '.bin', 'playwright')];
     const hasPlaywright = (await Promise.all([path.join(pwRoot, 'playwright'), ...cliCandidates].map(fileExists))).some(Boolean);
-    // A chromium build under ms-playwright indicates browsers are installed.
-    const cacheDir = path.join(process.env.LOCALAPPDATA ?? path.join(process.env.USERPROFILE ?? '', 'AppData', 'Local'), 'ms-playwright');
-    let hasChromium = false;
-    try { hasChromium = (await readdir(cacheDir)).some((entry) => entry.startsWith('chromium')); } catch { /* no cache dir */ }
+    // Playwright knows where its Chromium lives on every OS (and honours PLAYWRIGHT_BROWSERS_PATH).
+    const hasChromium = Boolean(detectEngines().find((engine) => engine.id === 'chromium')?.available);
     response.json({ hasPlaywright, hasChromium, ready: hasPlaywright && hasChromium, playwrightRoot: pwRoot, installing: browserInstalling });
   }));
 
@@ -720,6 +724,8 @@ export function createFactoryRouter() {
     if (collect.status === 'working' && collect.method === 'scripted') { response.status(409).json({ error: 'The setup script is using the ThemeBot browser right now — stop it first.' }); return; }
     const dir = SCRIPT_PROFILE_DIR();
     if (!(await stat(dir).catch(() => null))) { response.json({ ok: true, backup: null }); return; }
+    // On macOS/Linux a folder in use can still be renamed, so check for a running Chrome first.
+    if (chromeProfileInUse(dir)) { response.status(409).json({ error: 'Close the ThemeBot browser window first, then try again.' }); return; }
     const backup = `${dir}.signed-out-${new Date().toISOString().replace(/[:.]/g, '-')}`;
     try { await rename(dir, backup); }
     catch (error) {
@@ -816,10 +822,7 @@ export function createFactoryRouter() {
 
   const stopCollector = (status: CollectState['status'], note: string | null) => {
     if (collectTimer) { clearTimeout(collectTimer); collectTimer = null; }
-    if (collectChild && collectChild.exitCode === null && collectChild.pid != null) {
-      if (process.platform === 'win32') spawn('taskkill', ['/pid', String(collectChild.pid), '/T', '/F'], { shell: false, windowsHide: true });
-      else collectChild.kill('SIGKILL');
-    }
+    killTree(collectChild);
     collectChild = null;
     // Scripted (in-process Playwright) runs: abort the step-machine and close the browser.
     if (collectScripted) { collectScripted.abort.abort(); void collectScripted.close().catch(() => {}); collectScripted = null; }
@@ -1012,7 +1015,7 @@ export function createFactoryRouter() {
       const collectorModel = (await getFactorySettings()).collectorModel;
       pushCollectLog(`Model: ${collectorModel}`);
       const browserArgs = managed ? ['--mcp-config', mcpConfigPath] : ['--chrome'];
-      collectChild = spawn(config.factory.claudePath, ['-p', prompt, '--model', collectorModel, ...browserArgs, '--output-format', 'stream-json', '--verbose'], { cwd: collectorRoot, shell: false, windowsHide: true, env: buildSpawnEnv() });
+      collectChild = spawn(config.factory.claudePath, ['-p', prompt, '--model', collectorModel, ...browserArgs, '--output-format', 'stream-json', '--verbose'], { cwd: collectorRoot, shell: false, windowsHide: true, detached: ownProcessGroup, env: buildSpawnEnv(await claudeEnv()) });
       let streamBuffer = '';
       collectChild.stdout?.on('data', (chunk: Buffer) => {
         streamBuffer += chunk.toString('utf8');
@@ -1511,6 +1514,8 @@ export function createFactoryRouter() {
     if (collect.status === 'working') { response.status(409).json({ error: 'The key collector is busy — stop it in the wizard first.' }); return; }
     const storeName = String(request.body?.storeName ?? '').trim();
     if (storeName.length < 2) { response.status(422).json({ error: 'Give your store a name (at least 2 characters).' }); return; }
+    if (rightsMissing(request.body)) { response.status(422).json({ error: "Confirm that you own this website or have the owner's permission before building." }); return; }
+    void recordRights(String(request.body?.siteUrl ?? request.body?.reactFilesPath ?? ''), String(request.body?.shop ?? storeName));
     let siteUrl: string | null = null;
     if (request.body?.siteUrl) {
       try { const parsed = new URL(String(request.body.siteUrl)); if (!/^https?:$/.test(parsed.protocol)) throw new Error(); siteUrl = parsed.toString().replace(/\/$/, ''); }

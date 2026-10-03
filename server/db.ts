@@ -2,10 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { config } from './config';
 import type { GeneratedFile, SectionManifest } from '../src/shared/types';
+import { dataRoot, resourcePath } from './runtime-paths';
 
 const { Pool } = pg;
 
@@ -53,7 +53,11 @@ const FACTORY_JOB_COLUMNS = new Set(['status','status_detail','iteration','max_i
 // tables are mirrored to a JSON file (long-running clone jobs must not vanish on reload).
 // Disabled under vitest so tests stay hermetic.
 const factoryStatePersistence = !config.databaseUrl && config.factory.enabled && !process.env.VITEST;
-const factoryStatePath = path.join(config.factory.workspaceRoot, '.factory', 'state.json');
+// The desktop app keeps it in its own data folder, so choosing a different builds folder in
+// onboarding keeps the job list and settings (Claude connection, active workspace).
+const factoryStatePath = config.desktop
+  ? path.join(dataRoot, 'state.json')
+  : path.join(config.factory.workspaceRoot, '.factory', 'state.json');
 
 function hydrateFactoryMemory() {
   if (!factoryStatePersistence) return;
@@ -106,7 +110,7 @@ class Repository {
 
   async init() {
     if (!this.pool) return;
-    const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../migrations');
+    const migrationsDir = resourcePath('migrations');
     const files = (await readdir(migrationsDir)).filter((file) => file.endsWith('.sql')).sort();
     for (const file of files) await this.pool.query(await readFile(path.join(migrationsDir, file), 'utf8'));
   }

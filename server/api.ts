@@ -36,7 +36,7 @@ export function createApiRouter(){
       const ws=await getWorkspaceState().catch(()=>null);
       workspace={path:ws?.path??null,name:ws?.name??null,ready:Boolean(ws?.ready),projectCount:ws?.projects.length??0};
     }
-    response.json({authenticated:Boolean(record),shop:domain,persistent:db.persistent,shopify:shopifyStatus(),billing,claude,workspace});
+    response.json({authenticated:Boolean(record),shop:domain,persistent:db.persistent,shopify:shopifyStatus(),billing,claude,workspace,edition:config.edition,desktop:config.desktop});
   }));
   router.get('/shopify/status',(_request,response)=>response.json(shopifyStatus()));
   router.use(requireSession);

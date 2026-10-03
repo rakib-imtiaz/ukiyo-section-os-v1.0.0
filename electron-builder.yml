@@ -1,0 +1,66 @@
+# ThemeBot desktop installers. Run `npm run desktop:pack` on each OS (or let CI do it):
+# Windows → NSIS .exe, macOS → .dmg + .zip, Linux → AppImage + .deb.
+# Inputs come from scripts/desktop/build.mjs. Nothing is published from here (--publish never).
+appId: com.themebot.desktop
+productName: ThemeBot
+copyright: Copyright © 2026 ThemeBot
+electronVersion: 44.5.1
+
+directories:
+  app: build/desktop-app       # bundled main + preload — becomes app.asar
+  output: release
+  buildResources: desktop/assets
+
+# The app folder is self-contained (main + preload are bundled): never pull in the repo's
+# node_modules, and nothing to rebuild for Electron.
+files:
+  - "**/*"
+  - "!**/node_modules/**"
+npmRebuild: false
+nodeGypRebuild: false
+
+# Everything the server needs, next to app.asar (resources/). Real files, not inside the asar:
+# the server, QA scripts and templates are read and executed by the bundled Node runtime.
+# node_modules is listed on its own because electron-builder skips it inside a broader copy.
+extraResources:
+  - from: build/resources
+    to: .
+    filter: ["**/*", "!node_modules/**"]
+  - from: build/resources/node_modules
+    to: node_modules
+    filter: ["**/*"]
+  - from: build/runtime/${platform}-${arch}
+    to: runtime
+    filter: ["**/*"]
+
+asar: true
+compression: normal
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  artifactName: ThemeBot-Setup-${version}-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: ThemeBot
+
+mac:
+  target: [dmg, zip]
+  category: public.app-category.developer-tools
+  hardenedRuntime: true
+  artifactName: ThemeBot-${version}-${arch}.${ext}
+  extendInfo:
+    NSDesktopFolderUsageDescription: ThemeBot reads website projects and saves theme builds in folders you choose.
+    NSDocumentsFolderUsageDescription: ThemeBot reads website projects and saves theme builds in folders you choose.
+    NSDownloadsFolderUsageDescription: ThemeBot reads website projects and saves theme builds in folders you choose.
+
+linux:
+  target: [AppImage, deb]
+  category: Development
+  maintainer: ThemeBot
+  artifactName: ThemeBot-${version}-${arch}.${ext}

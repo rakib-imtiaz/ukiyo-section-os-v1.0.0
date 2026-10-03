@@ -265,8 +265,9 @@ class BrowserManager {
       headless: runHeadless, args,
       viewport: { width: config.browser.width, height: config.browser.height }, deviceScaleFactor: 1,
     };
-    if (engine.id === 'chrome') options.channel = 'chrome';
-    else if (engine.id === 'msedge') options.channel = 'msedge';
+    // The exact browser we found (Chrome, Edge, or a distro Chromium on Linux) — Playwright's
+    // channels only know the vendors' default install paths.
+    if (!engine.isolated && engine.executablePath) options.executablePath = engine.executablePath;
 
     // Persistent profile: cookies, sign-ins, and extension state survive stop/start & app restarts.
     try { fs.mkdirSync(config.browser.profileDir, { recursive: true }); } catch { /* ignore */ }

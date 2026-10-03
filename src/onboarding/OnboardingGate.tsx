@@ -3,9 +3,10 @@
 // demo panel lets an unconnected visitor see how the product works. Localhost-only backend.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  AlertCircle, AppWindow, ArrowLeft, Check, ChevronRight, Folder, FolderPlus, HardDrive, HelpCircle,
+  AlertCircle, AppWindow, ArrowLeft, Check, ChevronRight, Folder, FolderOpen, FolderPlus, HardDrive, HelpCircle,
   Info, KeyRound, Loader, Lock, RefreshCw, Sparkles, TerminalSquare,
 } from 'lucide-react';
+import { desktopBridge } from '../desktop-bridge';
 
 interface ClaudeStatus { connected: boolean; method: string | null; cliPresent: boolean; cliCredentialsPresent: boolean; claudePath: string; loginActive: boolean; reason?: string }
 interface ProgressLine { at: number; line: string }
@@ -202,10 +203,26 @@ function WorkspaceStep({ busy, setBusy, onBack, onSelected }: { busy: boolean; s
     if (ok) onSelected(); else setError(data?.error || 'Could not select that folder.');
   };
 
+  // Desktop app: the system's own folder picker (Explorer / Finder / GTK).
+  const pickNative = async () => {
+    if (!desktopBridge) return;
+    setError('');
+    const chosen = await desktopBridge.pickFolder(browse?.path ?? undefined);
+    if (chosen) await select(chosen);
+  };
+
   return (
     <div className="ob-panel">
       <h2>Choose a working directory</h2>
-      <p>ThemeBot initializes and remembers this folder. Existing clone projects inside it are discovered automatically.</p>
+      <p>ThemeBot initializes and remembers this folder. Existing clone projects inside it are discovered automatically{desktopBridge ? ', and new builds are saved here' : ''}.</p>
+
+      {desktopBridge && (
+        <div className="ob-row" style={{ marginBottom: 12 }}>
+          <button className="ob-btn ob-btn--accent ob-btn--lg" disabled={busy} onClick={() => void pickNative()}>
+            {busy ? <Loader className="spin" size={16} /> : <FolderOpen size={16} />} Choose a folder…
+          </button>
+        </div>
+      )}
 
       {recents.length > 0 && (
         <div className="ob-recents">

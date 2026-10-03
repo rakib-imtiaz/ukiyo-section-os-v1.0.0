@@ -15,6 +15,7 @@ import { config } from '../config';
 import { browserManager } from '../browser';
 import { buildSpawnEnv } from './runner';
 import { ingestReactSource } from './scaffolder';
+import { killTree, ownProcessGroup } from '../platform/proc';
 
 async function exists(target: string) { return access(target).then(() => true, () => false); }
 
@@ -268,11 +269,6 @@ function pushLog(run: PreviewRun, line: string) {
   event(run, kind, kind === 'net' ? tidyNet(clean) : clean);
 }
 
-function killTree(child: ChildProcess | null) {
-  if (!child || child.pid == null || child.exitCode !== null) return;
-  if (process.platform === 'win32') spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { shell: false, windowsHide: true });
-  else child.kill('SIGKILL');
-}
 
 async function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -311,7 +307,7 @@ function runNpm(run: PreviewRun, args: string, cwd: string, timeoutMs: number): 
     const command = `npm ${args} --loglevel=http`;
     pushLog(run, `$ ${command}`);
     event(run, 'info', `Downloading from registry.npmjs.org into ${path.join(path.basename(cwd), 'node_modules')}`);
-    const child = spawn(command, { cwd, shell: true, windowsHide: true, env: buildSpawnEnv({ CI: '1', npm_config_fund: 'false', npm_config_audit: 'false', npm_config_registry: 'https://registry.npmjs.org/' }) });
+    const child = spawn(command, { cwd, shell: true, windowsHide: true, detached: ownProcessGroup, env: buildSpawnEnv({ CI: '1', npm_config_fund: 'false', npm_config_audit: 'false', npm_config_registry: 'https://registry.npmjs.org/' }) });
     run.child = child;
     const onData = (chunk: Buffer) => { for (const line of chunk.toString('utf8').split(/\r?\n/)) pushLog(run, line); };
     child.stdout?.on('data', onData);
@@ -340,7 +336,7 @@ function startDevServer(run: PreviewRun, info: ProjectInfo, port: number): Promi
     const portArg = ['vite', 'next', 'remix', 'astro', 'gatsby'].includes(info.framework) ? ` -- --port ${port}` : '';
     const command = `npm run ${script}${portArg}`;
     pushLog(run, `$ ${command}`);
-    const child = spawn(command, { cwd: info.root, shell: true, windowsHide: true, env: buildSpawnEnv({ PORT: String(port), HOST: '127.0.0.1', BROWSER: 'none', CI: '1', FORCE_COLOR: '0' }) });
+    const child = spawn(command, { cwd: info.root, shell: true, windowsHide: true, detached: ownProcessGroup, env: buildSpawnEnv({ PORT: String(port), HOST: '127.0.0.1', BROWSER: 'none', CI: '1', FORCE_COLOR: '0' }) });
     run.child = child;
     let settled = false;
     const finish = (error: Error | null, url?: string) => {

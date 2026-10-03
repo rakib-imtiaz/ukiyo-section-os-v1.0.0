@@ -4,3 +4,5 @@ dist/
 .browser-profile/
 .themebot/
 coverage/
+build/
+release/

@@ -2,10 +2,10 @@ import { spawn } from 'node:child_process';
 import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile, access } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { config } from '../config';
 import { hmac } from '../security';
 import type { FactoryJobRecord } from '../db';
+import { resourcePath } from '../runtime-paths';
 
 /**
  * Per-job capability key for the localhost-only token-mint endpoint. Deterministically derived
@@ -16,7 +16,7 @@ import type { FactoryJobRecord } from '../db';
  */
 export function mintKeyFor(jobId: string) { return hmac(`factory-mint:${jobId}`); }
 
-export const TEMPLATES_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../templates/factory');
+export const TEMPLATES_ROOT = resourcePath('templates', 'factory');
 
 export function slugify(name: string) {
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40);
@@ -70,8 +70,9 @@ function runExtractor(command: string, args: string[]) {
 }
 
 /**
- * Extract a zip without adding npm deps: PowerShell Expand-Archive on win32 (spawn, shell:false),
- * falling back to `unzip` when present. Throws an actionable error when neither works.
+ * Extract a zip without adding npm deps, using what each OS ships: PowerShell Expand-Archive on
+ * Windows, `ditto` on macOS, `unzip` or Python's zipfile on Linux. Throws an actionable error
+ * when none works.
  */
 async function extractZip(zipPath: string, destDir: string) {
   await mkdir(destDir, { recursive: true });
@@ -84,14 +85,16 @@ async function extractZip(zipPath: string, destDir: string) {
         `Expand-Archive -LiteralPath ${quote(zipPath)} -DestinationPath ${quote(destDir)} -Force`],
     });
   }
+  if (process.platform === 'darwin') attempts.push({ label: 'ditto', command: 'ditto', args: ['-x', '-k', zipPath, destDir] });
   attempts.push({ label: 'unzip', command: 'unzip', args: ['-o', '-q', zipPath, '-d', destDir] });
+  if (process.platform === 'linux') attempts.push({ label: 'python3 zipfile', command: 'python3', args: ['-m', 'zipfile', '-e', zipPath, destDir] });
   const failures: string[] = [];
   for (const attempt of attempts) {
     const result = await runExtractor(attempt.command, attempt.args);
     if (result.code === 0) return;
     failures.push(`${attempt.label}: ${result.spawnError ? result.spawnError.message : `exit ${result.code}${result.stderr.trim() ? ` — ${result.stderr.trim().slice(0, 300)}` : ''}`}`);
   }
-  throw new Error(`Could not extract ${zipPath} (${failures.join('; ')}). Install PowerShell 5+ (Expand-Archive) or the "unzip" CLI, or extract the archive yourself and pass the folder path instead.`);
+  throw new Error(`Could not extract ${zipPath} (${failures.join('; ')}). Install the "unzip" tool, or extract the archive yourself and pass the folder path instead.`);
 }
 
 /** Zip archives usually wrap everything in one root folder — unwrap it so react_files/ holds the project directly. */

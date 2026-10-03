@@ -7,8 +7,11 @@
 import fs from 'node:fs';
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
+import { homedir } from 'node:os';
 import path from 'node:path';
+import { config } from './config';
 import { db } from './db';
+import { desktopSettingsFile, readDesktopSettings } from './runtime-paths';
 import { runQuickClaude, claudeEnv } from './claude-connect';
 import { trustWorkspace } from './factory/scaffolder';
 import { addProgress, beginTask } from './progress';
@@ -49,7 +52,7 @@ export async function browse(target?: string): Promise<{ path: string | null; pa
       for (let code = 65; code <= 90; code += 1) { const drive = `${String.fromCharCode(code)}:\\`; if (fs.existsSync(drive)) drives.push(drive); }
       return { path: null, parent: null, dirs: drives.map((drive) => ({ name: drive, path: drive })), drives };
     }
-    target = '/';
+    target = homedir(); // macOS/Linux: start at home (Desktop/Documents/projects live there)
   }
   if (!isValidAbsolute(target)) throw new Error('Path must be absolute.');
   const normalized = path.normalize(target);
@@ -105,12 +108,23 @@ export async function selectWorkspace(target: string, options: { create?: boolea
   await writeMarker(workspace, marker);
 
   await db.setSetting(ACTIVE_SETTING, workspace);
+  if (config.desktop) await useAsBuildsFolder(workspace);
   const recents = ((await db.getSetting(RECENTS_SETTING)) as string[] | null) ?? [];
   await db.setSetting(RECENTS_SETTING, [workspace, ...recents.filter((item) => item !== workspace)].slice(0, 6));
   await db.audit(null, 'workspace.select', 'app', { path: workspace, returning });
 
   void refreshWorkspace().catch((error) => addProgress(`Workspace scan failed: ${error instanceof Error ? error.message : 'unknown error'}`));
   return { state: await getWorkspaceState(), returning };
+}
+
+// Desktop app: the workspace the user picks is also where builds go. Saved outside the folder
+// (in the app's data folder) so the next launch starts there; applied live — every factory path
+// reads config.factory.workspaceRoot at call time.
+async function useAsBuildsFolder(workspace: string) {
+  const settings = { ...readDesktopSettings(), workspaceRoot: workspace };
+  await mkdir(path.dirname(desktopSettingsFile), { recursive: true });
+  await writeFile(desktopSettingsFile, JSON.stringify(settings, null, 2));
+  config.factory.workspaceRoot = workspace;
 }
 
 export async function activeWorkspace(): Promise<string | null> {

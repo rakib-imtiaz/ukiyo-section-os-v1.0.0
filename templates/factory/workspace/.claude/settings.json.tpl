@@ -17,6 +17,10 @@
       "Bash(cp:*)",
       "Bash(type:*)",
       "Bash(cat:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(wc:*)",
+      "Bash(pwd)",
       "Bash(curl:*)",
       "WebFetch(domain:{{REACT_HOST}})",
       "WebFetch(domain:{{SHOP_HOST}})",
@@ -29,7 +33,10 @@
       "Bash(rd:*)",
       "Bash(rmdir:*)",
       "Bash(del:*)",
-      "Bash(rm -rf:*)"
+      "Bash(rm -rf:*)",
+      "Bash(rm -r:*)",
+      "Bash(rm -fr:*)",
+      "Bash(rm -R:*)"
     ]
   }
 }

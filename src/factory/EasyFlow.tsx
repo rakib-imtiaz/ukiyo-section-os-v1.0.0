@@ -6,6 +6,7 @@ import { ActivityFeed } from './ActivityFeed';
 import { BuildScene } from './BuildScene';
 import { StoryPath, type StoryIcon, type StoryState } from './StoryPath';
 import { StoreCheckCard } from './StoreCheckCard';
+import { RightsCheck } from './RightsCheck';
 import { WatchVideoButton } from '../SetupVideo';
 import { BrowserQaSetup, QaChoice } from './QaChoice';
 import { FRAMEWORK_LABEL, type EasyRun, type EasyStatus, type FactorySettings, type PreviewRun, type ProjectInfo, type QaEngine } from './types';
@@ -413,10 +414,11 @@ export function EasyFlow({ onCreated, onCancel, renderManual }: {
   };
   const dirty = Boolean(storeName || siteUrl || reactFilesPath || step > 0);
 
+  const [rightsOk, setRightsOk] = useState(false);
   const start = async () => {
     setStarting(true);
     try {
-      const next = await api.easyStart({ storeName: storeName.trim(), siteUrl: siteUrl.trim() || undefined, reactFilesPath: reactFilesPath || undefined, intakeId: intakeId ?? undefined, qaEngine, shop: knownShop ?? undefined, newStore: newStore || undefined });
+      const next = await api.easyStart({ storeName: storeName.trim(), siteUrl: siteUrl.trim() || undefined, reactFilesPath: reactFilesPath || undefined, intakeId: intakeId ?? undefined, qaEngine, shop: knownShop ?? undefined, newStore: newStore || undefined, rightsConfirmed: rightsOk });
       setStatus(next);
       localStorage.removeItem(DRAFT_KEY);
     } catch (caught) {
@@ -557,6 +559,8 @@ export function EasyFlow({ onCreated, onCancel, renderManual }: {
         </Card>
       )}
 
+      {step === 3 && setupMode !== 'manual' && <RightsCheck checked={rightsOk} onChange={setRightsOk} />}
+
       {!(step === 3 && setupMode === 'manual') && <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Button variant="ghost" onClick={() => { if (dirty) setDiscardConfirm(true); else { reset(); onCancel(); } }}>Cancel</Button>
@@ -564,7 +568,7 @@ export function EasyFlow({ onCreated, onCancel, renderManual }: {
         </div>
         {step < 3
           ? <Button onClick={goNext}>{step === 2 ? (setupMode === 'script' ? 'Next' : 'Continue manually') : 'Next'} <ArrowRight /></Button>
-          : <Button size="lg" onClick={() => void start()} disabled={starting || chromeSetupMissing || (Boolean(knownShop) && !shopConfirmed)} title={chromeSetupMissing ? 'Finish the one-time Chrome setup first' : knownShop && !shopConfirmed ? 'Confirm the store above first' : undefined}>{starting ? <Spinner className="text-primary-foreground" /> : <Rocket />} Start — do it for me</Button>}
+          : <Button size="lg" onClick={() => void start()} disabled={starting || chromeSetupMissing || (Boolean(knownShop) && !shopConfirmed) || !rightsOk} title={chromeSetupMissing ? 'Finish the one-time Chrome setup first' : knownShop && !shopConfirmed ? 'Confirm the store above first' : !rightsOk ? 'Confirm you have the rights to this site first' : undefined}>{starting ? <Spinner className="text-primary-foreground" /> : <Rocket />} Start — do it for me</Button>}
       </div>}
 
       <ConfirmDialog

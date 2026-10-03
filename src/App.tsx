@@ -26,7 +26,7 @@ applyMotionSetting();
 // 'settings' is the Connections page (historic id); 'preferences' is the factory Settings panel.
 type View = 'home' | 'builds' | 'new' | 'projects' | 'settings' | 'preferences' | 'terminal' | 'browser';
 
-interface AppSession { authenticated:boolean; shop:string|null; persistent:boolean; shopify:{configured:boolean;apiVersion:string}; billing:null|{enabled:boolean;active:boolean;mode:string;subscriptions:unknown[]}; claude?:{connected:boolean;method:string|null}; workspace?:{path:string|null;name:string|null;ready:boolean;projectCount:number}; }
+interface AppSession { authenticated:boolean; shop:string|null; persistent:boolean; shopify:{configured:boolean;apiVersion:string}; billing:null|{enabled:boolean;active:boolean;mode:string;subscriptions:unknown[]}; claude?:{connected:boolean;method:string|null}; workspace?:{path:string|null;name:string|null;ready:boolean;projectCount:number}; edition?:'customer'|'internal'; desktop?:boolean; }
 /** Clone jobs surfaced as projects by the backend (kind 'clone'); section projects are legacy rows. */
 interface CloneMeta { react_url?:string; store_url?:string; status?:string; status_detail?:string|null; last_score?:number|null; }
 interface SavedProject { id:string; name:string; handle:string; description:string; kind?:'section'|'clone'|string; status?:string; clone_meta?:CloneMeta|null; factory_job_id?:string|null; created_at:string; updated_at:string; }
@@ -256,7 +256,7 @@ export default function App() {
       <IntroSplash />
       <div className="glass-window">
       <Sidebar
-        items={navItems.filter((item) => developerMode || (item.id !== 'terminal' && item.id !== 'browser'))}
+        items={navItems.filter((item) => (developerMode && session?.edition !== 'customer') || (item.id !== 'terminal' && item.id !== 'browser'))}
         view={view === 'new' ? 'builds' : view}
         onNavigate={(target) => { setFocusJobId(null); setView(target); }}
         settingsActive={view === 'preferences'}
@@ -341,6 +341,7 @@ export default function App() {
           claudeConnected={session?.claude?.connected ?? true}
           workspaceName={session?.workspace?.name ?? null}
           developerMode={developerMode}
+          showDeveloperTools={session?.edition !== 'customer'}
           onDeveloperMode={setDeveloperMode}
           onSwitchWorkspace={() => void switchWorkspace()}
           onLogoutClaude={() => void logoutClaude()}

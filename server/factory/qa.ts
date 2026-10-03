@@ -6,6 +6,7 @@ import { decrypt } from '../security';
 import type { FactoryJobRecord } from '../db';
 import { buildSpawnEnv } from './runner';
 import { DEFAULT_SCORE_WEIGHTS, type FactorySettings, type QaResult, type QaSubscores } from './types';
+import { killTree, ownProcessGroup } from '../platform/proc';
 
 // Global semaphore: at most 2 Playwright QA processes machine-wide regardless of job concurrency.
 let qaSlots = 2;
@@ -23,16 +24,14 @@ interface InteractionsReport { interaction: number; issues: QaIssue[]; }
 
 /** Kill a QA node process AND its Playwright/Chromium children (child.kill leaves them orphaned on Windows). */
 function killQaTree(child: ReturnType<typeof spawn>) {
-  if (child.pid == null || child.exitCode !== null) return;
-  if (process.platform === 'win32') spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { shell: false, windowsHide: true, env: buildSpawnEnv() });
-  else child.kill('SIGKILL');
+  killTree(child);
 }
 
 function runScript(job: FactoryJobRecord, script: string, iteration: number, storefrontPassword: string | null, logPath: string, timeoutMin: number, signal?: AbortSignal) {
   return new Promise<number>((resolve, reject) => {
     if (signal?.aborted) { reject(new Error('aborted')); return; }
     const child = spawn(process.execPath, [path.join('qa', 'factory', script), String(iteration)], {
-      cwd: job.workspace_path, shell: false, windowsHide: true,
+      cwd: job.workspace_path, shell: false, windowsHide: true, detached: ownProcessGroup,
       // SECURITY: explicit env, no process.env spread — the QA scripts get exactly the
       // variables they read (see templates/factory/qa/*.mjs) plus the OS basics from the
       // allowlist. App secrets (encryption key, DB URL, Shopify secrets) never leak in.

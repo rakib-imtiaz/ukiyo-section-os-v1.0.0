@@ -7,8 +7,11 @@ import { ImageOff, RefreshCw } from 'lucide-react';
 
 type ThumbStatus = { status: 'ready'; v: number; busy?: boolean } | { status: 'pending' } | { status: 'failed' };
 
-/** Same key the server uses: resolved path, lower-cased, Windows separators. */
-const keyOf = (path: string) => path.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
+/** Same key the server uses: resolved path, lower-cased, with that OS's separators
+ *  (backslashes for Windows paths, forward slashes on macOS/Linux). */
+const keyOf = (path: string) => (/^[a-z]:[\\/]|\\/i.test(path)
+  ? path.replace(/\//g, '\\').replace(/\\+$/, '')
+  : path.replace(/\/+$/, '') || '/').toLowerCase();
 
 // ---- shared store ----
 let statuses: Record<string, ThumbStatus> = {};

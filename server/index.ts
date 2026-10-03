@@ -1,6 +1,5 @@
 import 'dotenv/config';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { createApiRouter } from './api';
 import { beginShopifyAuth, completeShopifyAuth } from './auth';
@@ -15,8 +14,9 @@ import { createOnboardingRouter } from './onboarding-routes';
 import { normalizeShop, verifyWebhook } from './security';
 import { storeTokens } from './shopify';
 import { attachTerminal } from './terminal';
-import { attachBrowser } from './browser';
+import { attachBrowser, browserManager } from './browser';
 import { installWsHub } from './ws-hub';
+import { resourcePath } from './runtime-paths';
 
 validateProductionConfig();
 await db.init();
@@ -27,7 +27,6 @@ if(config.shopify.legacyShop&&config.shopify.legacyToken){
 }
 
 const app=express();
-const __dirname=path.dirname(fileURLToPath(import.meta.url));
 app.disable('x-powered-by');
 app.set('trust proxy',1);
 
@@ -36,7 +35,7 @@ app.use((_request,response,next)=>{
   response.setHeader('Referrer-Policy','strict-origin-when-cross-origin');
   response.setHeader('Permissions-Policy','camera=(), microphone=(), geolocation=()');
   response.setHeader('X-Frame-Options','DENY');
-  response.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self'; frame-src https://www.youtube-nocookie.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://*.myshopify.com");
+  response.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: https:; connect-src 'self'; frame-src https://www.youtube-nocookie.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://*.myshopify.com");
   next();
 });
 
@@ -58,7 +57,7 @@ app.post('/auth/logout',(request,response)=>{response.clearCookie('vso_session',
 app.get('/api/health',(_request,response)=>response.json({ok:true,name:'ThemeBot',version:'1.0.0',database:db.persistent?'postgres':'memory',uptimeSec:Math.round(process.uptime())}));
 // Setup tutorial video (rendered by Remotion into video/setup-guide/out — gitignored, may be
 // absent on fresh clones). sendFile handles Range requests, so seeking works in <video>.
-const setupVideoPath=path.resolve(__dirname,'../video/setup-guide/out/setup-guide.mp4');
+const setupVideoPath=resourcePath('video','setup-guide','out','setup-guide.mp4');
 app.get('/api/setup-video',(_request,response)=>{
   response.sendFile(setupVideoPath,(error)=>{if(error&&!response.headersSent)response.status(404).json({error:'The setup video has not been rendered on this machine.'});});
 });
@@ -70,8 +69,10 @@ const rejectMcpMethod=(_request:express.Request,response:express.Response)=>{res
 app.post('/mcp-local',requireLocalMcp,handleLocalMcp);
 app.get('/mcp-local',rejectMcpMethod);app.delete('/mcp-local',rejectMcpMethod);
 
-if(process.env.NODE_ENV==='production'){
-  const dist=path.resolve(__dirname,'../dist');app.use(express.static(dist,{maxAge:'1h',etag:true}));app.use((_request,response)=>response.sendFile(path.join(dist,'index.html')));
+// The built UI: served in production and by the desktop app (its window loads this server's own
+// origin, so every relative /api call, WebSocket and localhost-only check works unchanged).
+if(process.env.NODE_ENV==='production'||config.desktop){
+  const dist=resourcePath('dist');app.use(express.static(dist,{maxAge:'1h',etag:true}));app.use((_request,response)=>response.sendFile(path.join(dist,'index.html')));
 }
 
 app.use((error:unknown,_request:express.Request,response:express.Response,_next:express.NextFunction)=>{
@@ -80,9 +81,27 @@ app.use((error:unknown,_request:express.Request,response:express.Response,_next:
 
 if(config.factory.enabled){await ensureWorkspaceRoot();await factoryScheduler.boot();}
 
-const server=app.listen(config.port,config.host,()=>console.log(`ThemeBot listening on ${config.appUrl} (bound to ${config.host}:${config.port})`));
+const server=app.listen(config.port,config.host,()=>{
+  console.log(`ThemeBot listening on ${config.appUrl} (bound to ${config.host}:${config.port})`);
+  process.send?.({type:'ready',port:config.port}); // tells the desktop host the window can open
+});
+// A busy port must fail loudly with a known exit code: the desktop host retries on another port.
+server.on('error',(error:NodeJS.ErrnoException)=>{
+  if(error.code==='EADDRINUSE'){console.error(`Port ${config.port} is already in use.`);process.exit(98);}
+  throw error;
+});
 attachTerminal();
 attachBrowser();
 installWsHub(server);
-const shutdown=async()=>{server.close();if(config.factory.enabled){stopAllPreviews();await factoryScheduler.shutdown();flushFactoryState();}await db.close();process.exit(0);};
+let shuttingDown=false;
+const shutdown=async()=>{
+  if(shuttingDown)return;shuttingDown=true;
+  server.close();
+  if(config.factory.enabled){stopAllPreviews();await factoryScheduler.shutdown();flushFactoryState();}
+  await browserManager.close().catch(()=>{});
+  await db.close();process.exit(0);
+};
 process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);
+// Windows has no SIGTERM for child processes, so the desktop host asks over the IPC channel.
+process.on('message',(message)=>{if((message as {type?:string})?.type==='shutdown')void shutdown();});
+process.on('disconnect',()=>void shutdown()); // host gone (crashed or killed) — don't linger

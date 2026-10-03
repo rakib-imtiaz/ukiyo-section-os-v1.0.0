@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { chromium, type Browser } from 'playwright';
+import { detectEngines } from './browser';
 
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 /** A site that failed (down, 404, blank) is retried after a day, or at once via Retake. */
@@ -31,7 +32,7 @@ export const thumbPath = (workspace: string, projectPath: string) =>
 async function launch(): Promise<Browser> {
   if (browser?.isConnected()) return browser;
   try { browser = await chromium.launch({ headless: true }); }
-  catch { browser = await chromium.launch({ headless: true, channel: 'chrome' }); }
+  catch { browser = await chromium.launch({ headless: true, executablePath: detectEngines().find((engine) => engine.id === 'chrome' && engine.available)?.executablePath }); }
   return browser;
 }
 
