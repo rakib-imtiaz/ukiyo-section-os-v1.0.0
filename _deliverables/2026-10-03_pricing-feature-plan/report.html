@@ -1,0 +1,549 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ThemeBot Pricing Plan</title>
+<style>
+  :root {
+    --ink: #0f1b3d; --ink-2: #44506b; --ink-3: #6b7690; --line: #e3e8f2; --soft: #f4f7fc;
+    --blue: #2a78d6; --orange: #eb6834; --aqua: #1baf7a; --yellow: #e0a100; --red: #e34948; --purple: #7c5cd6; --pink: #d6457a; --grey: #7d879c;
+    --ok: #15803d; --warn: #b45309; --bad: #b42318;
+  }
+  @page { size: A4; margin: 14mm 14mm 16mm; }
+  * { box-sizing: border-box; }
+  body { margin: 0; color: var(--ink); font: 11pt/1.45 "Segoe UI", system-ui, Arial, sans-serif; }
+  h1, h2, h3, p { margin: 0; }
+  .page { page-break-after: always; display: flex; flex-direction: column; gap: 14px; }
+  .page:last-child { page-break-after: auto; }
+  .eyebrow { color: var(--blue); font-size: 8.5pt; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+  h2 { font-size: 24pt; letter-spacing: -.02em; line-height: 1.1; }
+  .lead { color: var(--ink-2); font-size: 12pt; }
+  .muted { color: var(--ink-3); }
+  .card { border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; background: #fff; break-inside: avoid; }
+  .soft { background: var(--soft); border-color: transparent; }
+  .row { display: grid; gap: 12px; }
+  .r2 { grid-template-columns: 1fr 1fr; } .r3 { grid-template-columns: repeat(3, 1fr); } .r4 { grid-template-columns: repeat(4, 1fr); }
+  .ic { display: inline-grid; place-items: center; border-radius: 12px; flex: 0 0 auto; }
+  .ic svg { width: 58%; height: 58%; fill: none; stroke: #fff; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+  .ct { font-weight: 800; font-size: 12pt; }
+  .chip { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 8.5pt; font-weight: 800; letter-spacing: .03em; white-space: nowrap; }
+  .chip.est { background: #fdf1e3; color: var(--warn); }
+  .rec { display: flex; gap: 12px; align-items: center; border-radius: 14px; padding: 12px 16px; background: #eef5ff; border: 1px solid #c8dcfa; font-size: 11pt; break-inside: avoid; }
+  .rec .ic { width: 34px; height: 34px; background: var(--blue); }
+  .rec b { color: #1d5bb8; }
+  .foot { font-size: 8.6pt; color: var(--ink-3); }
+
+  /* cover */
+  .cover { height: 262mm; justify-content: space-between; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 15pt; }
+  .brand i { width: 30px; height: 30px; border-radius: 9px; background: linear-gradient(140deg, #4d82ff, #2f6bff); display: grid; place-items: center; }
+  .brand i::after { content: ''; width: 12px; height: 12px; border: 3px solid #fff; border-radius: 50%; }
+  .cover h1 { font-size: 44pt; line-height: 1.02; letter-spacing: -.03em; }
+  .hero { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .hero .card { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; padding: 20px 14px; }
+  .hero .big { font-size: 30pt; font-weight: 800; letter-spacing: -.03em; line-height: 1; }
+  .hero p { font-size: 10.5pt; color: var(--ink-2); }
+
+  /* rings */
+  .ring { position: relative; display: grid; place-items: center; }
+  .ring b { position: absolute; font-size: 17pt; font-weight: 800; }
+  .ring b.sm { font-size: 9.5pt; color: var(--ink-3); text-align: center; line-height: 1.1; }
+
+  /* status */
+  .status { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .status .card { padding: 12px 14px; }
+  .status h3 { font-size: 12pt; display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .status h3 .ic { width: 28px; height: 28px; border-radius: 9px; }
+  .li { display: flex; gap: 8px; align-items: center; font-size: 10pt; padding: 4px 0; }
+  .dot { width: 18px; height: 18px; border-radius: 50%; display: inline-grid; place-items: center; flex: 0 0 auto; }
+  .dot svg { width: 12px; height: 12px; fill: none; stroke: #fff; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+  .dot.d { background: var(--aqua); } .dot.p { background: var(--yellow); } .dot.x { background: #d3d8e2; }
+  .nums { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .nums .card { padding: 12px; text-align: center; }
+  .nums b { display: block; font-size: 19pt; letter-spacing: -.02em; }
+  .nums span { font-size: 9pt; color: var(--ink-3); }
+
+  /* fast track */
+  .days { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+  .wk { font-size: 9pt; font-weight: 800; color: var(--ink-3); letter-spacing: .1em; text-transform: uppercase; margin: 2px 0 -4px; }
+  .day { border-radius: 14px; padding: 10px; color: #fff; display: flex; flex-direction: column; gap: 6px; min-height: 120px; position: relative; break-inside: avoid; }
+  .day .n { font-size: 8.5pt; font-weight: 700; opacity: .9; }
+  .day .ic { width: 30px; height: 30px; background: rgba(255,255,255,.22); border-radius: 9px; }
+  .day b { font-size: 10.5pt; line-height: 1.2; }
+  .day small { font-size: 8.5pt; opacity: .92; line-height: 1.25; }
+  .day .flag { position: absolute; top: -9px; right: 8px; background: var(--ink); color: #fff; font-size: 7.5pt; font-weight: 800; padding: 2px 8px; border-radius: 999px; letter-spacing: .04em; }
+  .three { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .three .card h3 { font-size: 11.5pt; display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .three .card h3 .ic { width: 28px; height: 28px; border-radius: 9px; }
+  .three .li { font-size: 9.8pt; }
+
+  /* products */
+  .prod { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .prod .card { padding: 0; overflow: hidden; }
+  .prod .top { padding: 14px 16px; color: #fff; display: flex; align-items: center; gap: 12px; }
+  .prod .top .ic { width: 44px; height: 44px; background: rgba(255,255,255,.2); }
+  .prod .top b { font-size: 15pt; display: block; }
+  .prod .top span { font-size: 9.5pt; opacity: .9; }
+  .prod .body { padding: 8px 16px 14px; }
+  .fact { display: grid; grid-template-columns: 30px 1fr; gap: 10px; align-items: center; padding: 7px 0; border-bottom: 1px dashed var(--line); }
+  .fact:last-child { border-bottom: 0; }
+  .fact .ic { width: 30px; height: 30px; border-radius: 9px; }
+  .fact small { display: block; font-size: 8.3pt; color: var(--ink-3); text-transform: uppercase; letter-spacing: .06em; font-weight: 700; }
+  .fact span { font-size: 10.5pt; }
+  .todo { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .todo span { font-size: 9pt; border-radius: 999px; padding: 4px 10px; background: var(--soft); }
+
+  /* gantt */
+  .gantt { display: grid; grid-template-columns: 200px 1fr; padding-right: 22px; }
+  .gantt .l { padding: 7px 10px 7px 0; display: flex; align-items: center; gap: 8px; font-size: 10pt; line-height: 1.2; }
+  .gantt .l .ic { width: 26px; height: 26px; border-radius: 8px; }
+  .gantt .t { position: relative; height: 44px; border-top: 1px solid var(--line); background: repeating-linear-gradient(90deg, transparent 0 calc(100% / 6 - 1px), #edf0f6 calc(100% / 6 - 1px) calc(100% / 6)); }
+  .gantt .t i { position: absolute; top: 13px; height: 18px; border-radius: 6px; }
+  .gantt .t i.ms { width: 14px; height: 14px; top: 15px; border-radius: 3px; transform: translateX(-7px) rotate(45deg); background: var(--ink); }
+  .gantt .axis { position: relative; height: 32px; }
+  .gantt .axis span { position: absolute; transform: translateX(-50%); font-size: 8pt; color: var(--ink-3); text-align: center; line-height: 1.15; white-space: nowrap; }
+  .gantt .axis span b { color: var(--ink); display: block; }
+  .dates { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .dates .card { padding: 12px; display: flex; gap: 10px; align-items: center; }
+  .dates .ic { width: 34px; height: 34px; }
+  .dates b { display: block; font-size: 11pt; }
+  .dates span { font-size: 9pt; color: var(--ink-2); }
+
+  /* milestones */
+  .ms { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .m { border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; display: grid; grid-template-columns: 40px 1fr; gap: 12px; break-inside: avoid; }
+  .m .ic { width: 40px; height: 40px; }
+  .m b { font-size: 11.5pt; display: block; }
+  .m .when { font-size: 8.8pt; color: var(--ink-3); font-weight: 700; }
+  .m p { font-size: 9.8pt; color: var(--ink-2); margin-top: 4px; }
+  .m .done { margin-top: 6px; font-size: 9.3pt; background: #e9f8f1; color: #0f5e3a; border-radius: 8px; padding: 5px 9px; display: flex; gap: 6px; align-items: center; }
+  .m .done .dot { width: 16px; height: 16px; }
+
+  /* effort + risks */
+  .eff { display: grid; grid-template-columns: 120px 1fr 54px; gap: 10px; align-items: center; font-size: 10pt; margin: 6px 0; }
+  .eff i { display: block; height: 16px; border-radius: 5px; }
+  .eff b { text-align: right; }
+  .risks { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .risk { border-radius: 14px; padding: 12px; background: #fff7f1; border: 1px solid #f7d6c2; display: flex; flex-direction: column; gap: 6px; break-inside: avoid; }
+  .risk .ic { width: 30px; height: 30px; background: var(--orange); border-radius: 9px; }
+  .risk b { font-size: 10.5pt; }
+  .risk span { font-size: 9.3pt; color: var(--ink-2); }
+  .ask { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+  .ask div { text-align: center; padding: 12px 8px; border-radius: 14px; background: var(--soft); font-size: 9.5pt; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .ask .ic { width: 36px; height: 36px; background: var(--blue); }
+  .take { border-radius: 14px; padding: 14px 18px; background: var(--ink); color: #fff; font-size: 12pt; }
+  .take b { color: #9cc3ff; }
+  /* why page */
+  .cmp-plans { display: grid; grid-template-columns: 150px 1fr; padding-right: 40px; }
+  .cmp-plans .l { font-size: 10pt; padding: 8px 10px 8px 0; line-height: 1.2; }
+  .cmp-plans .l b { display: block; }
+  .cmp-plans .l small { color: var(--ink-3); font-size: 8.5pt; }
+  .cmp-plans .t { position: relative; height: 50px; border-top: 1px solid var(--line); background: repeating-linear-gradient(90deg, transparent 0 calc(100% / 6 - 1px), #edf0f6 calc(100% / 6 - 1px) calc(100% / 6)); }
+  .cmp-plans .t .line { position: absolute; top: 23px; height: 4px; border-radius: 2px; background: #d9dee8; left: 0; }
+  .cmp-plans .t .pt { position: absolute; top: 16px; width: 18px; height: 18px; border-radius: 50%; transform: translateX(-9px); border: 3px solid #fff; box-shadow: 0 0 0 1px rgba(15,27,61,.15); }
+  .cmp-plans .t .end { position: absolute; top: 15px; font-size: 9.5pt; font-weight: 800; white-space: nowrap; transform: translateX(12px); }
+  .cmp-plans .axis { position: relative; height: 24px; }
+  .cmp-plans .axis span { position: absolute; transform: translateX(-50%); font-size: 8pt; color: var(--ink-3); white-space: nowrap; }
+  .lg { display: inline-block; width: 11px; height: 11px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
+  .split { display: flex; height: 30px; border-radius: 8px; overflow: hidden; gap: 2px; }
+  .split i { display: grid; place-items: center; color: #fff; font-style: normal; font-weight: 800; font-size: 10pt; }
+  .split-l { display: grid; grid-template-columns: 35% 30% 20% 15%; margin-top: 6px; }
+  .split-l div { padding-right: 8px; font-size: 9.3pt; line-height: 1.25; }
+  .split-l b { display: block; }
+  .split-l span { color: var(--ink-3); font-size: 8.6pt; }
+  .why { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .why > div { border: 1px solid var(--line); border-radius: 14px; padding: 11px 12px; display: flex; flex-direction: column; gap: 4px; break-inside: avoid; }
+  .why .ic { width: 30px; height: 30px; border-radius: 9px; }
+  .why b { font-size: 10.5pt; }
+  .why > div > span:last-child { font-size: 9.2pt; color: var(--ink-2); }
+  /* plan v6 */
+  .phases { display: grid; grid-template-columns: 1fr; gap: 10px; }
+  .ph { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; break-inside: avoid; }
+  .ph-h { display: flex; align-items: center; gap: 10px; padding: 9px 14px; color: #fff; }
+  .ph-h .ic { width: 30px; height: 30px; background: rgba(255,255,255,.22); border-radius: 9px; }
+  .ph-h b { font-size: 11.5pt; }
+  .ph-h span.w { margin-left: auto; font-size: 9pt; font-weight: 700; opacity: .95; white-space: nowrap; }
+  .ph-b { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 18px; padding: 9px 14px 10px; }
+  .ph-b .li { font-size: 9.6pt; padding: 3px 0; }
+  .ph-f { font-size: 9.2pt; background: #e9f8f1; color: #0f5e3a; padding: 6px 14px; display: flex; gap: 6px; align-items: center; }
+  .ph-f .dot { width: 16px; height: 16px; }
+  .num-dot { width: 18px; height: 18px; border-radius: 50%; background: var(--soft); color: var(--ink-2); font-size: 8pt; font-weight: 800; display: inline-grid; place-items: center; flex: 0 0 auto; }
+
+  .plans3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .pc { border: 1px solid var(--line); border-radius: 16px; padding: 14px; display: flex; flex-direction: column; gap: 6px; break-inside: avoid; }
+  .pc.pop { border: 2px solid var(--pink); box-shadow: 0 10px 22px -16px rgba(214,69,122,.7); }
+  .pc .tier { font-weight: 800; font-size: 11.5pt; display: flex; justify-content: space-between; align-items: center; }
+  .pc .amt { font-size: 26pt; font-weight: 800; letter-spacing: -.03em; line-height: 1; }
+  .pc .amt small { font-size: 10pt; color: var(--ink-3); font-weight: 600; }
+  .pc .li { font-size: 9.6pt; padding: 2px 0; }
+  .pc .for { font-size: 9pt; color: var(--ink-3); }
+  .tag2 { font-size: 7.5pt; font-weight: 800; padding: 2px 8px; border-radius: 999px; background: #fde7ef; color: #a32858; letter-spacing: .04em; }
+  .desk2 { display: grid; grid-template-columns: 1.15fr 1fr 1fr; gap: 10px; }
+  .pc.d { border-color: #d9cff5; } .pc.d.pop { border: 2px solid var(--purple); box-shadow: 0 10px 22px -16px rgba(124,92,214,.7); }
+  .pc.d .tag2 { background: #efeafc; color: #5a3fb0; }
+
+  .ue { display: grid; grid-template-columns: 170px 1fr 120px; gap: 10px; align-items: center; margin: 7px 0; font-size: 10pt; }
+  .ue .bar { position: relative; height: 22px; background: #f1f3f8; border-radius: 6px; }
+  .ue .bar i { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 6px; }
+  .ue .bar i.c { background: #f3b28f; }
+  .ue .bar i.p { background: transparent; border: 2px solid var(--ink); border-left: 0; border-radius: 0 6px 6px 0; }
+  .ue .bar em { position: absolute; top: 3px; font-style: normal; font-size: 8.6pt; font-weight: 800; }
+  .ue .mg { font-weight: 800; text-align: right; }
+  .ue .mg small { display: block; font-weight: 600; color: var(--ink-3); font-size: 8.3pt; }
+
+  .burn { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; align-items: end; height: 210px; padding: 0 10px; border-bottom: 2px solid var(--line); }
+  .burn .col { display: flex; flex-direction: column; justify-content: flex-end; height: 100%; gap: 2px; align-items: stretch; }
+  .burn .col .tot { text-align: center; font-weight: 800; font-size: 12pt; margin-bottom: 4px; }
+  .burn .col i { display: block; border-radius: 4px; }
+  .burn-l { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; padding: 6px 10px 0; text-align: center; font-size: 9.3pt; }
+  .burn-l b { display: block; font-size: 10pt; }
+  .burn-l span { color: var(--ink-3); font-size: 8.6pt; }
+  table.bt { width: 100%; border-collapse: collapse; font-size: 9.4pt; }
+  .bt th { text-align: right; font-size: 8pt; color: var(--ink-3); text-transform: uppercase; letter-spacing: .05em; padding: 5px 8px; border-bottom: 2px solid var(--line); }
+  .bt th:first-child, .bt td:first-child { text-align: left; }
+  .bt td { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: right; }
+  .bt tr.sum td { font-weight: 800; border-bottom: 0; background: var(--soft); }
+  .bt i.sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+  .be { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .be div { border-radius: 14px; background: var(--soft); padding: 12px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .be .ic { width: 34px; height: 34px; }
+  .be b { font-size: 16pt; }
+  .be span { font-size: 9pt; color: var(--ink-2); }
+  .handsbrain { display: grid; grid-template-columns: 1fr 70px 1fr; align-items: center; gap: 8px; }
+  .handsbrain .side { border-radius: 14px; padding: 12px 14px; }
+  .handsbrain .side b { display: block; font-size: 11pt; margin-bottom: 4px; }
+  .handsbrain .side span { font-size: 9.3pt; }
+  .handsbrain .mid { text-align: center; font-size: 18pt; color: var(--ink-3); }
+  table.vt { width: 100%; border-collapse: collapse; font-size: 8.9pt; }
+  .vt th { text-align: left; font-size: 7.6pt; color: var(--ink-3); text-transform: uppercase; letter-spacing: .05em; padding: 4px 6px; border-bottom: 2px solid var(--line); }
+  .vt td { padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-align: top; line-height: 1.25; }
+  .vt td small { display: block; color: var(--ink-3); font-size: 7.6pt; }
+  .vt td:nth-child(4), .vt td:nth-child(5), .vt th:nth-child(4), .vt th:nth-child(5) { text-align: right; white-space: nowrap; }
+  .vt td.y { font-weight: 700; } .vt td.n { color: #c3c8d4; }
+  .vt tr.grp td { background: var(--soft); font-size: 7.6pt; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); padding: 3px 6px; }
+  .vs { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .vs-col { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+  .vs-h { color: #fff; display: flex; gap: 10px; align-items: center; padding: 10px 14px; }
+  .vs-h .ic { width: 32px; height: 32px; background: rgba(255,255,255,.22); border-radius: 9px; }
+  .vs-h b { display: block; font-size: 12pt; } .vs-h span { font-size: 9pt; opacity: .92; }
+  .vs-r { display: grid; grid-template-columns: 64px 1fr; gap: 10px; align-items: center; padding: 7px 12px; border-top: 1px solid var(--line); }
+  .vs-r b { font-size: 10pt; display: block; } .vs-r small { font-size: 8.6pt; color: var(--ink-3); line-height: 1.25; display: block; }
+  .wkb { color: #fff; font-size: 8.4pt; font-weight: 800; text-align: center; border-radius: 7px; padding: 4px 0; }
+  .three .li { align-items: flex-start; }
+  .rr { display: grid; grid-template-columns: 34px 1fr auto; gap: 12px; align-items: center; padding: 9px 0; border-bottom: 1px dashed var(--line); }
+  .rr:last-child { border-bottom: 0; }
+  .rr .ic { width: 34px; height: 34px; border-radius: 10px; }
+  .rr b { display: block; font-size: 10.8pt; } .rr small { font-size: 9pt; color: var(--ink-3); }
+  .verdict { font-size: 8.6pt; font-weight: 800; padding: 4px 11px; border-radius: 999px; white-space: nowrap; }
+  .verdict.ok { background: #e3f6ec; color: var(--ok); } .verdict.mid { background: #fdf1e3; color: var(--warn); } .verdict.no { background: #fde9e9; color: var(--bad); }
+  .found { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+  .found > div { border: 1px solid #f7d6c2; background: #fff7f1; border-radius: 12px; padding: 10px; display: flex; flex-direction: column; gap: 4px; }
+  .found .ic { width: 28px; height: 28px; border-radius: 8px; }
+  .found b { font-size: 9.6pt; line-height: 1.2; } .found > div > span:last-child { font-size: 8.5pt; color: var(--ink-2); line-height: 1.25; }
+  /* pricing & feature plan */
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .vcard { border-radius: 16px; overflow: hidden; border: 1px solid var(--line); break-inside: avoid; }
+  .vcard .top { padding: 14px 16px; color: #fff; display: flex; gap: 12px; align-items: center; }
+  .vcard .top .ic { width: 42px; height: 42px; background: rgba(255,255,255,.2); }
+  .vcard .top b { display: block; font-size: 15pt; } .vcard .top span { font-size: 9.5pt; opacity: .92; }
+  .vcard .body { padding: 10px 16px 14px; }
+  .pc-list { display: flex; flex-direction: column; gap: 5px; margin-top: 4px; }
+  .pc-list div { display: grid; grid-template-columns: 22px 1fr; gap: 8px; font-size: 9.8pt; line-height: 1.35; align-items: start; }
+  .pc-list .sign { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-weight: 800; font-size: 11pt; line-height: 1; margin-top: 1px; }
+  .plus { background: var(--aqua); } .minus { background: var(--red); }
+  .sub { font-size: 8pt; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); margin: 8px 0 2px; }
+
+  table.fm { width: 100%; border-collapse: collapse; font-size: 9.3pt; }
+  .fm th { font-size: 8.5pt; text-align: center; padding: 8px 6px; border-bottom: 2px solid var(--line); vertical-align: bottom; }
+  .fm th small { display: block; font-weight: 600; color: var(--ink-3); font-size: 7.8pt; }
+  .fm th.desk { background: #efeafc; border-radius: 10px 10px 0 0; color: #5a3fb0; }
+  .fm td { padding: 6px; border-bottom: 1px solid var(--line); text-align: center; }
+  .fm td:first-child, .fm th:first-child { text-align: left; }
+  .fm td.desk { background: #f7f4fe; font-weight: 700; }
+  .fm tr.grp td { background: var(--soft); font-size: 7.8pt; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); padding: 4px 6px; }
+  .fm .y { color: var(--ok); font-weight: 800; } .fm .n { color: #c3c8d4; }
+  .tag-soon { font-size: 7pt; font-weight: 800; padding: 1px 6px; border-radius: 999px; background: #fdf1e3; color: var(--warn); margin-left: 4px; vertical-align: 1px; }
+
+  .prem { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .pm { display: grid; grid-template-columns: 40px 1fr; gap: 12px; border: 1px solid #ddd3f7; background: #faf8ff; border-radius: 14px; padding: 12px 14px; break-inside: avoid; }
+  .pm .ic { width: 40px; height: 40px; background: var(--purple); }
+  .pm b { display: block; font-size: 11pt; } .pm span { font-size: 9.4pt; color: var(--ink-2); }
+
+  .plans { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .plan { border: 1px solid var(--line); border-radius: 16px; padding: 14px; display: flex; flex-direction: column; gap: 6px; break-inside: avoid; }
+  .plan.pop { border: 2px solid var(--pink); }
+  .plan.d { border-color: #d9cff5; } .plan.d.pop { border: 2px solid var(--purple); }
+  .plan .tier { font-weight: 800; font-size: 11.5pt; display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+  .plan .amt { font-size: 25pt; font-weight: 800; letter-spacing: -.03em; line-height: 1; }
+  .plan .amt small { font-size: 10pt; color: var(--ink-3); font-weight: 600; }
+  .plan .for { font-size: 9pt; color: var(--ink-3); }
+  .plan .li { font-size: 9.5pt; padding: 1px 0; }
+  .tagp { font-size: 7.3pt; font-weight: 800; padding: 2px 8px; border-radius: 999px; background: #fde7ef; color: #a32858; letter-spacing: .04em; }
+  .plan.d .tagp { background: #efeafc; color: #5a3fb0; }
+
+  .flow { display: grid; grid-template-columns: 1fr 26px 1fr 26px 1fr 26px 1.25fr; align-items: center; gap: 4px; }
+  .flow .st { border-radius: 14px; padding: 10px; text-align: center; font-size: 9.3pt; color: #fff; min-height: 86px; display: flex; flex-direction: column; justify-content: center; gap: 4px; }
+  .flow .st b { font-size: 10.5pt; } .flow .st .ic { width: 28px; height: 28px; background: rgba(255,255,255,.22); margin: 0 auto; border-radius: 8px; }
+  .flow .ar { text-align: center; color: var(--ink-3); font-size: 15pt; }
+  .flow .fsplit { display: flex; flex-direction: column; gap: 6px; }
+  .flow .fsplit .st { display: block; min-height: 0; padding: 9px 10px; line-height: 1.3; }
+  .flow .fsplit .st b { display: block; }
+  .rules { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .rule { border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; display: grid; grid-template-columns: 34px 1fr; gap: 10px; break-inside: avoid; }
+  .rule .ic { width: 34px; height: 34px; }
+  .rule b { display: block; font-size: 10.8pt; } .rule span { font-size: 9.4pt; color: var(--ink-2); }
+  .addons { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .addons div { border-radius: 14px; background: var(--soft); padding: 12px; display: flex; flex-direction: column; gap: 3px; }
+  .addons b { font-size: 14pt; } .addons span { font-size: 8.8pt; color: var(--ink-2); }
+  .take { border-radius: 14px; padding: 14px 18px; background: var(--ink); color: #fff; font-size: 12pt; }
+  .take b { color: #9cc3ff; }
+</style>
+</head>
+<body>
+
+<!-- ================= COVER ================= -->
+<section class="page cover">
+  <div class="brand"><i></i> ThemeBot</div>
+  <div style="display:flex;flex-direction:column;gap:18px">
+    <div class="eyebrow">Pricing &amp; feature plan · 3 October 2026</div>
+    <h1>Two versions,<br>one engine</h1>
+    <p class="lead" style="max-width:155mm">A <b>desktop app</b> that agencies install and run on their own AI account, and a <b>web app</b> in the browser where freelancers and studios buy builds from us. What each one includes, what it costs, its strengths and weaknesses, and how we keep both up to date.</p>
+    <div class="hero">
+      <div class="card"><div class="ic" style="width:84px;height:84px;border-radius:42px;background:var(--purple)" data-i="monitor"></div><div class="ct">Desktop · agencies</div><p>from <b>$1,495</b> once<br>+ yearly updates</p></div>
+      <div class="card"><div class="ic" style="width:84px;height:84px;border-radius:42px;background:var(--pink)" data-i="globe"></div><div class="ct">Web app · studios</div><p>from <b>$79 / month</b><br>builds included</p></div>
+      <div class="card"><div class="ic" style="width:84px;height:84px;border-radius:42px;background:var(--orange)" data-i="spark"></div><div class="ct">Desktop is premium</div><p>unlimited builds on their<br>own AI · automatic store setup</p></div>
+    </div>
+  </div>
+  <p class="foot">Prices are our proposal, for review. <span class="chip est">PLANNED</span> marks features that aren't built yet. Same engine and quality in both versions.</p>
+</section>
+
+<!-- ================= 1. AT A GLANCE ================= -->
+<section class="page">
+  <div class="eyebrow">1 · The two versions</div>
+  <h2>Who each version is for</h2>
+  <div class="two">
+    <div class="vcard">
+      <div class="top" style="background:var(--purple)"><span class="ic" data-i="monitor"></span><div><b>Desktop app</b><span>Agencies that build many stores</span></div></div>
+      <div class="body">
+        <div class="fact"><span class="ic" style="background:var(--purple)" data-i="download"></span><div><small>Runs</small><span>Installed on Windows, Mac or Linux</span></div></div>
+        <div class="fact"><span class="ic" style="background:var(--purple)" data-i="key"></span><div><small>They pay</small><span>One-time licence + yearly updates</span></div></div>
+        <div class="fact"><span class="ic" style="background:var(--purple)" data-i="spark"></span><div><small>AI</small><span>Their own AI account (subscription or key)</span></div></div>
+        <div class="fact"><span class="ic" style="background:var(--purple)" data-i="shield"></span><div><small>Their files</small><span>Stay on their own computers</span></div></div>
+        <div class="fact"><span class="ic" style="background:var(--purple)" data-i="calendar"></span><div><small>Ready</small><span>First version now · full version January</span></div></div>
+      </div>
+    </div>
+    <div class="vcard">
+      <div class="top" style="background:var(--pink)"><span class="ic" data-i="globe"></span><div><b>Web app</b><span>Freelancers and small studios</span></div></div>
+      <div class="body">
+        <div class="fact"><span class="ic" style="background:var(--pink)" data-i="globe"></span><div><small>Runs</small><span>In the browser, nothing to install</span></div></div>
+        <div class="fact"><span class="ic" style="background:var(--pink)" data-i="coin"></span><div><small>They pay</small><span>Monthly plan with builds included</span></div></div>
+        <div class="fact"><span class="ic" style="background:var(--pink)" data-i="spark"></span><div><small>AI</small><span>Included in the plan (or their own AI key)</span></div></div>
+        <div class="fact"><span class="ic" style="background:var(--pink)" data-i="shield"></span><div><small>Their files</small><span>In their ThemeBot account</span></div></div>
+        <div class="fact"><span class="ic" style="background:var(--pink)" data-i="calendar"></span><div><small>Ready</small><span>Beta in about 4–20 weeks (pace decides)</span></div></div>
+      </div>
+    </div>
+  </div>
+  <div class="rec"><span class="ic" data-i="spark"></span><span><b>Same engine, same quality.</b> The difference is who runs it, who pays for the AI, and how much is automated.</span></div>
+</section>
+
+<!-- ================= 2. PROS & CONS ================= -->
+<section class="page">
+  <div class="eyebrow">2 · Strengths and weaknesses</div>
+  <h2>Pros and cons of each version</h2>
+  <div class="two">
+    <div class="vcard">
+      <div class="top" style="background:var(--purple)"><span class="ic" data-i="monitor"></span><div><b>Desktop app</b><span>for the agency</span></div></div>
+      <div class="body">
+        <div class="sub">For the customer</div>
+        <div class="pc-list">
+          <div><span class="sign plus">+</span><span>No per-build fees: builds run on their own AI plan</span></div>
+          <div><span class="sign plus">+</span><span>Store, app and keys set up automatically in their own browser</span></div>
+          <div><span class="sign plus">+</span><span>Client files stay on their own computers</span></div>
+          <div><span class="sign plus">+</span><span>Several builds at once; no waiting in a queue</span></div>
+          <div><span class="sign minus">−</span><span>Must install it, plus Chrome and their AI tool</span></div>
+          <div><span class="sign minus">−</span><span>Computer must stay on while a build runs (hours)</span></div>
+        </div>
+        <div class="sub">For us</div>
+        <div class="pc-list">
+          <div><span class="sign plus">+</span><span>No AI cost: high margin on every licence</span></div>
+          <div><span class="sign plus">+</span><span>Large upfront payments fund the web app</span></div>
+          <div><span class="sign minus">−</span><span>Support across three operating systems</span></div>
+          <div><span class="sign minus">−</span><span>Updates reach people only when they restart</span></div>
+          <div><span class="sign minus">−</span><span>Build method sits on their machine until the cloud brain (Jan)</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="vcard">
+      <div class="top" style="background:var(--pink)"><span class="ic" data-i="globe"></span><div><b>Web app</b><span>for freelancers &amp; studios</span></div></div>
+      <div class="body">
+        <div class="sub">For the customer</div>
+        <div class="pc-list">
+          <div><span class="sign plus">+</span><span>Nothing to install; works on any computer</span></div>
+          <div><span class="sign plus">+</span><span>No AI account needed; start in minutes</span></div>
+          <div><span class="sign plus">+</span><span>Builds keep running when their laptop is closed</span></div>
+          <div><span class="sign plus">+</span><span>Easy to share with a team in the browser</span></div>
+          <div><span class="sign minus">−</span><span>Limited builds per month; extra builds cost more</span></div>
+          <div><span class="sign minus">−</span><span>They create the store first, then connect it</span></div>
+        </div>
+        <div class="sub">For us</div>
+        <div class="pc-list">
+          <div><span class="sign plus">+</span><span>Predictable monthly revenue</span></div>
+          <div><span class="sign plus">+</span><span>Everyone always on the latest version</span></div>
+          <div><span class="sign plus">+</span><span>Build method never leaves our servers</span></div>
+          <div><span class="sign minus">−</span><span>We pay the AI and servers for every build</span></div>
+          <div><span class="sign minus">−</span><span>We hold customer data: privacy and backups matter</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 3. FEATURE MATRIX ================= -->
+<section class="page">
+  <div class="eyebrow">3 · Features</div>
+  <h2>What each plan includes</h2>
+  <div class="card" style="padding:6px 10px">
+    <table class="fm">
+      <tr><th></th><th>Starter<small>web</small></th><th>Studio<small>web</small></th><th>Agency<small>web</small></th><th class="desk">Desktop<small>agency licence</small></th></tr>
+      <tr class="grp"><td colspan="5">Building</td></tr>
+      <tr><td>Store builds per month</td><td>1</td><td>4</td><td>10</td><td class="desk">Unlimited*</td></tr>
+      <tr><td>Extra builds</td><td>$45</td><td>$45</td><td>$45</td><td class="desk">Free on own AI</td></tr>
+      <tr><td>Builds at the same time</td><td>1</td><td>1</td><td>2</td><td class="desk">2–4</td></tr>
+      <tr><td>Quality check &amp; automatic fixes</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="desk y">✓</td></tr>
+      <tr><td>Live build view &amp; progress</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="desk y">✓</td></tr>
+      <tr><td>Rebuild only what's missing</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="desk y">✓</td></tr>
+      <tr class="grp"><td colspan="5">Store setup</td></tr>
+      <tr><td>Upload to a draft theme (never live)</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="desk y">✓</td></tr>
+      <tr><td>Automatic store + app + keys setup</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="desk y">✓</td></tr>
+      <tr><td>Connect an existing store</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="desk y">✓</td></tr>
+      <tr class="grp"><td colspan="5">Team &amp; clients</td></tr>
+      <tr><td>Seats (people)</td><td>1</td><td>3</td><td>10</td><td class="desk">3 (+$395 each)</td></tr>
+      <tr><td>Client &amp; project history</td><td class="n">—</td><td class="y">✓</td><td class="y">✓</td><td class="desk y">✓</td></tr>
+      <tr><td>White-label client report (PDF)<span class="tag-soon">PLANNED</span></td><td class="n">—</td><td class="n">—</td><td class="y">✓</td><td class="desk y">✓</td></tr>
+      <tr class="grp"><td colspan="5">AI, data &amp; support</td></tr>
+      <tr><td>Use your own AI account</td><td class="n">—</td><td>API key</td><td>API key</td><td class="desk">Subscription or key</td></tr>
+      <tr><td>Files kept on your computer</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="desk y">✓</td></tr>
+      <tr><td>Early access to new features<span class="tag-soon">PLANNED</span></td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="desk y">✓</td></tr>
+      <tr><td>Support</td><td>Email</td><td>Email</td><td>Priority</td><td class="desk">Priority + direct line</td></tr>
+    </table>
+  </div>
+  <p class="foot">* Limited only by their own AI plan and computer. Quality checks never use up a build. Seat and build numbers are proposals.</p>
+</section>
+
+<!-- ================= 4. WHY DESKTOP IS PREMIUM ================= -->
+<section class="page">
+  <div class="eyebrow">4 · What makes the agency version premium</div>
+  <h2>Why agencies pay more for desktop</h2>
+  <p class="lead">The web app sells builds. The desktop app sells a production line the agency owns.</p>
+  <div class="prem">
+    <div class="pm"><span class="ic" data-i="spark"></span><div><b>Unlimited builds</b><span>Runs on their own AI plan, so there are no per-build fees. The more stores they build, the cheaper each one gets.</span></div></div>
+    <div class="pm"><span class="ic" data-i="store"></span><div><b>Automatic store setup</b><span>Creates the Shopify store, the app and its keys in their own browser. Web users have to do this themselves.</span></div></div>
+    <div class="pm"><span class="ic" data-i="clock"></span><div><b>Several builds at once</b><span>Run 2–4 client stores at the same time on their own computers, with no shared queue.</span></div></div>
+    <div class="pm"><span class="ic" data-i="shield"></span><div><b>Client work stays in-house</b><span>Source sites, themes and reports stay on the agency's computers, which agencies with strict clients need.</span></div></div>
+    <div class="pm"><span class="ic" data-i="users"></span><div><b>Built for teams</b><span>Seats per person, client history across every project, and cheap extra seats.</span></div></div>
+    <div class="pm"><span class="ic" data-i="check2"></span><div><b>White-label client reports</b><span>Before/after PDF reports with the agency's own logo for their clients. <span class="tag-soon">PLANNED</span></span></div></div>
+    <div class="pm"><span class="ic" data-i="flag"></span><div><b>Early access</b><span>New features reach the agency channel first, and founding agencies help shape the roadmap. <span class="tag-soon">PLANNED</span></span></div></div>
+    <div class="pm"><span class="ic" data-i="key"></span><div><b>They own the tool</b><span>A one-time licence keeps working, even if they stop paying for updates.</span></div></div>
+  </div>
+  <div class="rec"><span class="ic" data-i="coin"></span><span><b>Break-even for an agency:</b> at 10 stores a month the web Agency plan costs about $6,000 a year. A desktop licence is $2,495 once (+$795 a year from year two): it pays for itself in about 5 months, or about 8 counting their own AI plan.</span></div>
+</section>
+
+<!-- ================= 5. PRICING ================= -->
+<section class="page">
+  <div class="eyebrow">5 · Pricing · our proposal</div>
+  <h2>What customers pay</h2>
+  <div class="ct"><span class="ic" style="width:26px;height:26px;border-radius:8px;background:var(--pink);vertical-align:-7px;margin-right:6px" data-i="globe"></span>Web app · monthly</div>
+  <div class="plans">
+    <div class="plan"><div class="tier">Starter</div><div class="amt">$79<small>/mo</small></div><div class="for">freelancers</div><div class="li">1 build a month · 1 seat</div><div class="li">Extra builds $45</div></div>
+    <div class="plan pop"><div class="tier">Studio <span class="tagp">MOST POPULAR</span></div><div class="amt">$199<small>/mo</small></div><div class="for">small studios</div><div class="li">4 builds a month · 3 seats</div><div class="li">Own AI key allowed</div></div>
+    <div class="plan"><div class="tier">Agency</div><div class="amt">$499<small>/mo</small></div><div class="for">busy studios</div><div class="li">10 builds a month · 10 seats</div><div class="li">Priority support</div></div>
+  </div>
+  <div class="ct"><span class="ic" style="width:26px;height:26px;border-radius:8px;background:var(--purple);vertical-align:-7px;margin-right:6px" data-i="monitor"></span>Desktop app · licence</div>
+  <div class="plans">
+    <div class="plan d pop"><div class="tier">Founding <span class="tagp">FIRST 10</span></div><div class="amt">$1,495<small> once</small></div><div class="for">then $495 / year for updates</div><div class="li">3 seats · price locked</div><div class="li">Direct line to us</div></div>
+    <div class="plan d"><div class="tier">Standard</div><div class="amt">$2,495<small> once</small></div><div class="for">then $795 / year for updates</div><div class="li">3 seats · extra seat $395</div><div class="li">Priority support</div></div>
+    <div class="plan d"><div class="tier">AI for desktop</div><div class="amt" style="font-size:16pt;margin-top:4px">Their choice</div><div class="li">Own AI subscription: free</div><div class="li">Own AI key: free</div><div class="li">Our credits: $45 a build (Jan)</div></div>
+  </div>
+  <div class="ct">Add-ons</div>
+  <div class="addons">
+    <div><b>$45</b><span>extra build (web) or a credit (desktop)</span></div>
+    <div><b>$395</b><span>extra desktop seat</span></div>
+    <div><b>~$2,000</b><span>we build the store for the client</span></div>
+    <div><b>14 days</b><span>web trial with a card</span></div>
+  </div>
+</section>
+
+<!-- ================= 6. VERSION CONTROL ================= -->
+<section class="page">
+  <div class="eyebrow">6 · Keeping both versions up to date</div>
+  <h2>How we control versions</h2>
+  <p class="lead">One engine and one version number for both products. Every update is tested once, then reaches desktop and web together.</p>
+  <div class="card">
+    <div class="flow">
+      <div class="st" style="background:var(--blue)"><span class="ic" data-i="spark"></span><b>Build &amp; test</b><span>one engine, e.g. v1.4</span></div>
+      <div class="ar">→</div>
+      <div class="st" style="background:var(--orange)"><span class="ic" data-i="flag"></span><b>Early access</b><span>founding agencies first</span></div>
+      <div class="ar">→</div>
+      <div class="st" style="background:var(--aqua)"><span class="ic" data-i="check2"></span><b>Stable</b><span>everyone, a few days later</span></div>
+      <div class="ar">→</div>
+      <div class="fsplit">
+        <div class="st" style="background:var(--purple)"><b>Desktop</b><span>downloads quietly, installs on restart</span></div>
+        <div class="st" style="background:var(--pink)"><b>Web</b><span>live for everyone at once</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="rules">
+    <div class="rule"><span class="ic" style="background:var(--purple)" data-i="key"></span><div><b>Updates follow the licence</b><span>Desktop updates are included while the yearly plan is active. If it lapses, the app keeps working on the last version they had.</span></div></div>
+    <div class="rule"><span class="ic" style="background:var(--orange)" data-i="warn"></span><div><b>Safety updates for everyone</b><span>When Shopify or the AI provider changes something, we can require a minimum version so no one runs a build that would fail.</span></div></div>
+    <div class="rule"><span class="ic" style="background:var(--blue)" data-i="check"></span><div><b>One code base, plan switches</b><span>Both versions share the same code; each plan simply switches features on or off. No separate copies to maintain.</span></div></div>
+    <div class="rule"><span class="ic" style="background:var(--pink)" data-i="globe"></span><div><b>Web rolls out gradually</b><span>We can send a new web version to a small share of users first, then everyone, and undo it in minutes if needed.</span></div></div>
+    <div class="rule"><span class="ic" style="background:var(--aqua)" data-i="spark"></span><div><b>The engine improves for all</b><span>From January the build method runs on our server, so improvements reach every desktop and web user at once, without an app update.</span></div></div>
+    <div class="rule"><span class="ic" style="background:var(--grey)" data-i="calendar"></span><div><b>Clear release notes</b><span>Every version gets a short "what's new" inside the app and a changelog page.</span></div></div>
+  </div>
+</section>
+
+<!-- ================= 7. RECOMMENDATIONS ================= -->
+<section class="page">
+  <div class="eyebrow">7 · Recommendations</div>
+  <h2>What we suggest</h2>
+  <div class="prem">
+    <div class="pm" style="border-color:#c8dcfa;background:#f3f8ff"><span class="ic" style="background:var(--blue)" data-i="monitor"></span><div><b>Sell desktop first</b><span>It is ready first, costs us nothing in AI, and the founding licences fund the web app.</span></div></div>
+    <div class="pm" style="border-color:#c8dcfa;background:#f3f8ff"><span class="ic" style="background:var(--blue)" data-i="users"></span><div><b>Cap founding licences at 10</b><span>Early agencies get a lower price for feedback and patience. Scarcity helps sales.</span></div></div>
+    <div class="pm" style="border-color:#c8dcfa;background:#f3f8ff"><span class="ic" style="background:var(--blue)" data-i="coin"></span><div><b>Launch web credits only when cheap</b><span>Open paid web plans once a build costs us about $20 or less, so every plan earns about 50%.</span></div></div>
+    <div class="pm" style="border-color:#c8dcfa;background:#f3f8ff"><span class="ic" style="background:var(--blue)" data-i="store"></span><div><b>Keep the gap clear</b><span>Automatic store setup and unlimited builds stay desktop-only: that's why agencies pay more.</span></div></div>
+  </div>
+  <div class="card soft">
+    <div class="ct" style="margin-bottom:6px">Decisions for you</div>
+    <div class="li"><span class="dot d" data-i="check"></span>Approve or adjust the prices and the build/seat numbers</div>
+    <div class="li"><span class="dot d" data-i="check"></span>Updates included for 1 year, then $495 / $795 a year: keep or change</div>
+    <div class="li"><span class="dot d" data-i="check"></span>Offer web seats to desktop customers as a bundle later?</div>
+  </div>
+  <div class="take"><b>In short:</b> desktop is the premium tool agencies own and run on their own AI. Web is the easy monthly option. One engine, one version number, and updates reach both.</div>
+</section>
+
+<script>
+const I = {
+  check: '<path d="M5 12l5 5L20 7"/>',
+  check2: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8.5 12l2.5 2.5 4.5-5"/>',
+  dash: '<path d="M7 12h10"/>',
+  dots: '<path d="M7 12h.01M12 12h.01M17 12h.01"/>',
+  x: '<path d="M7 7l10 10M17 7L7 17"/>',
+  flag: '<path d="M6 21V4M6 4h11l-2.5 4.5L17 13H6"/>',
+  monitor: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16.5 6.5l2.5 2.5M14 9l2 2"/>',
+  download: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
+  spark: '<path d="M12 3l2.2 5.8L20 11l-5.8 2.2L12 19l-2.2-5.8L4 11l5.8-2.2z"/>',
+  users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6M16 4.8a3.5 3.5 0 0 1 0 6.4M18 14.3c2 .7 3.5 2.6 3.5 5.7"/>',
+  calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
+  warn: '<path d="M12 3.5L21.5 20h-19z"/><path d="M12 10v4.5M12 17.5v.01"/>',
+  coin: '<circle cx="12" cy="12" r="9"/><path d="M14.8 9.2c-.4-1-1.5-1.7-2.8-1.7-1.6 0-2.8.9-2.8 2.1 0 2.9 5.6 1.6 5.6 4.6 0 1.2-1.2 2.2-2.8 2.2-1.4 0-2.5-.7-2.9-1.8M12 6v1.5M12 16.6V18"/>',
+  store: '<path d="M4 9l1.5-5h13L20 9M4 9h16v11H4zM10 20v-5h4v5"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/>',
+  shield: '<path d="M12 3l8 3v6c0 4.8-3.4 7.9-8 9-4.6-1.1-8-4.2-8-9V6z"/><path d="M9 12l2 2 4-4"/>',
+};
+document.querySelectorAll('[data-i]').forEach((el) => { el.innerHTML = `<svg viewBox="0 0 24 24">${I[el.dataset.i]}</svg>` + el.innerHTML; if (!el.classList.contains('dot') && !el.classList.contains('ic')) el.classList.add('ic'); });
+
+</script>
+</body>
+</html>
