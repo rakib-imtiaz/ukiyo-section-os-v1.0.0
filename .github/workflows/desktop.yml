@@ -1,11 +1,16 @@
 # Builds the ThemeBot desktop installers on each OS (an installer can only be built on its own OS).
 # Produces downloadable workflow artifacts only — nothing is published or released from here.
+#
+# ThemeBot Cloud: set the repository VARIABLES (Settings → Secrets and variables → Actions →
+# Variables; not secrets, both values are public) THEMEBOT_CLOUD_URL (https://<your cloud domain>)
+# and THEMEBOT_CLOUD_PUBKEY (from https://<your cloud domain>/v1/public-key) to build installers that
+# sign in to that Cloud. Unset = installers that need no account (as before). See deploy/README.md.
 name: Desktop installers
 
+# Runs only when started by hand (Actions → Desktop installers → Run workflow): on a private repo
+# every run spends Actions minutes, and the macOS runners count 10× against the free allowance.
 on:
   workflow_dispatch:
-  push:
-    branches: [desktop-electron]
 
 jobs:
   build:
@@ -32,7 +37,15 @@ jobs:
       - name: Tests
         run: npm test
       - name: Build installer
-        run: npm run desktop:pack
+        # Only this step sees the Cloud address, so the tests above run exactly as before. An unset
+        # variable arrives as an empty string, which scripts/desktop/build.mjs treats as "no Cloud".
+        env:
+          THEMEBOT_CLOUD_URL: ${{ vars.THEMEBOT_CLOUD_URL }}
+          THEMEBOT_CLOUD_PUBKEY: ${{ vars.THEMEBOT_CLOUD_PUBKEY }}
+        shell: bash
+        run: |
+          if [ -n "$THEMEBOT_CLOUD_URL" ]; then echo "Cloud build: sign-in to $THEMEBOT_CLOUD_URL"; else echo "No Cloud: installers need no account"; fi
+          npm run desktop:pack
       - uses: actions/upload-artifact@v4
         with:
           name: themebot-${{ matrix.os }}

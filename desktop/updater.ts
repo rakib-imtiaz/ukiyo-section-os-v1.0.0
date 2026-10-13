@@ -7,8 +7,13 @@
 import { app, dialog, type BrowserWindow } from 'electron';
 import { autoUpdater } from 'electron-updater';
 
+let configured = false;
+let logLine: (line: string) => void = () => {};
+
 export function startAutoUpdates(feedUrl: string | undefined, window: () => BrowserWindow | null, log: (line: string) => void) {
   if (!feedUrl || !app.isPackaged) return;
+  configured = true;
+  logLine = log;
   autoUpdater.setFeedURL({ provider: 'generic', url: feedUrl });
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
@@ -31,4 +36,14 @@ export function startAutoUpdates(feedUrl: string | undefined, window: () => Brow
   const check = () => { autoUpdater.checkForUpdates().catch((error: unknown) => log(`[update] check failed: ${String(error)}`)); };
   setTimeout(check, 30_000).unref(); // after startup settles
   setInterval(check, 6 * 60 * 60 * 1000).unref();
+}
+
+/**
+ * Checks for an update right away (the "Update required" screen). The download and the restart
+ * prompt follow the normal flow above. False when this build has no update address.
+ */
+export function checkForUpdatesNow(): boolean {
+  if (!configured) return false;
+  autoUpdater.checkForUpdates().catch((error: unknown) => logLine(`[update] check failed: ${String(error)}`));
+  return true;
 }

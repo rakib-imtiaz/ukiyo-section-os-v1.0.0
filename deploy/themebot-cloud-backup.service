@@ -1,0 +1,38 @@
+# Nightly SQLite backup of ThemeBot Cloud — run by themebot-cloud-backup.timer.
+# Installed by setup-server.sh as /etc/systemd/system/themebot-cloud-backup.service.
+# Run one now:      sudo systemctl start themebot-cloud-backup
+# See the result:   journalctl -u themebot-cloud-backup -n 20
+#
+# Cron instead of the timer (one line in /etc/cron.d/themebot-cloud-backup):
+#   17 3 * * * themebot /usr/local/sbin/themebot-cloud-backup backup nightly
+
+[Unit]
+Description=ThemeBot Cloud database backup
+After=themebot-cloud.service
+
+[Service]
+Type=oneshot
+User=themebot
+Group=themebot
+Environment=CLOUD_DATA_DIR=/var/lib/themebot-cloud
+Environment=BACKUP_DIR=/var/backups/themebot-cloud
+Environment=KEEP_DAYS=14
+ExecStart=/usr/local/sbin/themebot-cloud-backup backup nightly
+Nice=10
+IOSchedulingClass=idle
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+# The live database is opened for reading, but SQLite's WAL mode needs to write its -shm file.
+ReadWritePaths=/var/lib/themebot-cloud /var/backups/themebot-cloud
+PrivateTmp=yes
+ProtectHome=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+UMask=0077
+# For an offsite copy over the network (see backup.sh), nothing here needs to change.

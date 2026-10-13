@@ -12,9 +12,10 @@ export interface SidebarNavItem<V extends string> {
   icon: LucideIcon;
 }
 
-interface Health { ok: boolean; version: string; database: string; uptimeSec: number }
+interface Health { ok: boolean; version: string; database: string; uptimeSec: number; cloud?: { required: boolean; signedIn: boolean; offline: boolean } }
 
-/** Live server health for the top-bar status pill — polls every 30s, pauses when hidden. */
+/** Live server health for the top-bar status pill — polls every 30s, pauses when hidden.
+ *  cloudOffline: a desktop build that needs ThemeBot's servers can't reach them (builds wait). */
 export function useHealth() {
   const [health, setHealth] = useState<Health | null>(null);
   const [state, setState] = useState<'checking' | 'online' | 'offline'>('checking');
@@ -32,7 +33,7 @@ export function useHealth() {
     const timer = setInterval(() => { if (!document.hidden) void tick(); }, 30_000);
     return () => { alive = false; clearInterval(timer); };
   }, []);
-  return { health, state };
+  return { health, state, cloudOffline: state === 'online' && Boolean(health?.cloud?.required && health.cloud.offline) };
 }
 
 export default function Sidebar<V extends string>({ items, view, onNavigate, settingsActive, onOpenSettings, dark, onToggleTheme }: {

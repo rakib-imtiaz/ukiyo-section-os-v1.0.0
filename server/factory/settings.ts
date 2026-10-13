@@ -1,6 +1,6 @@
 import { config } from '../config';
 import { db } from '../db';
-import { BOT_MODELS, DEFAULT_SCORE_WEIGHTS, type BotModel, type FactorySettings } from './types';
+import { BOT_MODELS, BUILD_ENGINES, DEFAULT_SCORE_WEIGHTS, type BotModel, type BuildEngine, type FactorySettings } from './types';
 
 const SETTINGS_KEY = 'factory_settings';
 
@@ -10,11 +10,28 @@ const ENV_LOCKED = new Set(
     .filter((name) => Boolean(process.env[name]?.trim())),
 );
 
+/** THEMEBOT_BUILD_ENGINE=themebot|claude-code picks the engine for every build (and locks the setting). */
+export function envBuildEngine(env: NodeJS.ProcessEnv = process.env): BuildEngine | null {
+  const value = env.THEMEBOT_BUILD_ENGINE?.trim().toLowerCase();
+  return BUILD_ENGINES.includes(value as BuildEngine) ? value as BuildEngine : null;
+}
+/** THEMEBOT_ENGINE_BUDGET_USD=<dollars> sets the per-build cap (and locks the setting). */
+export function envEngineBudget(env: NodeJS.ProcessEnv = process.env): number | null {
+  const raw = env.THEMEBOT_ENGINE_BUDGET_USD?.trim();
+  const value = raw ? Number(raw) : NaN;
+  return Number.isFinite(value) && value >= 0 ? Math.min(value, MAX_ENGINE_BUDGET_USD) : null;
+}
+export const DEFAULT_ENGINE_BUDGET_USD = 25;
+const MAX_ENGINE_BUDGET_USD = 2000;
+
 export function factoryDefaults(): FactorySettings {
   return {
+    buildEngine: 'claude-code',
+    engineBudgetUsd: DEFAULT_ENGINE_BUDGET_USD,
     cloneModel: 'opus',
     collectorModel: 'opus',
     concurrency: config.factory.defaultConcurrency,
+    pageConcurrency: 2,
     launchStaggerSec: config.factory.launchStaggerSec,
     inactivityTimeoutMin: config.factory.inactivityTimeoutMin,
     cloneTimeoutMin: config.factory.cloneTimeoutMin,
@@ -40,16 +57,22 @@ export const lockedFields = () => ({
   cloneTimeoutMin: ENV_LOCKED.has('FACTORY_CLONE_TIMEOUT_MIN'),
   fixTimeoutMin: ENV_LOCKED.has('FACTORY_FIX_TIMEOUT_MIN'),
   qaTimeoutMin: ENV_LOCKED.has('FACTORY_QA_TIMEOUT_MIN'),
+  buildEngine: envBuildEngine() !== null,
+  engineBudgetUsd: envEngineBudget() !== null,
 });
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
 export function sanitizeSettings(input: Partial<FactorySettings>, base: FactorySettings): FactorySettings {
   const next = { ...base, ...input };
+  next.buildEngine = BUILD_ENGINES.includes(next.buildEngine) ? next.buildEngine : base.buildEngine;
+  const budget = Number(next.engineBudgetUsd);
+  next.engineBudgetUsd = Number.isFinite(budget) ? clamp(Math.round(budget * 100) / 100, 0, MAX_ENGINE_BUDGET_USD) : base.engineBudgetUsd;
   const model = (value: unknown, fallback: BotModel): BotModel => BOT_MODELS.includes(value as BotModel) ? value as BotModel : fallback;
   next.cloneModel = model(next.cloneModel, base.cloneModel);
   next.collectorModel = model(next.collectorModel, base.collectorModel);
   next.concurrency = clamp(Math.round(next.concurrency), 1, 5);
+  next.pageConcurrency = clamp(Math.round(Number(next.pageConcurrency) || base.pageConcurrency), 1, 4);
   next.launchStaggerSec = clamp(next.launchStaggerSec, 0, 600);
   next.inactivityTimeoutMin = clamp(next.inactivityTimeoutMin, 5, 120);
   next.cloneTimeoutMin = clamp(next.cloneTimeoutMin, 30, 720);
@@ -73,16 +96,28 @@ export function sanitizeSettings(input: Partial<FactorySettings>, base: FactoryS
   return next;
 }
 
-export async function getFactorySettings(): Promise<FactorySettings> {
+async function storedSettings(): Promise<FactorySettings> {
   const stored = await db.getSetting(SETTINGS_KEY) as Partial<FactorySettings> | null;
   return sanitizeSettings(stored ?? {}, factoryDefaults());
 }
 
+/** Env choices for the build engine win over what was saved (the UI shows them as locked). They are
+ *  applied on read only, so a temporary env var is never written into the saved settings. */
+function withEnvOverrides(settings: FactorySettings): FactorySettings {
+  const engine = envBuildEngine();
+  const budget = envEngineBudget();
+  return { ...settings, ...(engine ? { buildEngine: engine } : {}), ...(budget !== null ? { engineBudgetUsd: budget } : {}) };
+}
+
+export async function getFactorySettings(): Promise<FactorySettings> {
+  return withEnvOverrides(await storedSettings());
+}
+
 export async function updateFactorySettings(patch: Partial<FactorySettings>): Promise<FactorySettings> {
-  const current = await getFactorySettings();
+  const current = await storedSettings();
   const locked = lockedFields();
   for (const [field, isLocked] of Object.entries(locked)) if (isLocked) delete (patch as Record<string, unknown>)[field];
   const next = sanitizeSettings(patch, current);
   await db.setSetting(SETTINGS_KEY, next);
-  return next;
+  return withEnvOverrides(next);
 }

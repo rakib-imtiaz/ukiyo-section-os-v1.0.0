@@ -11,6 +11,20 @@ const VIDEO_SRC = window.location.port === '5173'
   : '/api/setup-video';
 const DURATION = '1:44';
 
+// The video is a rendered file that isn't in every build (e.g. CI builds of the desktop app).
+// Ask once; the entry points hide themselves rather than offer a video that isn't there.
+let availability: Promise<boolean> | null = null;
+function useVideoAvailable() {
+  const [available, setAvailable] = useState<boolean | null>(null);
+  useEffect(() => {
+    availability ??= fetch(VIDEO_SRC, { method: 'HEAD' }).then((response) => response.ok, () => false);
+    let alive = true;
+    void availability.then((ok) => { if (alive) setAvailable(ok); });
+    return () => { alive = false; };
+  }, []);
+  return available;
+}
+
 function VideoModal({ onClose }: { onClose: () => void }) {
   const [missing, setMissing] = useState(false);
   useEffect(() => {
@@ -41,6 +55,7 @@ function VideoModal({ onClose }: { onClose: () => void }) {
 
 export function WatchVideoButton({ label = 'Watch how it works', variant = 'outline' }: { label?: string; variant?: 'outline' | 'link' }) {
   const [open, setOpen] = useState(false);
+  if (useVideoAvailable() === false) return null;
   return (
     <>
       <button type="button" className={variant === 'link' ? 'glink gvid__link' : 'gbtn gbtn--outline'} onClick={() => setOpen(true)}>
@@ -57,6 +72,7 @@ export function WatchVideoButton({ label = 'Watch how it works', variant = 'outl
 export function WatchVideoCard() {
   const [open, setOpen] = useState(false);
   const [ready, setReady] = useState(false);
+  if (useVideoAvailable() === false) return null;
   return (
     <>
       <button type="button" className="glass-card gvcard" onClick={() => setOpen(true)} aria-label={`Watch how ThemeBot works, ${DURATION}`}>

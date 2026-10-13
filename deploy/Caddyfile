@@ -1,0 +1,89 @@
+# ThemeBot Cloud — Caddy front door. Installed by setup-server.sh as /etc/caddy/Caddyfile.
+#
+# {$CLOUD_DOMAIN} and {$ACME_EMAIL} come from /etc/caddy/themebot.env, which a systemd drop-in
+# (/etc/systemd/system/caddy.service.d/themebot.conf) hands to the caddy service.
+# Caddy gets and renews the HTTPS certificate by itself as soon as the domain's DNS A record points
+# at this server and ports 80 + 443 are open.
+#
+# Check after editing (as the caddy user, so no root-owned files are left behind):
+#   sudo -u caddy bash -c 'set -a; . /etc/caddy/themebot.env; caddy validate --config /etc/caddy/Caddyfile'
+# Apply:                sudo systemctl reload caddy
+{
+	email {$ACME_EMAIL}
+	# The admin endpoint stays on localhost:2019 (Caddy's default), used by `systemctl reload caddy`.
+}
+
+{$CLOUD_DOMAIN} {
+	# --- Request body limits, a little above what each route of the app accepts --------------------
+	# The app enforces the exact limits itself (and answers with a JSON error); these stop oversized
+	# uploads at the door. Desktop bodies over 16 kB arrive gzip-compressed, so the compressed size
+	# Caddy sees is never larger than what the app measures after inflating.
+	#   /v1/qa/*              8 MB  (QA evidence)
+	#   /v1/admin/security/*  1 MB  (leaked text lookups)
+	#   /v1/webhooks/*        1 MB  (Lemon Squeezy, raw body)
+	#   everything else      16 kB
+	@qa path /v1/qa /v1/qa/*
+	request_body @qa {
+		max_size 10MiB
+	}
+	@medium path /v1/admin/security /v1/admin/security/* /v1/webhooks /v1/webhooks/*
+	request_body @medium {
+		max_size 2MiB
+	}
+	@small not path /v1/qa /v1/qa/* /v1/admin/security /v1/admin/security/* /v1/webhooks /v1/webhooks/*
+	request_body @small {
+		max_size 64KiB
+	}
+
+	# --- Security headers (the app sets these too; Caddy makes sure every answer has them) ----------
+	header {
+		Strict-Transport-Security "max-age=63072000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Content-Security-Policy "default-src 'none'; frame-ancestors 'none'"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+		-X-Powered-By
+		# Apply when the response is written, replacing (not duplicating) the app's own copies.
+		defer
+	}
+
+	# --- Optional: admin API only from your own IP address(es) ------------------------------------
+	# Uncomment and put your home/office IP (https://ifconfig.me shows it). Everyone else gets a 404.
+	# The admin API is already protected by ADMIN_TOKEN; this is a second lock.
+	# @admin_outside {
+	# 	path /v1/admin /v1/admin/*
+	# 	not remote_ip 203.0.113.10 2001:db8::/32
+	# }
+	# respond @admin_outside 404
+
+	# Everything the app serves is under /v1/. Anything else (scanners, bots) stops here.
+	@not_api not path /v1/*
+	respond @not_api 404
+
+	reverse_proxy 127.0.0.1:8800 {
+		# Caddy replaces any X-Forwarded-For sent by the client with the real address; the app
+		# trusts exactly this one hop (CLOUD_TRUST_PROXY=1).
+		transport http {
+			dial_timeout 5s
+			response_header_timeout 120s
+		}
+	}
+
+	# --- Access log (JSON, rotated; request headers are left out so no token is ever written) ------
+	log {
+		output file /var/log/caddy/themebot-cloud-access.log {
+			roll_size 50MiB
+			roll_keep 10
+			roll_keep_for 720h
+		}
+		format filter {
+			wrap json
+			fields {
+				request>headers delete
+				resp_headers delete
+			}
+		}
+	}
+}

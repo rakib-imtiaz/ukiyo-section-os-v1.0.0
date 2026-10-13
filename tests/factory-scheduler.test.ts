@@ -117,6 +117,45 @@ describe('FactoryScheduler', () => {
     driver.finish(interrupted.id);
   });
 
+  it('a clean shutdown puts running builds back in the queue (they carry on at the next start)', async () => {
+    const driver = new FakeDriver();
+    const scheduler = new FactoryScheduler(driver.drive);
+    const job = await db.createFactoryJob(jobInput(`sd_${Math.random().toString(36).slice(2, 6)}`));
+    await scheduler.tick(); await flush();
+    expect(driver.started).toContain(job.id);
+    // The running session's kill takes a moment (Windows: taskkill /T): shutdown waits for it, since
+    // the server exits right after and a cut-off taskkill leaves the AI's child processes running.
+    let treeStopped = false;
+    driver.controls.get(job.id)!.registerKill(() => new Promise<void>((resolve) => setTimeout(() => { treeStopped = true; resolve(); }, 100)));
+    const waiting = await db.createFactoryJob(jobInput(`sw_${Math.random().toString(36).slice(2, 6)}`));
+    await updateFactorySettings({ concurrency: 1 });
+    await scheduler.shutdown(50); // the fake driver never ends by itself: shutdown waits 50 ms at most
+    expect(treeStopped).toBe(true);
+    expect(driver.controls.get(job.id)!.signal.aborted).toBe(true);
+    const after = (await db.getFactoryJob(job.id))!;
+    expect(after.status).toBe('queued');
+    expect(after.status_detail).toMatch(/carries on/i);
+    driver.finish(job.id); await flush();
+    // The freed slot is not refilled while the server is closing.
+    expect(driver.started).not.toContain(waiting.id);
+  });
+
+  it('Resume right after Pause waits for the stopped run to finish up, so two runs never share a folder', async () => {
+    const driver = new FakeDriver();
+    const scheduler = new FactoryScheduler(driver.drive);
+    const job = await db.createFactoryJob(jobInput(`pr_${Math.random().toString(36).slice(2, 6)}`));
+    await scheduler.tick(); await flush();
+    expect(driver.started.filter((id) => id === job.id)).toHaveLength(1);
+    await scheduler.stop(job.id, 'paused'); // the old run is still killing its sessions / saving its steps
+    await scheduler.retry(job.id); await flush();
+    expect(scheduler.isRunning(job.id)).toBe(true); // the new run holds the slot…
+    expect(driver.started.filter((id) => id === job.id)).toHaveLength(1); // …but hasn't started yet
+    driver.finish(job.id); await flush(); // the old run ends
+    expect(driver.started.filter((id) => id === job.id)).toHaveLength(2);
+    expect((await db.getFactoryJob(job.id))!.status).toBe('scaffolding');
+    driver.finish(job.id); await flush();
+  });
+
   it('boot recovery parks a job as blocked after more than 3 restarts within 30 minutes', async () => {
     const driver = new FakeDriver();
     const scheduler = new FactoryScheduler(driver.drive);

@@ -108,6 +108,8 @@ export const FRAMEWORK_LABEL: Record<Framework, string> = {
 
 export interface FactorySettings {
   cloneModel: BotModel; collectorModel: BotModel;
+  /** Pages one build works on side by side (ThemeBot Cloud builds), 1–4. */
+  pageConcurrency: number;
   concurrency: number; launchStaggerSec: number; inactivityTimeoutMin: number; cloneTimeoutMin: number;
   fixTimeoutMin: number; qaTimeoutMin: number; defaultMaxIterations: number; defaultScoreThreshold: number;
   scoreWeights: { presence: number; text: number; interaction: number };
@@ -158,8 +160,27 @@ export function plainDetail(detail: string | null | undefined): string {
     // The button for a paused/interrupted build says Resume, not Retry.
     .replace(/Interrupted by server (restart|shutdown) — press Retry to resume/i, 'Paused because ThemeBot restarted')
     .replace(/Paused by user — press Retry to resume/i, 'Paused by you')
+    .replace(/^QA failed:\s*QA capture failed\s*[—-]\s*/i, 'The check couldn’t run: ')
     .replace(/\bCLI\b/g, 'build session')
     .replace(/\bQA\b/g, 'checking');
+}
+
+/**
+ * The second line under a paused ("blocked") build: what it means and what to do. A failed check
+ * capture is about the website or the store not loading — not "everything is fine".
+ */
+export function blockedHint(detail: string | null | undefined): string {
+  const text = detail ?? '';
+  if (/QA capture failed/i.test(text)) {
+    return 'ThemeBot couldn’t load your website or the store to compare them — one may be down, behind a password, or showing a blank page. Open both in your browser, then press Resume. Nothing built so far is lost.';
+  }
+  if (/ThemeBot Cloud|Sign in to ThemeBot|ThemeBot plan|reach its servers|slow down/i.test(text)) {
+    return 'Your store and everything built so far are kept. Press Resume once this is sorted — the build carries on from the step where it stopped.';
+  }
+  if (/^QA failed:/i.test(text)) {
+    return 'The check couldn’t run on this computer. Press Resume to try again — if it keeps happening, run the QA self-test in Settings. Nothing built so far is lost.';
+  }
+  return 'Your store and its connection are fine. Press Resume to carry on from where it stopped.';
 }
 
 /** Status of one round, in plain words. */
@@ -186,4 +207,10 @@ export interface BuildProgress {
   totals: { pagesPlanned: number; pagesStarted: number; pagesDone: number; sectionsPlanned: number; sectionsBuilt: number; changedThisRun: number };
   files: Record<string, number>;
   startedAt: number; elapsedMs: number; etaMs: number | null;
+  /** ThemeBot Cloud builds: the real step list the Cloud planned (ids, titles, states — never prompts). */
+  steps?: BuildStep[];
+  stepTotals?: { done: number; total: number };
 }
+
+export type BuildStepStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
+export interface BuildStep { id: string; kind: string; title: string; status: BuildStepStatus; page?: string }

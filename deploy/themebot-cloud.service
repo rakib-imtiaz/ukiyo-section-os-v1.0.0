@@ -1,0 +1,82 @@
+# ThemeBot Cloud — systemd unit. Installed by setup-server.sh as
+# /etc/systemd/system/themebot-cloud.service. After editing it there:
+#   sudo systemctl daemon-reload && sudo systemctl restart themebot-cloud
+#
+# The app listens on 127.0.0.1:8800 only; Caddy (Caddyfile) is the public HTTPS front door.
+# Code:     /opt/themebot-cloud/current -> releases/<release>   (owned by root, read-only to the app)
+# Data:     /var/lib/themebot-cloud                              (owned by themebot, mode 700)
+# Settings: /etc/themebot-cloud/cloud.env                        (owned by root, mode 600; systemd
+#           reads it before dropping to the themebot user, so the app cannot read or change it)
+
+[Unit]
+Description=ThemeBot Cloud (accounts, passes, build recipe, QA scoring)
+Documentation=file:///opt/themebot-cloud/current/release.json
+After=network-online.target
+Wants=network-online.target
+# Give up after 10 crashes in 5 minutes instead of looping forever (deploy.sh then rolls back).
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=themebot
+Group=themebot
+WorkingDirectory=/var/lib/themebot-cloud
+
+# Defaults for this layout; the same names in cloud.env override them (EnvironmentFile wins).
+Environment=NODE_ENV=production
+Environment=CLOUD_HOST=127.0.0.1
+Environment=CLOUD_PORT=8800
+Environment=CLOUD_DATA_DIR=/var/lib/themebot-cloud
+Environment=CLOUD_TRUST_PROXY=1
+EnvironmentFile=/etc/themebot-cloud/cloud.env
+
+# Plain Node 24, no TypeScript loader: cloud.mjs is the esbuild bundle (scripts/cloud/build.mjs).
+# The heap cap keeps V8 collecting garbage well before MemoryMax would kill the process.
+ExecStart=/usr/bin/node --max-old-space-size=640 /opt/themebot-cloud/current/cloud.mjs
+
+Restart=always
+RestartSec=3
+# index.ts closes the HTTP server and the database on SIGTERM; it force-exits after 10 s.
+KillSignal=SIGTERM
+TimeoutStopSec=20
+LimitNOFILE=65536
+
+# --- Resources ---
+MemoryHigh=800M
+MemoryMax=1G
+TasksMax=512
+
+# --- Hardening ---
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/themebot-cloud
+PrivateTmp=yes
+ProtectHome=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+# IPv4/IPv6 for the listener and for outgoing mail (api.resend.com); Unix sockets for journald.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @mount @swap @reboot @raw-io @module @debug @obsolete @cpu-emulation
+# A blocked call fails with "Operation not permitted" instead of killing the process.
+SystemCallErrorNumber=EPERM
+UMask=0077
+# NOT set on purpose: MemoryDenyWriteExecute=yes — Node's JIT compiler needs writable+executable memory.
+
+[Install]
+WantedBy=multi-user.target

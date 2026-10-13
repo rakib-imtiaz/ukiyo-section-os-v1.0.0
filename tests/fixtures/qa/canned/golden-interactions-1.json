@@ -1,0 +1,71 @@
+{
+  "interaction": 0.7857,
+  "tested": 14,
+  "same": 11,
+  "untested": 0,
+  "issues": [
+    {
+      "id": "i1-1",
+      "kind": "missing_interaction",
+      "page": "/",
+      "title": "Missing on Shopify: a \"Read all reviews\" (main)",
+      "detail": "React link -> https://example.com/reviews"
+    },
+    {
+      "id": "i1-2",
+      "kind": "interaction_noop",
+      "page": "/",
+      "title": "\"Open gallery\" behaves differently",
+      "detail": "React: opens overlay/modal · Shopify: no visible effect"
+    },
+    {
+      "id": "i1-3",
+      "kind": "interaction_target",
+      "page": "/",
+      "title": "Link \"About us\" points to the wrong place",
+      "detail": "React -> /about · Shopify -> /pages/contact (expected /pages/about)"
+    }
+  ],
+  "informational": [
+    {
+      "id": "i1-4",
+      "kind": "extra_interaction",
+      "page": "/",
+      "title": "Extra on Shopify: a \"Search\"",
+      "detail": "Not present in the React original (informational)."
+    },
+    {
+      "id": "i1-5",
+      "kind": "extra_interaction",
+      "page": "/about",
+      "title": "Extra on Shopify: a \"Search\"",
+      "detail": "Not present in the React original (informational)."
+    }
+  ],
+  "pages": [
+    {
+      "route": "/",
+      "elements": 9,
+      "tested": 9,
+      "same": 6,
+      "different": 2,
+      "missing": 1,
+      "clicked": 2,
+      "verifiedStatic": 1,
+      "untested": 0,
+      "skippedClicks": 0
+    },
+    {
+      "route": "/about",
+      "elements": 5,
+      "tested": 5,
+      "same": 5,
+      "different": 0,
+      "missing": 0,
+      "clicked": 1,
+      "verifiedStatic": 0,
+      "untested": 0,
+      "skippedClicks": 0
+    }
+  ]
+}

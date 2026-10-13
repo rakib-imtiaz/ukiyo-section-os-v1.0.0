@@ -7,10 +7,10 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
-import { app, BrowserWindow, dialog, ipcMain, Menu, screen, session, shell, type MenuItemConstructorOptions } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, powerMonitor, screen, session, shell, type IpcMainInvokeEvent, type MenuItemConstructorOptions } from 'electron';
 import { ServerHost } from './server-host';
-import { Licence, licenceConfigFrom } from './licence';
-import { startAutoUpdates } from './updater';
+import { Account, cloudConfigFrom, friendlyMessage, isTransient, type CloudAccount, type CloudFailure, type HeartbeatResult } from './account';
+import { checkForUpdatesNow, startAutoUpdates } from './updater';
 
 const PREFERRED_PORT = 8797; // not 8787: that's the repo dev server's port
 const isDev = !app.isPackaged;
@@ -36,7 +36,7 @@ function writeHostSettings(patch: HostSettings) {
 }
 
 // ---- build-time settings (written into the app's package.json by scripts/desktop/build.mjs) ------
-interface AppPackage { themebot?: { edition?: string; updateUrl?: string; licence?: { storeId?: number; productIds?: number[] } } }
+interface AppPackage { themebot?: { edition?: string; updateUrl?: string; cloud?: { url?: string; publicKey?: string } } }
 const appPkg: AppPackage = (() => {
   try { return JSON.parse(readFileSync(path.join(app.getAppPath(), 'package.json'), 'utf8')) as AppPackage; } catch { return {}; }
 })();
@@ -48,7 +48,9 @@ function edition(): 'customer' | 'internal' {
   return appPkg.themebot?.edition === 'internal' ? 'internal' : 'customer';
 }
 
-const licence = new Licence(userData, licenceConfigFrom(appPkg));
+// Builds made with a ThemeBot Cloud address require signing in (see account.ts); others don't.
+const cloud = cloudConfigFrom(appPkg);
+const account = new Account(userData, cloud, app.getVersion());
 
 function serverLaunch() {
   if (isDev) {
@@ -81,6 +83,7 @@ function serverEnv(resources: string, runtimeBin: string | null): NodeJS.Process
   delete env.ELECTRON_RUN_AS_NODE;
   delete env.NODE_ENV; // desktop mode, not production
   delete env.NODE_OPTIONS; // a user's own Node flags must not change how the bundled server runs
+  delete env.THEMEBOT_CLOUD_URL; delete env.THEMEBOT_CLOUD_PUBKEY; // only the build's own Cloud settings count
   const shellPath = loginShellPath();
   const basePath = shellPath || env.PATH || env.Path || '';
   const homeBin = path.join(app.getPath('home'), '.local', 'bin'); // where Claude Code's installer puts `claude`
@@ -95,6 +98,8 @@ function serverEnv(resources: string, runtimeBin: string | null): NodeJS.Process
     THEMEBOT_RESOURCES: resources,
     THEMEBOT_DATA_DIR: userData,
     THEMEBOT_SCREEN_WORKAREA: JSON.stringify(area),
+    // The server verifies the passes it's handed with the Cloud's public key (server/cloud-client.ts).
+    ...(cloud ? { THEMEBOT_CLOUD_URL: cloud.url, THEMEBOT_CLOUD_PUBKEY: cloud.publicKey } : {}),
   };
 }
 
@@ -166,18 +171,117 @@ function createWindow() {
   return win;
 }
 
-function showLicence(reason: string) {
+// ---- ThemeBot account (builds with a Cloud address) ---------------------------------------------
+// A heartbeat every 5 minutes brings a pass (valid 15) that the server needs to start builds.
+// Offline, the app stays open and retries sooner; the pass simply runs out and builds wait.
+// A refusal (signed out, plan inactive, seats full, update required) closes the engine.
+const HEARTBEAT_MS = 5 * 60 * 1000;
+let heartbeatTimer: NodeJS.Timeout | null = null;
+let offlineStreak = 0;
+let lastPass: { token: string; account: CloudAccount } | null = null;
+// Bumped whenever the session changes hands (sign-in, sign-out, a refusal, quitting): a heartbeat
+// that was already on its way when that happened is ignored — it must not bring back a pass, re-arm
+// the timer, or sign out the session that replaced it. The rotated refresh token in its answer is
+// not ours to judge: account.ts has already saved it if (and only if) it still belongs to the saved
+// session and replaces the token that heartbeat presented — so a stale answer never rolls it back,
+// and an answer that lands while quitting still keeps this computer in step with the Cloud.
+let accountEpoch = 0;
+/** Set once the app starts quitting: nothing starts the engine or the heartbeat again. */
+let appQuitting = false;
+
+function showSignIn(failure?: CloudFailure, note?: string) {
   if (!mainWindow) return;
-  void mainWindow.loadFile(path.join(app.getAppPath(), 'licence.html'), { query: { reason } });
+  const query: Record<string, string> = {};
+  if (failure) { query.reason = friendlyMessage(failure); query.code = failure.code; }
+  else if (note) query.reason = note;
+  if (failure?.devices?.length) query.devices = JSON.stringify(failure.devices.slice(0, 10));
+  if (account.hasSession()) query.retry = '1'; // e.g. seats full or plan lapsed: "Try again" without a new code
+  const email = account.email();
+  if (email) query.email = email;
+  void mainWindow.loadFile(path.join(app.getAppPath(), 'signin.html'), { query });
 }
 
-/** Licence first (when this build requires one), then the server, then the app. */
+function showUpdateRequired(failure: CloudFailure) {
+  if (!mainWindow) return;
+  const started = checkForUpdatesNow();
+  void mainWindow.loadFile(path.join(app.getAppPath(), 'signin.html'), {
+    query: { mode: 'update', reason: friendlyMessage(failure), current: app.getVersion(), ...(failure.minAppVersion ? { min: failure.minAppVersion } : {}), ...(started ? { downloading: '1' } : {}) },
+  });
+}
+
+function stopHeartbeat() {
+  if (heartbeatTimer) clearTimeout(heartbeatTimer);
+  heartbeatTimer = null;
+}
+
+function scheduleHeartbeat(delayMs: number) {
+  stopHeartbeat();
+  heartbeatTimer = setTimeout(() => void heartbeatTick(), delayMs);
+}
+
+function sendPassToServer() {
+  if (lastPass) host?.send({ type: 'pass', token: lastPass.token, account: lastPass.account });
+}
+
+/** One heartbeat: hand the fresh pass to the server, or note we're offline and retry sooner.
+ *  Null when the answer is stale (see accountEpoch) — nothing was changed. */
+async function heartbeat(): Promise<HeartbeatResult | null> {
+  const epoch = accountEpoch;
+  const result = await account.heartbeat();
+  if (epoch !== accountEpoch || appQuitting) return null;
+  if (result.ok) {
+    offlineStreak = 0;
+    lastPass = { token: result.pass, account: result.account };
+    sendPassToServer();
+    scheduleHeartbeat(HEARTBEAT_MS);
+  } else if (isTransient(result)) {
+    host?.send({ type: 'cloud-offline', account: account.lastKnownAccount() });
+    offlineStreak += 1;
+    scheduleHeartbeat(Math.min(HEARTBEAT_MS, 30_000 * 2 ** Math.min(offlineStreak - 1, 4))); // 30s, 1m, 2m, 4m, 5m
+  } else {
+    stopHeartbeat();
+  }
+  return result;
+}
+
+async function heartbeatTick() {
+  const result = await heartbeat();
+  if (result && !result.ok && !isTransient(result)) await refuse(result);
+}
+
+/** The Cloud refused this computer: pause builds, close the engine, and say why. */
+async function refuse(failure: CloudFailure) {
+  accountEpoch += 1;
+  openSeq += 1; // an "open" still under way must not start the engine again
+  stopHeartbeat();
+  lastPass = null;
+  host?.send({ type: 'signed-out' });
+  await host?.stop();
+  if (failure.code === 'UPDATE_REQUIRED') { showUpdateRequired(failure); return; }
+  showSignIn(failure);
+}
+
+/** Sign-in first (when this build requires it), then the server, then the app. A newer call (e.g.
+ *  sign-in finishing while "Try again" was still checking) supersedes an older one; quitting stops all. */
+let openSeq = 0;
+let starting: Promise<void> | null = null;
 async function openApp() {
-  const state = await licence.check();
-  if (!state.ok) { await host?.stop(); showLicence(state.reason); return; }
-  if (host?.running) { await mainWindow?.loadURL(`${serverOrigin}/`); return; }
+  const seq = ++openSeq;
+  const current = () => seq === openSeq && !appQuitting;
+  if (!current()) return;
+  if (account.required) {
+    if (!account.hasSession()) { stopHeartbeat(); lastPass = null; await host?.stop(); if (current()) showSignIn(); return; }
+    const result = await heartbeat();
+    if (!result || !current()) return;
+    // Offline: open anyway — builds wait until ThemeBot is reachable (the UI says so).
+    if (!result.ok && !isTransient(result)) { await refuse(result); return; }
+  }
+  if (host?.running && !starting) { await mainWindow?.loadURL(`${serverOrigin}/`); return; }
   if (mainWindow) await mainWindow.loadFile(loadingPage().file);
-  try { await startServer(); } catch (error) { showError(error instanceof Error ? error.message : String(error)); }
+  if (!current()) return;
+  // One engine at a time: a second caller waits for the start already under way.
+  try { starting ??= startServer().finally(() => { starting = null; }); await starting; }
+  catch (error) { if (current()) showError(error instanceof Error ? error.message : String(error)); }
 }
 
 function showError(message: string) {
@@ -209,6 +313,7 @@ async function startServer() {
   const port = await host.start();
   writeHostSettings({ port });
   serverOrigin = `http://127.0.0.1:${port}`;
+  if (lastPass) sendPassToServer(); else if (account.required) host.send({ type: 'cloud-offline', account: account.lastKnownAccount() });
   await mainWindow?.loadURL(`${serverOrigin}/`);
 }
 
@@ -228,23 +333,40 @@ ipcMain.handle('themebot:pick-folder', async (_event, defaultPath?: unknown) => 
   const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
   return result.canceled || !result.filePaths[0] ? null : result.filePaths[0];
 });
-ipcMain.handle('themebot:activate-licence', async (_event, key: unknown) => {
-  const state = await licence.activate(typeof key === 'string' ? key : '');
-  if (state.ok) void openApp();
-  return state;
+// Sign-in screen bridges. Only our own window may call them.
+const fromOurWindow = (event: IpcMainInvokeEvent) => Boolean(mainWindow && event.sender === mainWindow.webContents);
+const notOurs = { ok: false as const, code: 'BAD_REQUEST', message: 'Not available here.' };
+ipcMain.handle('themebot:signin-start', async (event, email: unknown) => {
+  if (!fromOurWindow(event) || !account.required) return notOurs;
+  return account.start(typeof email === 'string' ? email : '');
 });
+ipcMain.handle('themebot:signin-verify', async (event, email: unknown, code: unknown) => {
+  if (!fromOurWindow(event) || !account.required) return notOurs;
+  const result = await account.verify(typeof email === 'string' ? email : '', typeof code === 'string' ? code : '');
+  if (!result.ok) { if (result.code === 'UPDATE_REQUIRED') showUpdateRequired(result); return result; }
+  accountEpoch += 1; // a new session: answers meant for the old one no longer count
+  void openApp();
+  return { ok: true };
+});
+ipcMain.handle('themebot:signin-retry', (event) => { if (fromOurWindow(event)) void openApp(); });
+ipcMain.handle('themebot:check-updates', (event) => fromOurWindow(event) && checkForUpdatesNow());
 ipcMain.handle('themebot:open-path', async (_event, target: unknown) => {
   if (typeof target !== 'string' || !path.isAbsolute(target) || !existsSync(target)) return 'That folder does not exist.';
   return shell.openPath(target);
 });
 
-async function releaseLicence() {
-  const options = { type: 'question' as const, buttons: ['Cancel', 'Deactivate'], defaultId: 0, cancelId: 0, title: 'Move licence', message: 'Deactivate ThemeBot on this computer?', detail: 'This frees the seat so you can activate the same key on another computer. ThemeBot closes its builds here first.' };
+async function signOutHere() {
+  const options = { type: 'question' as const, buttons: ['Cancel', 'Sign out'], defaultId: 0, cancelId: 0, title: 'Sign out', message: 'Sign out of ThemeBot on this computer?', detail: 'This frees the seat right away, so you can use ThemeBot on another computer. Running builds pause first and carry on the next time you sign in here.' };
   const choice = mainWindow ? await dialog.showMessageBox(mainWindow, options) : await dialog.showMessageBox(options);
   if (choice.response !== 1) return;
-  await licence.deactivate();
+  accountEpoch += 1;
+  openSeq += 1; // an "open" still under way must not start the engine again
+  stopHeartbeat();
+  lastPass = null;
+  host?.send({ type: 'signed-out' });
   await host?.stop();
-  showLicence('Licence removed from this computer. Enter a key to use ThemeBot here again.');
+  await account.signOut();
+  showSignIn(undefined, 'Signed out. Sign in to use ThemeBot on this computer again.');
 }
 
 function buildMenu() {
@@ -260,7 +382,7 @@ function buildMenu() {
     { label: 'Help', submenu: [
       { label: 'Logs folder', click: () => { mkdirSync(logDir, { recursive: true }); void shell.openPath(logDir); } },
       { label: 'Data folder', click: () => void shell.openPath(userData) },
-      ...(licence.required ? [{ type: 'separator' as const }, { label: 'Move licence to another computer…', click: () => void releaseLicence() }] : []),
+      ...(account.required ? [{ type: 'separator' as const }, { label: 'Sign out of this PC…', click: () => void signOutHere() }] : []),
     ] },
   ];
   return Menu.buildFromTemplate(template);
@@ -278,17 +400,18 @@ if (isPrimaryInstance) app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   Menu.setApplicationMenu(buildMenu());
   mainWindow = createWindow();
-  await openApp();
+  // Updates first: an "Update required" answer at startup can then start the download at once.
   startAutoUpdates(appPkg.themebot?.updateUrl, () => mainWindow, (line) => {
     try { mkdirSync(logDir, { recursive: true }); writeFileSync(path.join(logDir, 'updates.log'), `${new Date().toISOString()} ${line}\n`, { flag: 'a' }); } catch { /* not critical */ }
   });
-  // Long-running sessions re-check the licence once a day (online at most weekly — see licence.ts).
-  setInterval(() => { void licence.check().then((state) => { if (!state.ok) void openApp(); }); }, 24 * 60 * 60 * 1000).unref();
+  await openApp();
+  // After sleep the pass has usually run out: heartbeat straight away instead of waiting.
+  powerMonitor.on('resume', () => { if (heartbeatTimer) scheduleHeartbeat(3000); });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length) return;
     mainWindow = createWindow();
-    if (serverOrigin) void mainWindow.loadURL(`${serverOrigin}/`);
+    void openApp();
   });
 }).catch((error) => { dialog.showErrorBox('ThemeBot could not start', String(error)); app.exit(1); });
 
@@ -296,10 +419,20 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-// Let the server pause running builds and save its state before the app exits.
+// Let the server pause running builds and save its state before the app exits, and hand this
+// computer's seat back so the account can be used elsewhere straight away.
 let serverStopped = false;
+let quitting = false;
 app.on('before-quit', (event) => {
-  if (serverStopped || !host?.running) return;
+  // From here on nothing (a sign-in finishing, a heartbeat answering) starts the engine again.
+  appQuitting = true;
+  accountEpoch += 1;
+  const holdsSeat = lastPass != null;
+  if (serverStopped || (!host?.running && !holdsSeat)) return;
   event.preventDefault();
-  void host.stop().finally(() => { serverStopped = true; app.quit(); });
+  if (quitting) return;
+  quitting = true;
+  stopHeartbeat();
+  lastPass = null;
+  void Promise.allSettled([host?.stop(), holdsSeat ? account.release() : undefined]).finally(() => { serverStopped = true; app.quit(); });
 });

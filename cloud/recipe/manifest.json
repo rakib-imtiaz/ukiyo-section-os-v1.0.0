@@ -1,0 +1,72 @@
+{
+  "recipe_version": "2026.10.04-steps.2",
+  "_doc": [
+    "The ThemeBot clone recipe, split into steps. It lives ONLY in ThemeBot Cloud: cloud/src/steps serves one step prompt at a time to a signed-in desktop app, which pipes it into `claude -p` on stdin. Nothing here is ever shipped in the desktop app or written into a job workspace.",
+    "Source: templates/factory/commands/clone-theme.md (the single-session /clone-theme command the internal edition still uses), templates/factory/workspace/seed/CONVENTIONS.md and templates/factory/prompts/fix-session.md. Keep both in step when the know-how changes, and bump recipe_version.",
+    "A step prompt = header + the step's body + its `include` fragments (in order) + finish. Fragments live in knowledge/*.md, each starting with a `<!-- @fragment <id> -->` line. `@name` in an include list expands a group. A body may hold one `<!-- @include-here -->` marker to place the fragments; otherwise they follow the body.",
+    "Placeholders ({{NAME}}, {{PREFIX}}, {{PAGE_ROUTE}}, ...) are rendered by the Cloud in one pass; values are never re-expanded. Each file carries a `tbr-canary-*` comment so a leaked prompt can be traced and the tests can prove no recipe text reaches the customer's disk."
+  ],
+  "header": "common/header.md",
+  "finish": "common/finish.md",
+  "knowledge": ["knowledge/lessons.md", "knowledge/rules.md", "knowledge/conventions.md", "knowledge/models.md", "knowledge/notes.md"],
+  "notes": {
+    "REBUILD_NOTE": "note-rebuilt-page",
+    "REGRESSION_BANNER": "note-regression"
+  },
+  "groups": {
+    "@lessons-code": ["lessons-intro", "lesson-tailwind", "lesson-full-width", "lesson-reveal", "lesson-handles", "lesson-cli-oauth", "lesson-current-script", "lesson-svg-hidden", "lesson-liquid-output", "lesson-dead-media"],
+    "@rules-all": ["rules-intro", "rule-1", "rule-2", "rule-3", "rule-4", "rule-5", "rule-6", "rule-7", "rule-8", "rule-9", "rule-10", "rule-11", "rule-12", "rule-13", "rule-14", "rule-15", "rule-16"]
+  },
+  "steps": {
+    "preflight": {
+      "title": "Getting ready",
+      "body": "steps/preflight.md",
+      "model": "sonnet",
+      "include": ["lessons-intro", "lesson-cli-oauth"]
+    },
+    "inventory": {
+      "title": "Planning the pages",
+      "body": "steps/inventory.md",
+      "model": "sonnet",
+      "include": ["lessons-intro", "lesson-handles", "lesson-header-footer", "lesson-dead-media", "models-page-routing"]
+    },
+    "bootstrap": {
+      "title": "Setting up the theme",
+      "body": "steps/bootstrap.md",
+      "model": "sonnet",
+      "include": ["conv-source-of-truth", "lessons-intro", "lesson-tailwind", "lesson-full-width", "lesson-reveal", "lesson-handles", "lesson-cli-oauth", "lesson-header-footer", "lesson-current-script", "lesson-svg-hidden", "lesson-liquid-output", "lesson-dead-media", "@rules-all", "conv-images", "conv-output"]
+    },
+    "store-setup": {
+      "title": "Setting up the store",
+      "body": "steps/store-setup.md",
+      "model": "sonnet",
+      "include": ["models-tiers", "models-store-agents", "lessons-intro", "lesson-handles", "lesson-cli-oauth", "lesson-header-footer", "lesson-dead-media", "rules-intro", "rule-4", "rule-11"]
+    },
+    "page": {
+      "title": "Building page: {{PAGE_NAME}}",
+      "body": "steps/page.md",
+      "model": "page",
+      "parallelGroup": "pages",
+      "include": ["conv-source-of-truth", "@lessons-code", "@rules-all", "conv-images", "conv-edit-protocol", "conv-output"]
+    },
+    "verify": {
+      "title": "Checking page: {{PAGE_NAME}}",
+      "body": "steps/verify.md",
+      "model": "sonnet",
+      "parallelGroup": "pages",
+      "include": ["conv-source-of-truth", "models-tiers", "models-verify-agents", "@lessons-code", "@rules-all", "conv-images", "conv-edit-protocol", "conv-output"]
+    },
+    "final": {
+      "title": "Wrapping up",
+      "body": "steps/final.md",
+      "model": "haiku",
+      "include": []
+    }
+  },
+  "fix": {
+    "title": "Fix round {{ITER}}",
+    "body": "fix/fix-session.md",
+    "model": "opus",
+    "include": ["conv-source-of-truth", "@lessons-code", "lesson-header-footer", "@rules-all", "conv-images", "conv-edit-protocol", "conv-output"]
+  }
+}

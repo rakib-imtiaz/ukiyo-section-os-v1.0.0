@@ -6,6 +6,7 @@ import { config } from '../config';
 import { hmac } from '../security';
 import type { FactoryJobRecord } from '../db';
 import { resourcePath } from '../runtime-paths';
+import { cloudRequired } from '../cloud-client';
 
 /**
  * Per-job capability key for the localhost-only token-mint endpoint. Deterministically derived
@@ -149,7 +150,19 @@ export async function ingestReactSource(source: string, target: string) {
   await cp(source, target, { recursive: true });
 }
 
-export interface ScaffoldInput { job: FactoryJobRecord; clientId: string; clientSecret: string; reactFilesPath?: string; storefrontPassword?: string; extraAllow?: string[]; }
+/**
+ * Where the build recipe comes from. 'cloud' (a ThemeBot Cloud is configured): the recipe is served
+ * one step at a time and piped into `claude -p`, so NOTHING of it is placed in the workspace — no
+ * /clone-theme command, no seed/CONVENTIONS.md, no QA scoring scripts. 'local' (internal edition,
+ * dev, no Cloud): the bundled templates, exactly as before.
+ */
+export type RecipeSource = 'cloud' | 'local';
+export const defaultRecipeSource = (): RecipeSource => (cloudRequired ? 'cloud' : 'local');
+
+/** Scoring scripts the local recipe copies into qa/factory/ (and a Cloud workspace must not hold). */
+const LOCAL_QA_SCRIPTS = ['calibrate.mjs', 'interaction-verify.mjs', 'qa-shared.mjs', 'section-compare.mjs'];
+
+export interface ScaffoldInput { job: FactoryJobRecord; clientId: string; clientSecret: string; reactFilesPath?: string; storefrontPassword?: string; extraAllow?: string[]; recipe?: RecipeSource; }
 
 /**
  * Headless `claude -p` refuses untrusted folders. Pre-trust the workspace in
@@ -188,13 +201,16 @@ export function trustWorkspace(workspacePath: string) {
 export async function scaffoldWorkspace(input: ScaffoldInput) {
   // clientSecret is accepted for API compatibility but deliberately never persisted to disk.
   const { job, clientId, reactFilesPath, storefrontPassword, extraAllow = [] } = input;
+  const recipe = input.recipe ?? defaultRecipeSource();
   const root = job.workspace_path;
   const adopting = await isNonEmptyDir(root);
 
   // Standalone clone-theme project layout — matches shopify_folder_init so the folder is
   // usable manually (cd in, run `claude` / `/clone-theme`) independent of this app, and
   // Claude Code keeps its conversation history keyed to this folder automatically.
-  for (const dir of ['react_files', 'references', 'sections', 'templates', 'snippets', 'assets', 'layout', 'config', 'seed', 'qa/state', 'qa/reports', 'qa/screenshots', 'qa/factory', 'factory/logs', '.claude', '.claude/commands']) {
+  // (Cloud builds: no command folder and no local scoring folder; step state lives in factory/steps.)
+  const dirs = ['react_files', 'references', 'sections', 'templates', 'snippets', 'assets', 'layout', 'config', 'seed', 'qa/state', 'qa/reports', 'qa/screenshots', 'factory/logs', '.claude'];
+  for (const dir of [...dirs, ...(recipe === 'cloud' ? ['factory/steps'] : ['qa/factory', '.claude/commands'])]) {
     await mkdir(path.join(root, dir), { recursive: true });
   }
 
@@ -241,23 +257,33 @@ export async function scaffoldWorkspace(input: ScaffoldInput) {
   const snapshotTemplate = path.join(TEMPLATES_ROOT, 'workspace/qa/snapshot.mjs');
   if (await exists(snapshotTemplate)) await cp(snapshotTemplate, path.join(root, 'qa/snapshot.mjs'));
 
-  const conventions = (await readFile(path.join(TEMPLATES_ROOT, 'workspace/seed/CONVENTIONS.md'), 'utf8'))
-    .replaceAll('{{NAME}}', job.name).replaceAll('{{PREFIX}}', job.prefix);
   const conventionsPath = path.join(root, 'seed/CONVENTIONS.md');
-  if (!(await exists(conventionsPath))) await writeFile(conventionsPath, conventions);
+  if (recipe === 'local') {
+    const conventions = (await readFile(path.join(TEMPLATES_ROOT, 'workspace/seed/CONVENTIONS.md'), 'utf8'))
+      .replaceAll('{{NAME}}', job.name).replaceAll('{{PREFIX}}', job.prefix);
+    if (!(await exists(conventionsPath))) await writeFile(conventionsPath, conventions);
 
-  // QA scripts (owned by the factory — always refreshed to the latest version).
-  const qaDir = path.join(TEMPLATES_ROOT, 'qa');
-  if (await exists(qaDir)) {
-    for (const file of (await readdir(qaDir)).filter((name) => name.endsWith('.mjs'))) {
-      await cp(path.join(qaDir, file), path.join(root, 'qa/factory', file));
+    // QA scripts (owned by the factory — always refreshed to the latest version).
+    const qaDir = path.join(TEMPLATES_ROOT, 'qa');
+    if (await exists(qaDir)) {
+      for (const file of (await readdir(qaDir)).filter((name) => name.endsWith('.mjs'))) {
+        await cp(path.join(qaDir, file), path.join(root, 'qa/factory', file));
+      }
     }
-  }
 
-  // Bundle the /clone-theme slash command INTO the workspace so headless `claude -p /clone-theme`
-  // runs are self-contained and reproducible (no dependency on a user-global ~/.claude/commands
-  // file). App-owned — always refreshed so bundled fixes propagate to retried/adopted workspaces.
-  await cp(path.join(TEMPLATES_ROOT, 'commands/clone-theme.md'), path.join(root, '.claude/commands/clone-theme.md'));
+    // Bundle the /clone-theme slash command INTO the workspace so headless `claude -p /clone-theme`
+    // runs are self-contained and reproducible (no dependency on a user-global ~/.claude/commands
+    // file). App-owned — always refreshed so bundled fixes propagate to retried/adopted workspaces.
+    await cp(path.join(TEMPLATES_ROOT, 'commands/clone-theme.md'), path.join(root, '.claude/commands/clone-theme.md'));
+  } else {
+    // Cloud recipe: an adopted workspace may still hold copies an older, local-recipe scaffold
+    // placed. They are app-owned (refreshed on every local scaffold), so take them out — the
+    // conventions file only when it is still our generated one, never a file the user wrote.
+    await rm(path.join(root, '.claude/commands/clone-theme.md'), { force: true });
+    for (const file of LOCAL_QA_SCRIPTS) await rm(path.join(root, 'qa/factory', file), { force: true });
+    const existing = await readFile(conventionsPath, 'utf8').catch(() => null);
+    if (existing && /^# .* Clone — Builder Conventions \(read before writing any section\)/.test(existing)) await rm(conventionsPath, { force: true });
+  }
 
   // Scoped permission allowlist — the sandbox for headless runs. Always refreshed.
   const template = await readFile(path.join(TEMPLATES_ROOT, 'workspace/.claude/settings.json.tpl'), 'utf8');

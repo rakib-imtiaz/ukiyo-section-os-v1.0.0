@@ -1,12 +1,15 @@
 // Full-screen startup gate. The app does not run until (1) Claude is connected — via the
 // CLI's own OAuth login or an API key — and (2) a working directory is chosen. A persistent
 // demo panel lets an unconnected visitor see how the product works. Localhost-only backend.
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertCircle, AppWindow, ArrowLeft, Check, ChevronRight, Folder, FolderOpen, FolderPlus, HardDrive, HelpCircle,
   Info, KeyRound, Loader, Lock, RefreshCw, Sparkles, TerminalSquare,
 } from 'lucide-react';
 import { desktopBridge } from '../desktop-bridge';
+
+// Remotion animation for the sign-in check — loaded only when it's shown.
+const ConnectingAnimation = lazy(() => import('./ConnectingAnimation'));
 
 interface ClaudeStatus { connected: boolean; method: string | null; cliPresent: boolean; cliCredentialsPresent: boolean; claudePath: string; loginActive: boolean; reason?: string }
 interface ProgressLine { at: number; line: string }
@@ -108,11 +111,18 @@ export default function OnboardingGate({ onComplete }: { onComplete: () => void 
   );
 }
 
+// The official Claude Code installer for this computer's OS.
+const claudeInstallCommand = /win/i.test(navigator.platform)
+  ? 'irm https://claude.ai/install.ps1 | iex'
+  : 'curl -fsSL https://claude.ai/install.sh | bash';
+
 function ConnectStep({ claude, busy, setBusy, error, setError, onRefresh, lines }: {
   claude: ClaudeStatus | null; busy: boolean; setBusy: (v: boolean) => void; error: string; setError: (v: string) => void; onRefresh: (force?: boolean) => Promise<ClaudeStatus | null>; lines: ProgressLine[];
 }) {
   const [mode, setMode] = useState<'choose' | 'api'>('choose');
   const [apiKey, setApiKey] = useState('');
+  // Which button is working, so that one shows a spinner (the sign-in check takes 5–10 seconds).
+  const [pending, setPending] = useState<'cli' | 'login' | null>(null);
 
   if (!claude) return <div className="ob-panel"><Loader className="spin" size={22} /><p>Checking the AI connection…</p></div>;
 
@@ -120,22 +130,28 @@ function ConnectStep({ claude, busy, setBusy, error, setError, onRefresh, lines 
     return (
       <div className="ob-panel">
         <h2>AI engine not found</h2>
-        <p>ThemeBot builds with an AI engine that runs on this computer (today: the Claude Code command-line tool). Install it, then reload.</p>
-        <pre className="ob-code">npm install -g @anthropic-ai/claude-code</pre>
-        <p className="ob-muted">Expected at <code>{claude.claudePath}</code> — override with <code>FACTORY_CLAUDE_PATH</code>.</p>
+        <p>ThemeBot builds with an AI engine that runs on this computer (today: Claude Code). Install it with the command below, sign in once, then press Re-check.</p>
+        <pre className="ob-code">{claudeInstallCommand}</pre>
+        <p className="ob-muted">{/win/i.test(navigator.platform) ? 'Run it in PowerShell.' : 'Run it in Terminal.'} ThemeBot looks for it at <code>{claude.claudePath}</code>.</p>
         <button className="ob-btn" onClick={() => void onRefresh(true)}><RefreshCw size={15} /> Re-check</button>
       </div>
     );
   }
 
   const startLogin = async () => {
-    setBusy(true); setError('');
+    setBusy(true); setPending('login'); setError('');
     const { ok, data } = await postJson<{ started: boolean; error?: string }>('/api/claude/login');
-    setBusy(false);
+    setBusy(false); setPending(null);
     if (!ok || !data?.started) setError(data?.error || 'Could not start sign-in.');
     else void onRefresh(true);
   };
-  const useCli = async () => { setBusy(true); setError(''); await postJson('/api/claude/use-cli'); await onRefresh(true); setBusy(false); };
+  const useCli = async () => {
+    setBusy(true); setPending('cli'); setError('');
+    await postJson('/api/claude/use-cli');
+    const status = await onRefresh(true);
+    setBusy(false); setPending(null);
+    if (!status?.connected) setError(status?.reason || 'Your Claude sign-in could not be used. Try signing in again in the browser.');
+  };
   const submitKey = async () => {
     setBusy(true); setError('');
     const { ok, data } = await postJson<{ connected: boolean; error?: string }>('/api/claude/api-key', { key: apiKey });
@@ -158,10 +174,22 @@ function ConnectStep({ claude, busy, setBusy, error, setError, onRefresh, lines 
         <div className="ob-actions">
           {claude.cliCredentialsPresent
             ? <>
-                <button className="ob-btn ob-btn--accent ob-btn--lg" disabled={busy} onClick={useCli}><TerminalSquare size={17} /> Use my Claude CLI login</button>
-                <button className="ob-btn ob-btn--lg" disabled={busy} onClick={startLogin}><AppWindow size={17} /> Sign in with a different account (browser)</button>
+                <button className="ob-btn ob-btn--accent ob-btn--lg" disabled={busy} onClick={useCli} aria-busy={pending === 'cli'}>
+                  {pending === 'cli' ? <><Loader className="spin" size={17} /> Checking your Claude sign-in…</> : <><TerminalSquare size={17} /> Use my Claude CLI login</>}
+                </button>
+                <button className="ob-btn ob-btn--lg" disabled={busy} onClick={startLogin} aria-busy={pending === 'login'}>
+                  {pending === 'login' ? <><Loader className="spin" size={17} /> Opening the sign-in page…</> : <><AppWindow size={17} /> Sign in with a different account (browser)</>}
+                </button>
               </>
-            : <button className="ob-btn ob-btn--accent ob-btn--lg" disabled={busy} onClick={startLogin}><TerminalSquare size={17} /> Sign in with Claude (browser)</button>}
+            : <button className="ob-btn ob-btn--accent ob-btn--lg" disabled={busy} onClick={startLogin} aria-busy={pending === 'login'}>
+                {pending === 'login' ? <><Loader className="spin" size={17} /> Opening the sign-in page…</> : <><TerminalSquare size={17} /> Sign in with Claude (browser)</>}
+              </button>}
+          {pending === 'cli' && (
+            <div className="ob-connecting" role="status">
+              <Suspense fallback={<div className="ob-connecting__stage" />}><div className="ob-connecting__stage"><ConnectingAnimation /></div></Suspense>
+              <p className="ob-muted ob-muted--center">ThemeBot is sending a tiny test message to your Claude account and waiting for the reply. This takes a few seconds.</p>
+            </div>
+          )}
           <button className="ob-btn ob-btn--lg" disabled={busy} onClick={() => setMode('api')}><KeyRound size={17} /> Use an API key instead</button>
           {claude.cliCredentialsPresent && <p className="ob-muted ob-muted--center">You're already signed in to the Claude CLI on this machine — ThemeBot won't use it until you choose to here.</p>}
         </div>

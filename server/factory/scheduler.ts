@@ -1,13 +1,14 @@
 import { rename } from 'node:fs/promises';
 import path from 'node:path';
 import { db } from '../db';
+import { buildsBlockedReason } from '../cloud-client';
 import { driveJob, type DriveControl, type RunMode } from './convergence';
 import { getFactorySettings } from './settings';
 import { ACTIVE_STATUSES } from './types';
 
 type Driver = (jobId: string, control: DriveControl) => Promise<void>;
 
-interface RunningSlot { abort: AbortController; kill: ((reason?: string) => void) | null; mode?: RunMode; }
+interface RunningSlot { abort: AbortController; kill: ((reason?: string) => void | Promise<void>) | null; mode?: RunMode; done?: Promise<void>; }
 
 /**
  * In-process slot manager: fills free slots FIFO from queued jobs, staggers launches,
@@ -19,6 +20,8 @@ export class FactoryScheduler {
   private queuePausedReason: string | null = null;
   private lastLaunchAt = 0;
   private ticking = false;
+  /** Set by shutdown(): nothing new starts while the server is closing. */
+  private closing = false;
   private staggerTimer: NodeJS.Timeout | null = null;
   /** Check / fix runs waiting for a slot (kept in settings too, so a restart doesn't turn them
    *  into a full build that would redo the first step). */
@@ -64,10 +67,13 @@ export class FactoryScheduler {
   }
 
   async tick() {
-    if (this.ticking) return;
+    if (this.ticking || this.closing) return;
     this.ticking = true;
     try {
       if (this.queuePaused) return;
+      // Desktop builds need a valid ThemeBot pass to start; queued builds wait for the next one
+      // (server/index.ts ticks again when a pass arrives).
+      if (buildsBlockedReason()) return;
       const settings = await getFactorySettings();
       while (this.running.size < settings.concurrency) {
         // String()-wrap created_at: Postgres returns it as a Date, so .localeCompare would throw.
@@ -100,10 +106,17 @@ export class FactoryScheduler {
       onUsageLimit: () => this.pauseQueueOnUsageLimit(),
       mode,
     };
+    // A stopped run of this job may still be winding down (killing its sessions, saving its step
+    // list): start only once it has, so two runs never work in one folder (Pause → Resume at once).
+    // (Bounded: a run stuck in a long uninterruptible stage doesn't hold the slot forever.)
     // Claim the job BEFORE the driver runs: a job must never look 'queued' while (or after)
     // its driver executes, or a tick could relaunch it.
-    void db.updateFactoryJob(jobId, { status: 'scaffolding', status_detail: 'Starting' })
-      .then(() => this.driver(jobId, control))
+    slot.done = this.afterWindDown(jobId, 30_000)
+      .then(async () => {
+        if (abort.signal.aborted) return; // stopped again before it got going
+        await db.updateFactoryJob(jobId, { status: 'scaffolding', status_detail: 'Starting' });
+        await this.driver(jobId, control);
+      })
       .catch(() => {})
       // Only free OUR slot: a stopped run can finish after a resumed run of the same job took the
       // slot, and deleting that one would hide the new run and let a tick launch the job twice.
@@ -127,10 +140,27 @@ export class FactoryScheduler {
 
   isRunning(jobId: string) { return this.running.has(jobId); }
 
+  /** Stopped runs still finishing up (their slot is already free), by job. */
+  private windingDown = new Map<string, Promise<void>>();
+  private trackWindDown(jobId: string, slot: RunningSlot) {
+    const done = slot.done;
+    if (!done) return;
+    this.windingDown.set(jobId, done);
+    void done.finally(() => { if (this.windingDown.get(jobId) === done) this.windingDown.delete(jobId); });
+  }
+  /** Waits (at most `ms`) for a stopped run of this job to finish up. */
+  private async afterWindDown(jobId: string, ms = 15_000) {
+    const done = this.windingDown.get(jobId);
+    if (!done) return;
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([done.catch(() => {}), new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); })]);
+    if (timer) clearTimeout(timer);
+  }
+
   /** Kill the job's active CLI/QA process and free its slot. */
   async stop(jobId: string, status: 'paused' | 'canceled') {
     const slot = this.running.get(jobId);
-    if (slot) { slot.abort.abort(); slot.kill?.(status === 'paused' ? 'killed' : 'killed'); this.running.delete(jobId); }
+    if (slot) { slot.abort.abort(); void slot.kill?.('killed'); this.running.delete(jobId); this.trackWindDown(jobId, slot); }
     const mode = slot?.mode ?? this.modes.get(jobId);
     this.modes.delete(jobId); void this.saveModes();
     // Stopping a hand-started check / fix run just ends it — the build keeps its last score.
@@ -156,6 +186,8 @@ export class FactoryScheduler {
     if (!job) throw new Error('Job not found.');
     if (this.running.has(jobId)) throw new Error('Job is currently running.');
     if (!['canceled', 'converged', 'exhausted', 'failed', 'aborted', 'blocked', 'paused', 'checked'].includes(job.status)) throw new Error(`Cannot rebuild a job in status '${job.status}'.`);
+    // Just stopped? Let that run close its logs before they are moved aside.
+    await this.afterWindDown(jobId);
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const reports = path.join(job.workspace_path, 'qa', 'reports');
     const logs = path.join(job.workspace_path, 'factory', 'logs');
@@ -189,11 +221,23 @@ export class FactoryScheduler {
     void this.tick();
   }
 
-  async shutdown() {
+  /** Stops every running build for a server shutdown. Waits until their process trees have been
+   *  told to stop: the server exits right after this, and on Windows a taskkill cut off half way
+   *  leaves the AI's child processes running behind a closed app. */
+  async shutdown(windDownMs = 5000) {
+    this.closing = true;
     if (this.staggerTimer) clearTimeout(this.staggerTimer);
-    for (const [jobId, slot] of this.running) {
-      slot.abort.abort(); slot.kill?.('killed');
-      await db.updateFactoryJob(jobId, { status: 'blocked', status_detail: 'Interrupted by server shutdown — press Retry to resume' });
+    const slots = [...this.running];
+    await Promise.allSettled(slots.map(([, slot]) => { slot.abort.abort(); return slot.kill?.('killed'); }));
+    // Then a moment for the drivers to wind down (QA browsers closed, step results kept for the
+    // next run) — never long: the desktop host force-stops the server after 20 seconds.
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([Promise.allSettled(slots.map(([, slot]) => slot.done)), new Promise<void>((resolve) => { timer = setTimeout(resolve, windDownMs); })]);
+    if (timer) clearTimeout(timer);
+    for (const [jobId] of slots) {
+      // A clean quit isn't a failure: back in the queue, so the build carries on by itself the
+      // next time ThemeBot starts (crash loops are still caught by boot()'s restart counter).
+      await db.updateFactoryJob(jobId, { status: 'queued', status_detail: 'Paused when ThemeBot closed — carries on when it opens again' });
       await this.syncMirror(jobId);
     }
     this.running.clear();

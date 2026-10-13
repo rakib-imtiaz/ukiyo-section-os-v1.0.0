@@ -11,6 +11,8 @@ interface Props {
   developerMode: boolean;
   /** False in the customer edition: the terminal and browser tools aren't shipped there. */
   showDeveloperTools?: boolean;
+  /** The ThemeBot account this computer is signed in with (desktop builds that require one), else null. */
+  account?: { email: string | null; signedIn: boolean } | null;
   onDeveloperMode: (on: boolean) => void;
   onSwitchWorkspace: () => void;
   onLogoutClaude: () => void;
@@ -83,6 +85,12 @@ export default function ConnectionsPage(props: Props) {
     <section className="page-pad settings-page">
       <div className="glass-heading"><div><h2>Connections</h2><p>What ThemeBot is signed in to, and what each one is used for.</p></div></div>
       <div className="settings-grid conn-grid">
+        {props.account && <ConnCard wide icon={<Sparkles size={18} />} title="ThemeBot account" usedFor="your ThemeBot plan. New builds start only while ThemeBot can check it, so stay online while you build."
+          pill={<Pill ok={props.account.signedIn}>{props.account.signedIn ? 'Signed in' : 'Can’t reach ThemeBot'}</Pill>}>
+          <div className="conn-facts"><span>Signed in as</span><b>{props.account.email ?? 'Checking…'}</b></div>
+          <p className="conn-empty">To use ThemeBot on another computer, sign out here first: Help → Sign out of this PC.</p>
+        </ConnCard>}
+
         <ConnCard icon={<Cpu size={18} />} title="AI engine" usedFor="the AI that builds your themes and checks them against your website. See which one is connected, sign in, or add API keys under Manage."
           pill={<Pill ok={props.claudeConnected}>{props.claudeConnected ? 'Connected' : 'Not connected'}</Pill>}>
           <div className="conn-facts"><span>Builds are saved in</span><b>{props.workspaceName ?? 'No folder chosen'}</b></div>

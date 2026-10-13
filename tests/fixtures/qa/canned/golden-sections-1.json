@@ -1,0 +1,92 @@
+{
+  "presence": 0.8333,
+  "text": 0.9267,
+  "catalogUnseeded": [],
+  "pages": [
+    {
+      "route": "/",
+      "shopifyPath": "/",
+      "status": "ok",
+      "reactSections": 4,
+      "matched": 3,
+      "missing": 1,
+      "extra": 0,
+      "textScore": 0.847,
+      "sections": [
+        {
+          "react": "Wild & Sacred botanical rituals",
+          "order": [
+            0,
+            0
+          ],
+          "textScore": 0.542,
+          "structureMatch": true
+        },
+        {
+          "react": "Why choose us",
+          "order": [
+            1,
+            1
+          ],
+          "textScore": 1,
+          "structureMatch": true
+        },
+        {
+          "react": "See the collection",
+          "order": [
+            3,
+            2
+          ],
+          "textScore": 1,
+          "structureMatch": true
+        }
+      ]
+    },
+    {
+      "route": "/about",
+      "shopifyPath": "/pages/about",
+      "status": "ok",
+      "reactSections": 2,
+      "matched": 2,
+      "missing": 0,
+      "extra": 0,
+      "textScore": 1,
+      "sections": [
+        {
+          "react": "Our story",
+          "order": [
+            0,
+            0
+          ],
+          "textScore": 1,
+          "structureMatch": true
+        },
+        {
+          "react": "Meet the makers",
+          "order": [
+            1,
+            1
+          ],
+          "textScore": 1,
+          "structureMatch": true
+        }
+      ]
+    }
+  ],
+  "issues": [
+    {
+      "id": "s1-1",
+      "kind": "text_drift",
+      "page": "/",
+      "title": "\"Wild & Sacred botanical rituals\" text drifts from React (54% match)",
+      "detail": "React strings missing/different on Shopify:\n> Wild & Sacred botanical rituals Handcrafted botanical rituals for modern life.\n> Small batch blends made in Oregon.\n> Every jar is poured by hand and sealed with beeswax."
+    },
+    {
+      "id": "s1-2",
+      "kind": "missing_section",
+      "page": "/",
+      "title": "Missing section: \"Loved by many\" (band 3 of 4)",
+      "detail": "React band at y=692 (321px, 0 media, 1 links). Excerpt: Loved by many Customers love the calming evening rituals. Five stars across two thousand verified reviews, with the sleep blend the most reordered tea of the year. Read all reviews"
+    }
+  ]
+}

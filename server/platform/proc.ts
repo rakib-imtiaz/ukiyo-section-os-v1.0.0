@@ -15,16 +15,25 @@ function signalGroup(pid: number, signal: NodeJS.Signals): boolean {
   try { process.kill(-pid, signal); return true; } catch { return false; }
 }
 
-export function killTree(child: ChildProcess | null | undefined) {
-  if (!child || child.pid == null || child.exitCode !== null || child.signalCode !== null) return;
+/** Resolves once the tree has been told to stop (Windows: when taskkill has finished). */
+export function killTree(child: ChildProcess | null | undefined): Promise<void> {
+  if (!child || child.pid == null || child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
   const pid = child.pid;
   if (process.platform === 'win32') {
-    spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { shell: false, windowsHide: true });
-    return;
+    // stdio 'ignore': taskkill reports each kill on stdout. Piped back to a server that is shutting
+    // down, a failed write would end taskkill midway — leaving the dev server and its children alive.
+    return new Promise((resolve) => {
+      const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { shell: false, windowsHide: true, stdio: 'ignore' });
+      const timer = setTimeout(resolve, 5000);
+      const done = () => { clearTimeout(timer); resolve(); };
+      killer.once('exit', done);
+      killer.once('error', done);
+    });
   }
   if (!signalGroup(pid, 'SIGTERM')) { try { child.kill('SIGTERM'); } catch { /* already gone */ } }
   // The leader may exit at once while its descendants linger — always sweep the group.
   setTimeout(() => {
     if (!signalGroup(pid, 'SIGKILL') && child.exitCode === null) { try { child.kill('SIGKILL'); } catch { /* gone */ } }
   }, 3000).unref();
+  return Promise.resolve();
 }

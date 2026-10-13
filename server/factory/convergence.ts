@@ -1,15 +1,19 @@
 import { spawn } from 'node:child_process';
+import { createHash, randomUUID } from 'node:crypto';
 import { recordBuild, recordStage } from './engines';
 import { access, appendFile, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from '../config';
 import { db, type FactoryJobRecord } from '../db';
 import { decrypt } from '../security';
+import { CloudPassError, CloudRequestError, cloudFetch, cloudRequired } from '../cloud-client';
 import { runQa } from './qa';
-import { buildSpawnEnv, clearSignalFiles, cloneBlockerSignals, spawnClone, spawnFix, type RunHandle } from './runner';
+import { QaCaptureError, runQaViaCloud } from './qa-cloud';
+import { buildSpawnEnv, clearSignalFiles, cloneBlockerSignals, effectiveModel, modelCapNote, noteActivity, removeWorkspaceTranscripts, spawnClone, spawnFix, spawnStep, stepSignalPath, type CloudStep, type RunHandle } from './runner';
 import { trustWorkspace } from './scaffolder';
 import { getFactorySettings } from './settings';
-import type { FactorySettings } from './types';
+import { readLocalBuild, readStepProgress, stepsDir, writeLocalBuild, writeStepProgress, type LocalBuild, type StepEntry, type StepProgress } from './progress';
+import type { FactorySettings, RunResult } from './types';
 import { resourcePath } from '../runtime-paths';
 import { killTree, ownProcessGroup } from '../platform/proc';
 
@@ -150,6 +154,7 @@ async function pruneIterationArtifacts(job: FactoryJobRecord, keep: number, curr
     targets.push(
       path.join(root, 'qa', 'screenshots', 'factory', String(n)),
       path.join(factoryReports, `qa-summary-${n}.md`),
+      path.join(factoryReports, `qa-summary-${n}.capture-failed.md`),
       path.join(factoryReports, `sections-${n}.md`),
       path.join(factoryReports, `sections-${n}.json`),
       path.join(factoryReports, `interactions-${n}.md`),
@@ -170,7 +175,9 @@ async function firstLines(target: string, count = 6) {
 /** A run the user started by hand from the build panel: one check, or fix rounds (each fix is
  *  followed by a check). Both work from what is on disk and never re-run the first build step. */
 export type RunMode = { kind: 'check' } | { kind: 'fix'; rounds: number };
-export interface DriveControl { signal: AbortSignal; registerKill: (kill: ((reason?: string) => void) | null) => void; onUsageLimit?: () => void; mode?: RunMode; }
+/** registerKill: the hook that stops whatever runs right now (resolves once the process trees were
+ *  told to stop — the scheduler waits for that on quit, so nothing outlives the app). */
+export interface DriveControl { signal: AbortSignal; registerKill: (kill: ((reason?: string) => void | Promise<void>) | null) => void; onUsageLimit?: () => void; mode?: RunMode; }
 
 async function transition(jobId: string, status: string, detail: string | null = null, extra: Partial<FactoryJobRecord> = {}) {
   const job = await db.updateFactoryJob(jobId, { status, status_detail: detail, ...extra });
@@ -185,6 +192,9 @@ async function transition(jobId: string, status: string, detail: string | null =
 
 async function awaitRun(handle: RunHandle, control: DriveControl) {
   control.registerKill(handle.kill);
+  // Paused / cancelled / quitting while this session was being set up: the stop already called the
+  // (then empty) kill hook, so stop this session now instead of letting it run unwatched.
+  if (control.signal.aborted) void handle.kill('killed');
   try { return await handle.result; } finally { control.registerKill(null); }
 }
 
@@ -238,65 +248,10 @@ export async function driveJob(jobId: string, control: DriveControl) {
     // Hand-started check / fix rounds: straight to the loop, never the first build step.
     if (control.mode) { await runConvergenceLoop(job, settings, control); return; }
 
-    // --- Stage 1: initial clone (skipped when final.md already exists) ---
-    const finalPath = path.join(job.workspace_path, 'qa', 'reports', 'final.md');
-    // A blocked run can write final.md too ("run ended BLOCKED") — that is not a finished clone.
-    // Only a final.md with no blocker file beside it, and not itself reporting a block, counts.
-    const blockerLeft = (await Promise.all(cloneBlockerSignals(job).map(fileExists))).some(Boolean);
-    const finalText = await readFile(finalPath, 'utf8').catch(() => null);
-    const cloneDone = finalText !== null && !blockerLeft && !/status:\s*\**\s*(blocked|aborted)/i.test(finalText.slice(0, 1500));
-    if (!cloneDone) {
-      if (finalText !== null) await rm(finalPath, { force: true }).catch(() => {});
-      // A prior blocked/aborted run leaves BLOCKED.md/ABORTED.md on disk; without clearing
-      // them the signal poller would instantly re-settle the fresh CLI on the stale file,
-      // making retry-after-block impossible. Clear before re-spawning.
-      await clearSignalFiles(cloneBlockerSignals(job));
-      await transition(job.id, 'cloning', 'Headless /clone-theme run in progress', { started_at: job.started_at ?? new Date().toISOString() });
-      const iterationRow = await recordIteration(job, 0, 'clone', path.join('factory', 'logs', 'clone-0.log'));
-      const outcome = await awaitRun(spawnClone(job, settings.secretScrub, { inactivityMs: min(settings.inactivityTimeoutMin), wallClockMs: min(settings.cloneTimeoutMin) }, settings.cloneModel), control);
-
-      if (outcome.outcome === 'spawn_error') {
-        await db.finishFactoryIteration(iterationRow.id, 'failed');
-        await transition(job.id, 'failed', outcome.detail ?? 'Could not launch the Claude CLI — check the path in Settings.', { error: outcome.detail ?? null, finished_at: new Date().toISOString() });
-        return;
-      }
-
-      if (outcome.outcome === 'aborted') {
-        await db.finishFactoryIteration(iterationRow.id, 'failed');
-        await transition(job.id, 'aborted', await firstLines(outcome.signalFile!) || 'Identity mismatch (ABORTED.md)', { finished_at: new Date().toISOString() });
-        return;
-      }
-      if (outcome.outcome === 'blocked') {
-        await db.finishFactoryIteration(iterationRow.id, 'failed');
-        await transition(job.id, 'blocked', await firstLines(outcome.signalFile!) || 'Blocked (BLOCKED.md)');
-        return;
-      }
-      if (outcome.outcome === 'usage_limit') {
-        await db.finishFactoryIteration(iterationRow.id, 'failed');
-        await transition(job.id, 'blocked', 'Usage limit reached — retry later');
-        control.onUsageLimit?.();
-        return;
-      }
-      if (outcome.outcome === 'timeout' || outcome.outcome === 'inactivity') {
-        await db.finishFactoryIteration(iterationRow.id, 'timed_out');
-        await transition(job.id, 'blocked', `CLI stalled: ${outcome.detail ?? outcome.outcome}`);
-        return;
-      }
-      if (outcome.outcome === 'killed') {
-        await db.finishFactoryIteration(iterationRow.id, 'killed');
-        return; // pause/cancel already set the job status
-      }
-      if (outcome.outcome !== 'final') {
-        await db.finishFactoryIteration(iterationRow.id, 'failed');
-        await transition(job.id, 'failed', outcome.detail ?? `Clone run exited (${outcome.exitCode ?? 'n/a'}) without writing final.md`, { error: outcome.detail ?? null, finished_at: new Date().toISOString() });
-        return;
-      }
-      await db.finishFactoryIteration(iterationRow.id, 'succeeded', { report_path: path.join('qa', 'reports', 'final.md') });
-      // Check rounds from before this clone compared an empty theme — set them aside, start over.
-      const roundReports = path.join(job.workspace_path, 'qa', 'reports', 'factory');
-      if (await fileExists(roundReports)) await rename(roundReports, `${roundReports}-before-clone-${Date.now()}`).catch(() => {});
-      await db.updateFactoryJob(job.id, { score_history: [], last_score: null });
-    }
+    // --- Stage 1: the build. ThemeBot Cloud configured → the recipe arrives one step at a time;
+    // otherwise (internal edition, dev) one headless /clone-theme session from the local templates.
+    const built = recipeFromCloud() ? await runCloudBuild(job, settings, control) : await runLocalClone(job, settings, control);
+    if (!built) return;
 
     job = (await db.getFactoryJob(jobId))!;
     if (!job.auto_qa) {
@@ -312,6 +267,455 @@ export async function driveJob(jobId: string, control: DriveControl) {
     await transition(jobId, 'failed', error instanceof Error ? error.message : 'Unexpected factory error', { error: error instanceof Error ? error.message : String(error), finished_at: new Date().toISOString() });
   }
 }
+
+/** Check rounds from before this clone compared an empty theme — set them aside, start over. */
+async function setAsideEarlierChecks(job: FactoryJobRecord) {
+  const roundReports = path.join(job.workspace_path, 'qa', 'reports', 'factory');
+  if (await fileExists(roundReports)) await rename(roundReports, `${roundReports}-before-clone-${Date.now()}`).catch(() => {});
+  await db.updateFactoryJob(job.id, { score_history: [], last_score: null });
+}
+
+/**
+ * Stage 1 without ThemeBot Cloud: one headless `claude -p /clone-theme` session (the bundled
+ * command in .claude/commands). Skipped when final.md already exists. True = the clone is ready.
+ */
+async function runLocalClone(job: FactoryJobRecord, settings: FactorySettings, control: DriveControl): Promise<boolean> {
+  const finalPath = path.join(job.workspace_path, 'qa', 'reports', 'final.md');
+  // A blocked run can write final.md too ("run ended BLOCKED") — that is not a finished clone.
+  // Only a final.md with no blocker file beside it, and not itself reporting a block, counts.
+  const blockerLeft = (await Promise.all(cloneBlockerSignals(job).map(fileExists))).some(Boolean);
+  const finalText = await readFile(finalPath, 'utf8').catch(() => null);
+  const cloneDone = finalText !== null && !blockerLeft && !/status:\s*\**\s*(blocked|aborted)/i.test(finalText.slice(0, 1500));
+  if (cloneDone) return true;
+
+  if (finalText !== null) await rm(finalPath, { force: true }).catch(() => {});
+  // A prior blocked/aborted run leaves BLOCKED.md/ABORTED.md on disk; without clearing
+  // them the signal poller would instantly re-settle the fresh CLI on the stale file,
+  // making retry-after-block impossible. Clear before re-spawning.
+  await clearSignalFiles(cloneBlockerSignals(job));
+  await transition(job.id, 'cloning', 'Headless /clone-theme run in progress', { started_at: job.started_at ?? new Date().toISOString() });
+  const iterationRow = await recordIteration(job, 0, 'clone', path.join('factory', 'logs', 'clone-0.log'));
+  const outcome = await awaitRun(spawnClone(job, settings.secretScrub, { inactivityMs: min(settings.inactivityTimeoutMin), wallClockMs: min(settings.cloneTimeoutMin) }, settings.cloneModel), control);
+
+  if (outcome.outcome === 'spawn_error') {
+    await db.finishFactoryIteration(iterationRow.id, 'failed');
+    await transition(job.id, 'failed', outcome.detail ?? 'Could not launch the Claude CLI — check the path in Settings.', { error: outcome.detail ?? null, finished_at: new Date().toISOString() });
+    return false;
+  }
+
+  if (outcome.outcome === 'aborted') {
+    await db.finishFactoryIteration(iterationRow.id, 'failed');
+    await transition(job.id, 'aborted', await firstLines(outcome.signalFile!) || 'Identity mismatch (ABORTED.md)', { finished_at: new Date().toISOString() });
+    return false;
+  }
+  if (outcome.outcome === 'blocked') {
+    await db.finishFactoryIteration(iterationRow.id, 'failed');
+    await transition(job.id, 'blocked', await firstLines(outcome.signalFile!) || 'Blocked (BLOCKED.md)');
+    return false;
+  }
+  if (outcome.outcome === 'usage_limit') {
+    await db.finishFactoryIteration(iterationRow.id, 'failed');
+    await transition(job.id, 'blocked', 'Usage limit reached — retry later');
+    control.onUsageLimit?.();
+    return false;
+  }
+  if (outcome.outcome === 'budget') {
+    await db.finishFactoryIteration(iterationRow.id, 'failed');
+    await transition(job.id, 'blocked', outcome.detail ?? 'Build budget reached');
+    return false;
+  }
+  if (outcome.outcome === 'timeout' || outcome.outcome === 'inactivity') {
+    await db.finishFactoryIteration(iterationRow.id, 'timed_out');
+    await transition(job.id, 'blocked', `CLI stalled: ${outcome.detail ?? outcome.outcome}`);
+    return false;
+  }
+  if (outcome.outcome === 'killed') {
+    await db.finishFactoryIteration(iterationRow.id, 'killed');
+    return false; // pause/cancel already set the job status
+  }
+  if (outcome.outcome !== 'final') {
+    await db.finishFactoryIteration(iterationRow.id, 'failed');
+    await transition(job.id, 'failed', outcome.detail ?? `Clone run exited (${outcome.exitCode ?? 'n/a'}) without writing final.md`, { error: outcome.detail ?? null, finished_at: new Date().toISOString() });
+    return false;
+  }
+  await db.finishFactoryIteration(iterationRow.id, 'succeeded', { report_path: path.join('qa', 'reports', 'final.md') });
+  await setAsideEarlierChecks(job);
+  return true;
+}
+
+// --- Stage 1 with ThemeBot Cloud: the recipe one step at a time ----------------------------------
+//
+// The recipe never touches this computer's disk. For each step the Cloud hands out (after checking
+// the pass and that this account owns the build) the prompt is piped into `claude -p` on stdin;
+// the step ends when it writes its signal file (factory/steps/<id>.done), and the result goes back
+// to the Cloud, which decides what comes next. Page steps run side by side (pageConcurrency). The
+// Cloud keeps the step history, so Resume continues at the first unfinished step. After every step
+// Claude Code's transcript for this workspace is deleted (the CLI also runs with
+// --no-session-persistence); logs hold only the readable events, never the raw stream.
+
+/** True when this server talks to ThemeBot Cloud (THEMEBOT_CLOUD_URL) — the recipe then comes from
+ *  there. Not tied to the edition: an internal build with a Cloud configured uses it too. */
+export const recipeFromCloud = () => cloudRequired;
+
+type PlanEntry = { id: string; kind: string; title: string; status: StepEntry['status']; page?: string };
+interface NextAnswer { step?: CloudStep; wait?: boolean; done?: boolean; blocked?: string; code?: string; plan?: PlanEntry[]; recipeVersion?: string }
+
+/** What to tell the person when the Cloud said no (or couldn't be reached). */
+function cloudProblem(error: unknown): string {
+  // No usable pass while a build runs (its text is about starting builds — this one stopped).
+  if (error instanceof CloudPassError) {
+    if (error.code === 'OFFLINE') return "ThemeBot can't reach its servers, so the build paused before its next step. Check your internet connection, then press Resume.";
+    if (error.code === 'SIGNED_OUT') return 'Sign in to ThemeBot again, then press Resume — the build carries on where it stopped.';
+    return error.message;
+  }
+  if (error instanceof CloudRequestError) {
+    switch (error.code) {
+      case 'ACCOUNT_INACTIVE': return 'Your ThemeBot plan is not active, so the build stopped before its next step. Renew it, then press Resume.';
+      case 'SIGNED_OUT': case 'PASS_REQUIRED': case 'PASS_INVALID': return 'Sign in to ThemeBot again, then press Resume — the build carries on where it stopped.';
+      case 'PASS_EXPIRED': case 'OFFLINE': return "ThemeBot can't reach its servers, so the build paused before its next step. Check your internet connection, then press Resume.";
+      case 'RATE_LIMITED': return 'ThemeBot Cloud asked the app to slow down. Press Resume in a few minutes.';
+      case 'NOT_CONFIGURED': return 'ThemeBot Cloud is not configured for this copy of ThemeBot.';
+      default: return `ThemeBot Cloud: ${error.message}`;
+    }
+  }
+  return error instanceof Error ? error.message : 'ThemeBot Cloud could not be reached.';
+}
+
+const sameInstant = (a: unknown, b: unknown) => a != null && b != null && new Date(String(a)).getTime() === new Date(String(b)).getTime();
+
+/** The page list from qa/state/inventory.json, in the compact shape POST /v1/builds/:id/pages takes. */
+async function inventoryPages(workspace: string): Promise<Array<Record<string, unknown>> | null> {
+  let raw: { pages?: unknown };
+  try { raw = JSON.parse(await readFile(path.join(workspace, 'qa', 'state', 'inventory.json'), 'utf8')) as { pages?: unknown }; } catch { return null; }
+  if (!Array.isArray(raw.pages)) return null;
+  const str = (value: unknown, max: number) => (typeof value === 'string' && value.trim() ? value.trim().slice(0, max) : undefined);
+  return raw.pages.filter((page): page is Record<string, unknown> => Boolean(page) && typeof page === 'object' && typeof (page as { route?: unknown }).route === 'string').slice(0, 200).map((page) => {
+    const bands = Number(page.band_count ?? (Array.isArray(page.bands) ? page.bands.length : NaN));
+    const model = page.model === 'opus' || page.model === 'sonnet' ? page.model : page.complexity === 'complex' ? 'opus' : page.complexity === 'simple' ? 'sonnet' : undefined;
+    return {
+      route: str(page.route, 200), name: str(page.name, 60), handle: str(page.shopify_handle ?? page.handle, 120),
+      template: str(page.template ?? page.shopify_template, 120), file: str(page.react_file, 200),
+      ...(Number.isInteger(bands) && bands > 0 ? { bands } : {}), ...(model ? { model } : {}), type: str(page.type, 20),
+    };
+  });
+}
+
+/** Creates the Cloud build for this job's run and resets the local step state. */
+async function createCloudBuild(job: FactoryJobRecord, startedAt: string, keepSteps = false): Promise<LocalBuild> {
+  // Old signal files would end the new build's steps the moment they start.
+  if (!keepSteps) await rm(stepsDir(job.workspace_path), { recursive: true, force: true }).catch(() => {});
+  // A Rebuild lists the pages already built: their page steps check them instead of rewriting.
+  let rebuiltRoutes: string[] = [];
+  try {
+    const already = JSON.parse(await readFile(path.join(job.workspace_path, 'qa', 'state', 'already-built.json'), 'utf8')) as { pages?: Array<{ route?: unknown }> };
+    rebuiltRoutes = withinBudget((already.pages ?? []).map((page) => page.route).filter((route): route is string => typeof route === 'string' && route.length <= 200).slice(0, 200));
+  } catch { /* not a rebuild */ }
+  const created = await cloudFetch<{ buildId: string; recipeVersion?: string; plan?: PlanEntry[] }>('/v1/builds', {
+    name: job.name, prefix: job.prefix, storeHost: new URL(job.store_url).host, reactUrl: job.react_url,
+    root: job.workspace_path, devThemeName: job.dev_theme_name, qaEngine: job.qa_engine, rebuiltRoutes,
+  });
+  const build: LocalBuild = { buildId: created.buildId, jobStartedAt: startedAt, createdAt: new Date().toISOString(), recipeVersion: created.recipeVersion ?? null, pagesHash: null };
+  await writeLocalBuild(job.workspace_path, build);
+  return build;
+}
+
+/** Uploads the inventory's pages whenever they changed since the last upload (chunked: the Cloud
+ *  takes small bodies). The Cloud plans one build step and one check step per page. */
+async function syncPages(job: FactoryJobRecord, build: LocalBuild): Promise<LocalBuild> {
+  const pages = await inventoryPages(job.workspace_path);
+  if (!pages?.length) return build;
+  const hash = createHash('sha256').update(JSON.stringify(pages)).digest('hex').slice(0, 32);
+  if (hash === build.pagesHash) return build;
+  const chunks: Array<Array<Record<string, unknown>>> = [[]];
+  let size = 0;
+  for (const page of pages) {
+    const bytes = JSON.stringify(page).length + 1;
+    if (size + bytes > 12_000 && chunks[chunks.length - 1].length) { chunks.push([]); size = 0; }
+    chunks[chunks.length - 1].push(page);
+    size += bytes;
+  }
+  for (const [index, chunk] of chunks.entries()) await cloudFetch(`/v1/builds/${build.buildId}/pages`, { pages: chunk, replace: index === 0 });
+  const next = { ...build, pagesHash: hash };
+  await writeLocalBuild(job.workspace_path, next);
+  return next;
+}
+
+/** Deletes Claude Code's transcripts for this job's workspace (never anything else). */
+async function cleanTranscripts(job: FactoryJobRecord, sessionIds?: string[]) {
+  await removeWorkspaceTranscripts(job.workspace_path, sessionIds ? { sessionIds } : {}).catch(() => []);
+}
+
+/** Step requests go through the Cloud's 16 kB JSON parser (measured after gzip is inflated), so
+ *  everything this app sends to /v1/builds stays well under it: ~8 kB of lists per request. */
+const STEP_BODY_BUDGET = 8 * 1024;
+
+/** The results to deliver late with the next /next call: as many as fit the budget (at most 150). */
+function unackedBatch(unacked: StepProgress['unacked']): StepProgress['unacked'] {
+  const batch: StepProgress['unacked'] = [];
+  let bytes = 0;
+  for (const entry of unacked.slice(0, 150)) {
+    bytes += Buffer.byteLength(JSON.stringify(entry)) + 1;
+    if (bytes > STEP_BODY_BUDGET && batch.length) break;
+    batch.push(entry);
+  }
+  return batch;
+}
+
+/** As many routes as fit the step-request budget (a Rebuild of a big site lists every built page). */
+function withinBudget(routes: string[]): string[] {
+  const kept: string[] = [];
+  let bytes = 0;
+  for (const route of routes) {
+    bytes += Buffer.byteLength(JSON.stringify(route)) + 1;
+    if (bytes > STEP_BODY_BUDGET) break;
+    kept.push(route);
+  }
+  return kept;
+}
+
+/** Page build and page check steps: the Cloud retries them, then skips just that page. */
+const isPageStep = (step: CloudStep) => step.kind === 'page' || step.kind === 'verify' || /^(page|verify):/.test(step.id);
+
+const STEP_OUTCOME: Record<RunResult['outcome'], string> = {
+  sentinel: 'done', final: 'done', blocked: 'blocked', aborted: 'aborted', exit: 'failed',
+  timeout: 'timeout', inactivity: 'inactivity', killed: 'killed', usage_limit: 'usage_limit', spawn_error: 'spawn_error',
+  // ThemeBot Engine stopped at the build's budget cap: the Cloud knows it as a blocked step.
+  budget: 'blocked',
+};
+
+/** Stage 1 on ThemeBot Cloud steps. True when the Cloud says every step is finished. */
+async function runCloudBuild(job: FactoryJobRecord, settings: FactorySettings, control: DriveControl): Promise<boolean> {
+  const workspace = job.workspace_path;
+  const startedAt = job.started_at ?? new Date().toISOString();
+  // Resume after a blocker: the old BLOCKED.md / ABORTED.md must not end the new run at once.
+  await clearSignalFiles(cloneBlockerSignals(job));
+
+  // Same run (Resume, a restart) → the same Cloud build, continuing at its first unfinished step.
+  // A Rebuild resets started_at → a new build.
+  let build: LocalBuild;
+  try {
+    const existing = await readLocalBuild(workspace);
+    build = existing && sameInstant(existing.jobStartedAt, startedAt) ? existing : await createCloudBuild(job, startedAt);
+  } catch (error) {
+    if (control.signal.aborted) return false; // stopped meanwhile: the stop set the status
+    await transition(job.id, 'blocked', cloudProblem(error), { started_at: startedAt });
+    return false;
+  }
+  // Stopped while the Cloud build was being looked up / created: keep the status the stop set, but
+  // remember the run's start so Resume continues this Cloud build instead of creating another.
+  if (control.signal.aborted) { if (!job.started_at) await db.updateFactoryJob(job.id, { started_at: startedAt }); return false; }
+
+  const session = randomUUID();
+  const saved = await readStepProgress(workspace);
+  const progress: StepProgress = saved?.buildId === build.buildId ? { ...saved, unacked: saved.unacked ?? [] } : { buildId: build.buildId, recipeVersion: build.recipeVersion, updatedAt: '', state: 'running', detail: null, steps: [], unacked: [] };
+  progress.state = 'running';
+  progress.detail = null;
+  const running = new Map<string, { step: CloudStep; handle: RunHandle; ended: Promise<{ id: string; result: RunResult }> }>();
+  const limit = Math.max(1, settings.pageConcurrency ?? 2);
+  let ranSteps = 0;
+  let recreated = false;
+
+  const save = async (plan?: PlanEntry[]) => {
+    if (plan) progress.steps = plan.map((entry) => ({ id: entry.id, kind: entry.kind, title: entry.title, status: entry.status, ...(entry.page ? { page: entry.page } : {}) }));
+    progress.steps = progress.steps.map((entry) => (running.has(entry.id) ? { ...entry, status: 'running' as const } : entry.status === 'running' ? { ...entry, status: 'pending' as const } : entry));
+    progress.updatedAt = new Date().toISOString();
+    await writeStepProgress(workspace, progress).catch(() => {});
+  };
+  const describe = () => {
+    const titles = [...running.values()].map((entry) => entry.step.title);
+    const done = progress.steps.filter((entry) => entry.status === 'done').length;
+    const where = progress.steps.length ? ` (${done} of ${progress.steps.length} steps done)` : '';
+    return titles.length ? `${titles.slice(0, 2).join(' · ')}${titles.length > 2 ? ` +${titles.length - 2} more` : ''}${where}` : `Building with ThemeBot Cloud${where}`;
+  };
+  const report = async (stepId: string, outcome: string, detail?: string, later = false) => {
+    try {
+      if (later) throw new Error('deliver later');
+      const answer = await cloudFetch<{ plan?: PlanEntry[] }>(`/v1/builds/${build.buildId}/result`, { stepId, outcome, session, ...(detail ? { detail: detail.slice(0, 400) } : {}) });
+      await save(answer.plan);
+    } catch {
+      // Delivered with the next request instead (the Cloud would otherwise hand this step out again).
+      // Meanwhile the local list shows how it ended (and a lost Cloud build can carry it over).
+      progress.unacked.push({ id: stepId, outcome, ...(detail ? { detail: detail.slice(0, 200) } : {}) });
+      progress.steps = progress.steps.map((entry) => (entry.id !== stepId ? entry : { ...entry, status: outcome === 'done' ? 'done' : outcome === 'killed' ? 'pending' : 'failed' }));
+      await save();
+    }
+  };
+  const facts = async () => {
+    const [blocked, aborted] = await Promise.all(cloneBlockerSignals(job).map((file) => firstLines(file, 3)));
+    const present = async (...parts: string[]) => fileExists(path.join(workspace, ...parts));
+    return {
+      blocked: blocked || null, aborted: aborted || null,
+      files: { inventory: await present('qa', 'state', 'inventory.json'), handles: await present('qa', 'state', 'handles.json'), images: await present('qa', 'state', 'images.json'), theme: await present('qa', 'state', 'theme.json'), bootstrap: await present('qa', 'state', 'bootstrap.json'), final: await present('qa', 'reports', 'final.md') },
+    };
+  };
+  // A step handed out but never started (the build was stopped while the Cloud answered): its
+  // "killed" goes with the next request, so the Cloud closes it.
+  const notedCaps = new Set<string>();
+  const notStarted = (step: CloudStep) => { progress.unacked.push({ id: step.id, outcome: 'killed', detail: 'stopped before it started' }); };
+  const start = async (step: CloudStep) => {
+    const signal = stepSignalPath(workspace, step.signal);
+    if (signal) await clearSignalFiles([signal]);
+    if (control.signal.aborted) { notStarted(step); return; }
+    const model = effectiveModel(step.model, settings.cloneModel);
+    // The user's model setting caps every step; say so once (per model it lowered) in the activity.
+    const capNote = notedCaps.has(String(step.model)) ? null : modelCapNote(step.model, settings.cloneModel, step.kind === 'page' && step.model === 'opus' ? 'complex pages' : 'some steps');
+    if (capNote) { notedCaps.add(String(step.model)); await noteActivity(workspace, capNote); }
+    const handle = spawnStep(job, step, model, settings.secretScrub, { inactivityMs: min(settings.inactivityTimeoutMin), wallClockMs: min(settings.cloneTimeoutMin) });
+    running.set(step.id, { step, handle, ended: handle.result.then((result) => ({ id: step.id, result })) });
+    ranSteps += 1;
+    await save();
+    // Stopped during those awaits: the kill hook already ran — stop this one too, and leave the
+    // status the stop set (paused / canceled / queued on quit) alone.
+    if (control.signal.aborted) { void handle.kill('killed'); return; }
+    await transition(job.id, 'cloning', describe());
+  };
+
+  if (control.signal.aborted) await db.updateFactoryJob(job.id, { started_at: startedAt });
+  else await transition(job.id, 'cloning', 'Building with ThemeBot Cloud', { started_at: startedAt });
+  const iterationRow = await recordIteration(job, 0, 'clone', path.join('factory', 'logs', 'clone-0.log'));
+  const killAll = (reason?: string) => Promise.all([...running.values()].map((entry) => entry.handle.kill(reason))).then(() => {});
+  control.registerKill(killAll);
+  // Belt and braces: every stop aborts the signal, so steps that start after the kill hook ran
+  // (or between two of its calls) are stopped too.
+  const onAbort = () => { void killAll('killed'); };
+  control.signal.addEventListener('abort', onAbort);
+
+  let stop: { status: 'blocked' | 'aborted' | 'failed'; detail: string; iteration: 'failed' | 'timed_out'; usageLimit?: boolean } | null = null;
+  let done = false;
+  try {
+    for (;;) {
+      // 1. Fill the free slots — never while stopping, and never past a step that must run alone.
+      let answer: NextAnswer | null = null;
+      while (!stop && !control.signal.aborted && running.size < limit) {
+        try {
+          build = await syncPages(job, build);
+          const finished = unackedBatch(progress.unacked);
+          answer = await cloudFetch<NextAnswer>(`/v1/builds/${build.buildId}/next`, { session, running: [...running.keys()], finished, facts: await facts() });
+          progress.unacked = progress.unacked.slice(finished.length);
+        } catch (error) {
+          if (control.signal.aborted) break; // stopped meanwhile: not a Cloud problem
+          // The Cloud lost this build (e.g. its data was reset): start a new one once, carrying over
+          // what is already done here (delivered or not) so those steps don't run again.
+          if (error instanceof CloudRequestError && error.status === 404 && !recreated && running.size === 0) {
+            recreated = true;
+            try {
+              build = await createCloudBuild(job, startedAt, true);
+              progress.buildId = build.buildId;
+              const doneIds = new Set([...progress.steps.filter((entry) => entry.status === 'done').map((entry) => entry.id), ...progress.unacked.filter((entry) => entry.outcome === 'done').map((entry) => entry.id)]);
+              progress.unacked = [...doneIds].map((id) => ({ id, outcome: 'done' }));
+              continue;
+            } catch (retryError) { stop = { status: 'blocked', detail: cloudProblem(retryError), iteration: 'failed' }; break; }
+          }
+          stop = { status: 'blocked', detail: cloudProblem(error), iteration: 'failed' };
+          break;
+        }
+        progress.recipeVersion = answer.recipeVersion ?? progress.recipeVersion;
+        await save(answer.plan);
+        if (answer.step) {
+          if (control.signal.aborted) { notStarted(answer.step); await save(); break; }
+          await start(answer.step);
+          if (!answer.step.parallelGroup) break;
+          continue;
+        }
+        if (answer.blocked && running.size === 0) stop = { status: answer.code === 'ABORTED' ? 'aborted' : 'blocked', detail: answer.blocked, iteration: 'failed' };
+        break; // wait / done / blocked
+      }
+
+      if (running.size === 0) {
+        if (!stop && !control.signal.aborted) {
+          if (answer?.done) done = true;
+          else stop = { status: 'blocked', detail: answer?.blocked ?? 'ThemeBot Cloud had no step to run. Press Resume to try again.', iteration: 'failed' };
+        }
+        break;
+      }
+
+      // 2. Wait for a running step to end, report it, then go round again.
+      const ended = await Promise.race([...running.values()].map((entry) => entry.ended));
+      const entry = running.get(ended.id)!;
+      running.delete(ended.id);
+      // Transcripts: just this session's while other steps still run in the same folder.
+      const sessionId = entry.handle.sessionId();
+      await cleanTranscripts(job, running.size ? (sessionId ? [sessionId] : []) : undefined);
+      const { result } = ended;
+      let outcome = STEP_OUTCOME[result.outcome] ?? 'failed';
+      let detail = result.outcome === 'blocked' || result.outcome === 'aborted'
+        ? await firstLines(result.signalFile!, 3)
+        : result.detail ?? (outcome === 'failed' ? `ended (exit ${result.exitCode ?? 'n/a'}) without writing ${entry.step.signal}` : undefined);
+      if (result.outcome === 'timeout' || result.outcome === 'inactivity') {
+        // Make sure the stalled session is gone before anything runs in its place.
+        await entry.handle.kill(result.outcome);
+        // A page (or its check) that ran out of time is one failed try: the Cloud hands it out again
+        // and, after its tries, skips just that page — the other pages carry on. Core steps (and the
+        // final one) can't be skipped, so for them it still stops the build.
+        if (isPageStep(entry.step)) { outcome = 'failed'; detail = `ran out of time: ${result.detail ?? result.outcome}`; }
+      }
+      // Stopped (pause, cancel, quit): no network on the way out — the result goes with the next run's
+      // first request instead.
+      await report(entry.step.id, outcome, detail, control.signal.aborted);
+      if (outcome === 'done' || outcome === 'failed') { if (running.size && !control.signal.aborted) await transition(job.id, 'cloning', describe()); continue; }
+      if (outcome === 'killed' || stop) continue; // paused/cancelled, or already stopping: let the rest end
+      // Anything else stops the build once the steps still running have ended (no new ones start).
+      if (result.outcome === 'aborted') stop = { status: 'aborted', detail: detail || 'Identity mismatch (ABORTED.md)', iteration: 'failed' };
+      else if (result.outcome === 'blocked') stop = { status: 'blocked', detail: detail || 'Blocked (BLOCKED.md)', iteration: 'failed' };
+      else if (result.outcome === 'usage_limit') stop = { status: 'blocked', detail: 'Usage limit reached — retry later', iteration: 'failed', usageLimit: true };
+      else if (result.outcome === 'budget') stop = { status: 'blocked', detail: result.detail ?? 'Build budget reached', iteration: 'failed' };
+      else if (result.outcome === 'spawn_error') stop = { status: 'failed', detail: result.detail ?? 'Could not launch the Claude CLI — check the path in Settings.', iteration: 'failed' };
+      else stop = { status: 'blocked', detail: `CLI stalled: ${result.detail ?? result.outcome}`, iteration: 'timed_out' };
+    }
+  } catch (error) {
+    // Something unexpected (e.g. the Cloud sent a step this app can't run): end like any other
+    // stop — steps killed, step list saved, status set — instead of leaving "running" behind.
+    stop = { status: 'failed', detail: error instanceof Error ? error.message : 'Unexpected error while building', iteration: 'failed' };
+  } finally {
+    control.signal.removeEventListener('abort', onAbort);
+    // Never leave a step running behind an unexpected error.
+    if (running.size) {
+      await killAll('killed');
+      await Promise.allSettled([...running.values()].map((entry) => entry.ended));
+      running.clear();
+    }
+    control.registerKill(null);
+    await cleanTranscripts(job);
+  }
+
+  progress.state = done ? 'done' : control.signal.aborted ? 'stopped' : 'blocked';
+  progress.detail = stop?.detail ?? null;
+  await save();
+  if (control.signal.aborted) { await db.finishFactoryIteration(iterationRow.id, 'killed'); return false; } // pause/cancel set the status
+  if (done) {
+    await db.finishFactoryIteration(iterationRow.id, 'succeeded', { report_path: path.join('qa', 'reports', 'final.md') });
+    // A run that built something replaces the theme the earlier checks compared against.
+    if (ranSteps > 0) await setAsideEarlierChecks(job);
+    return true;
+  }
+  const reason = stop ?? { status: 'blocked' as const, detail: 'The build stopped.', iteration: 'failed' as const };
+  await db.finishFactoryIteration(iterationRow.id, reason.iteration);
+  await transition(job.id, reason.status, reason.detail, reason.status === 'blocked' ? {} : { error: reason.status === 'failed' ? reason.detail : null, finished_at: new Date().toISOString() });
+  if (reason.usageLimit) control.onUsageLimit?.();
+  return false;
+}
+
+/** A fix round's prompt from ThemeBot Cloud (never written to disk). */
+export async function fixPromptFromCloud(job: FactoryJobRecord, iteration: number, summaryPath: string, issueCount: number, regressed: boolean): Promise<{ prompt: string; model: string; signal: string }> {
+  const ask = (build: LocalBuild) => cloudFetch<{ prompt: string; model: string; signal: string }>(`/v1/builds/${build.buildId}/fix`, {
+    iter: iteration, summary: { reportPath: summaryPath.replace(/\\/g, '/'), issueCount, regressed },
+  });
+  const startedAt = job.started_at ?? new Date().toISOString();
+  const build = (await readLocalBuild(job.workspace_path)) ?? await createCloudBuild(job, startedAt, true);
+  try { return await ask(build); } catch (error) {
+    if (error instanceof CloudRequestError && error.status === 404) return ask(await createCloudBuild(job, startedAt, true));
+    throw error;
+  }
+}
+
+/**
+ * One QA pass. With ThemeBot Cloud this PC only captures the evidence and the Cloud scores it (the
+ * scoring scripts don't ship); without it, the local scripts in qa/factory do everything. Same
+ * result and the same report files either way. A Cloud capture that got nothing throws
+ * QaCaptureError ("QA capture failed — …"), which the loop turns into a blocked check, never a 0%.
+ */
+export const checkAgainstSite = (job: FactoryJobRecord, iteration: number, settings: FactorySettings, signal?: AbortSignal) =>
+  (cloudRequired ? runQaViaCloud : runQa)(job, iteration, settings, signal);
 
 async function runConvergenceLoop(job: FactoryJobRecord, settings: FactorySettings, control: DriveControl) {
   const history = [...job.score_history];
@@ -358,10 +762,11 @@ async function runConvergenceLoop(job: FactoryJobRecord, settings: FactorySettin
     let qa;
     try {
       const qaStarted = Date.now();
-      try { qa = await runQa(job, iteration, settings, control.signal); }
+      try { qa = await checkAgainstSite(job, iteration, settings, control.signal); }
       finally { void recordStage({ kind: `check ${iteration}`, jobId: job.id, jobName: job.name, durationMs: Date.now() - qaStarted, score: qa?.score ?? null, ok: qa != null }).catch(() => {}); }
     } catch (error) {
-      await db.finishFactoryIteration(qaRow.id, 'failed');
+      // A Cloud check that captured nothing still wrote its (capture-failed) summary: link it.
+      await db.finishFactoryIteration(qaRow.id, 'failed', error instanceof QaCaptureError ? { report_path: error.summaryPath } : undefined);
       if (control.signal.aborted) return; // user paused/canceled mid-QA — don't overwrite their status
       await transition(job.id, 'blocked', `QA failed: ${error instanceof Error ? error.message : 'unknown error'}`);
       return;
@@ -434,12 +839,35 @@ async function runFixSession(job: FactoryJobRecord, iteration: number, summaryPa
   // Snapshot the scored dev-theme state BEFORE the fix session mutates it, so a later
   // keep-BEST restore can bring this exact state back. Non-fatal on failure (logged).
   await runSnapshot(job, 'save', iteration, qaLogPath);
+  // The snapshot can take minutes: a pause/cancel meanwhile set the status — keep it.
+  if (control.signal.aborted) return false;
   await transition(job.id, 'fixing', `${label} — fixing ${issueCount} issue(s)`);
-  await renderFixPrompt(job, iteration, summaryPath, regressed);
+  // ThemeBot Cloud builds get the fix prompt from the Cloud, on stdin; others render the local template.
+  let cloudFix: { prompt: string; model: string } | null = null;
+  if (recipeFromCloud()) {
+    try { cloudFix = await fixPromptFromCloud(job, iteration, summaryPath, issueCount, regressed); }
+    catch (error) {
+      if (control.signal.aborted) return false;
+      await transition(job.id, 'blocked', cloudProblem(error));
+      return false;
+    }
+    if (control.signal.aborted) return false;
+  } else {
+    await renderFixPrompt(job, iteration, summaryPath, regressed);
+  }
   // Clear a prior run's sentinel so this fix session isn't instantly re-settled by it.
   await clearSignalFiles([path.join(job.workspace_path, 'qa', 'reports', `fix-complete-${iteration}.md`)]);
   const fixRow = await recordIteration(job, iteration, 'fix', path.join('factory', 'logs', `fix-${iteration}.log`));
-  const outcome = await awaitRun(spawnFix(job, iteration, settings.secretScrub, { inactivityMs: min(settings.inactivityTimeoutMin), wallClockMs: min(settings.fixTimeoutMin) }, settings.cloneModel), control);
+  const fixModel = cloudFix ? effectiveModel(cloudFix.model, settings.cloneModel) : settings.cloneModel;
+  const capNote = cloudFix ? modelCapNote(cloudFix.model, settings.cloneModel, 'fix rounds') : null;
+  if (capNote) await noteActivity(job.workspace_path, capNote, `fix-${iteration}`);
+  const outcome = await awaitRun(spawnFix(job, iteration, settings.secretScrub, { inactivityMs: min(settings.inactivityTimeoutMin), wallClockMs: min(settings.fixTimeoutMin) }, fixModel, cloudFix?.prompt), control);
+  if (cloudFix) {
+    await cleanTranscripts(job);
+    const buildId = (await readLocalBuild(job.workspace_path))?.buildId;
+    // (Not on the way out of a pause/cancel/quit: no network after a stop.)
+    if (buildId && !control.signal.aborted) await cloudFetch(`/v1/builds/${buildId}/result`, { stepId: `fix:${iteration}`, outcome: STEP_OUTCOME[outcome.outcome] ?? 'failed' }).catch(() => {});
+  }
   if (outcome.outcome === 'killed') { await db.finishFactoryIteration(fixRow.id, 'killed'); return false; }
   if (outcome.outcome === 'spawn_error') {
     await db.finishFactoryIteration(fixRow.id, 'failed');
@@ -450,6 +878,11 @@ async function runFixSession(job: FactoryJobRecord, iteration: number, summaryPa
     await db.finishFactoryIteration(fixRow.id, 'failed');
     await transition(job.id, 'blocked', 'Usage limit reached during fix session — retry later');
     control.onUsageLimit?.();
+    return false;
+  }
+  if (outcome.outcome === 'budget') {
+    await db.finishFactoryIteration(fixRow.id, 'failed');
+    await transition(job.id, 'blocked', outcome.detail ?? 'Build budget reached during a fix session');
     return false;
   }
   if (outcome.outcome === 'timeout' || outcome.outcome === 'inactivity') {

@@ -57,6 +57,13 @@ export class ServerHost {
 
   get running() { return Boolean(this.child && this.child.exitCode === null); }
 
+  /** Sends a message over the IPC channel (e.g. a fresh ThemeBot pass). False if the server isn't there. */
+  send(message: Record<string, unknown>): boolean {
+    const child = this.child;
+    if (!child || child.exitCode !== null || !child.connected) return false;
+    try { child.send(message); return true; } catch { return false; }
+  }
+
   /** Starts the server and resolves with its port once it is listening. */
   async start(): Promise<number> {
     let port = await pickPort(this.options.preferredPort);

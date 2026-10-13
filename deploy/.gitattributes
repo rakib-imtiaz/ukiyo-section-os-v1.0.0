@@ -1,0 +1,3 @@
+# Everything here runs or is read on Linux: keep LF line endings even in a Windows checkout
+# (a CRLF shell script fails on the server with "$'\r': command not found").
+* text=auto eol=lf

@@ -10,7 +10,8 @@ export const ACTIVE_STATUSES: FactoryJobStatus[] = ['scaffolding', 'cloning', 'q
 export type IterationKind = 'clone' | 'qa' | 'fix';
 export type IterationStatus = 'running' | 'succeeded' | 'failed' | 'timed_out' | 'killed' | 'regressed';
 
-export type RunOutcome = 'final' | 'blocked' | 'aborted' | 'sentinel' | 'exit' | 'timeout' | 'inactivity' | 'killed' | 'usage_limit' | 'spawn_error';
+// 'budget': a ThemeBot Engine session stopped at the build's budget cap (never from Claude Code).
+export type RunOutcome = 'final' | 'blocked' | 'aborted' | 'sentinel' | 'exit' | 'timeout' | 'inactivity' | 'killed' | 'usage_limit' | 'spawn_error' | 'budget';
 
 export interface RunResult {
   outcome: RunOutcome;
@@ -50,12 +51,23 @@ export const BOT_MODELS: readonly BotModel[] = ['opus', 'sonnet', 'haiku'];
 export type CollectionMethod = 'llm' | 'managed' | 'scripted' | 'bookmarklet' | 'partnerapi' | 'manual';
 export const COLLECTION_METHODS: readonly CollectionMethod[] = ['manual', 'bookmarklet', 'scripted', 'llm', 'managed', 'partnerapi'];
 
+/** What runs build/fix sessions: the Claude Code CLI (default), or ThemeBot Engine (our own agent on
+ *  the Claude API, paid with ThemeBot's key — engine/). Opt-in; THEMEBOT_BUILD_ENGINE overrides it. */
+export type BuildEngine = 'claude-code' | 'themebot';
+export const BUILD_ENGINES: readonly BuildEngine[] = ['claude-code', 'themebot'];
+
 export interface FactorySettings {
+  /** Which engine runs the build sessions. */
+  buildEngine: BuildEngine;
+  /** ThemeBot Engine only: the most one build may spend on the Claude API, in USD (all its sessions). */
+  engineBudgetUsd: number;
   /** Model for clone + fix sessions (the heavy theme work). */
   cloneModel: BotModel;
   /** Model for the key-collector Chrome bot. Opus recommended — smaller models tend to refuse the mission. */
   collectorModel: BotModel;
   concurrency: number;
+  /** ThemeBot Cloud builds: how many page steps of ONE build run at once (1-4). */
+  pageConcurrency: number;
   launchStaggerSec: number;
   inactivityTimeoutMin: number;
   cloneTimeoutMin: number;

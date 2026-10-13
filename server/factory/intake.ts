@@ -476,4 +476,7 @@ export async function awaitPreview(id: string, timeoutMs = INSTALL_TIMEOUT_MS + 
 }
 
 /** Stop every dev server we started (shutdown hook). */
-export function stopAllPreviews() { for (const run of runs.values()) { killTree(run.child); run.child = null; } }
+export async function stopAllPreviews() {
+  const stopping = [...runs.values()].map((run) => { const child = run.child; run.child = null; return killTree(child); });
+  await Promise.all(stopping);
+}

@@ -32,9 +32,35 @@ extraResources:
   - from: build/runtime/${platform}-${arch}
     to: runtime
     filter: ["**/*"]
+  # npm itself lives in the runtime's node_modules (Windows) or lib/node_modules (macOS/Linux),
+  # which the copy above silently drops — list them explicitly or `npm` is broken in the app.
+  - from: build/runtime/${platform}-${arch}/node_modules
+    to: runtime/node_modules
+    filter: ["**/*"]
+  - from: build/runtime/${platform}-${arch}/lib/node_modules
+    to: runtime/lib/node_modules
+    filter: ["**/*"]
 
 asar: true
 compression: normal
+
+# Electron fuses, flipped in the packaged binary (pack.mjs reads them back and fails the build if
+# they didn't take). Speed bumps against tampering, not DRM:
+# - runAsNode off: ThemeBot.exe can't be used as a plain Node.js (ELECTRON_RUN_AS_NODE). Safe: the
+#   server runs on its own bundled Node (resources/runtime), never on the Electron binary.
+# - NODE_OPTIONS / --inspect off: no injecting code or attaching a debugger to the main process.
+#   Chromium's --remote-debugging-port (renderer DevTools, our QA tooling) is not affected.
+# - app.asar only, and its header hash is embedded in the executable and checked at start
+#   (Windows: Electron ≥ 30). Editing app.asar stops the app. The server, templates and runtime
+#   are extraResources outside the asar and are not covered by this check.
+electronFuses:
+  runAsNode: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+  # Re-applies the ad-hoc signature on unsigned Apple Silicon builds (flipping fuses breaks it).
+  resetAdHocDarwinSignature: true
 
 win:
   target:

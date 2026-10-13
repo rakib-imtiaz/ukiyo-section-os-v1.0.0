@@ -26,7 +26,7 @@ applyMotionSetting();
 // 'settings' is the Connections page (historic id); 'preferences' is the factory Settings panel.
 type View = 'home' | 'builds' | 'new' | 'projects' | 'settings' | 'preferences' | 'terminal' | 'browser';
 
-interface AppSession { authenticated:boolean; shop:string|null; persistent:boolean; shopify:{configured:boolean;apiVersion:string}; billing:null|{enabled:boolean;active:boolean;mode:string;subscriptions:unknown[]}; claude?:{connected:boolean;method:string|null}; workspace?:{path:string|null;name:string|null;ready:boolean;projectCount:number}; edition?:'customer'|'internal'; desktop?:boolean; }
+interface AppSession { authenticated:boolean; shop:string|null; persistent:boolean; shopify:{configured:boolean;apiVersion:string}; billing:null|{enabled:boolean;active:boolean;mode:string;subscriptions:unknown[]}; claude?:{connected:boolean;method:string|null}; workspace?:{path:string|null;name:string|null;ready:boolean;projectCount:number}; edition?:'customer'|'internal'; desktop?:boolean; cloud?:{required:boolean;signedIn:boolean;email:string|null;plan:string|null;passExpiresAt:string|null;offline:boolean}; }
 /** Clone jobs surfaced as projects by the backend (kind 'clone'); section projects are legacy rows. */
 interface CloneMeta { react_url?:string; store_url?:string; status?:string; status_detail?:string|null; last_score?:number|null; }
 interface SavedProject { id:string; name:string; handle:string; description:string; kind?:'section'|'clone'|string; status?:string; clone_meta?:CloneMeta|null; factory_job_id?:string|null; created_at:string; updated_at:string; }
@@ -116,7 +116,7 @@ export default function App() {
   const confirm = (options: ConfirmOptions) => new Promise<boolean>((resolve) => setConfirmState({ ...options, resolve }));
   const resolveConfirm = (ok: boolean) => { setConfirmState((current) => { current?.resolve(ok); return null; }); };
   const [focusJobId, setFocusJobId] = useState<string | null>(null);
-  const { state: healthState } = useHealth();
+  const { state: healthState, cloudOffline } = useHealth();
   const [dark, setDark] = useState(() => localStorage.getItem('factory-theme') === 'dark');
   // Terminal + Browser are operator tools: hidden from the sidebar unless developer mode is on.
   const [developerMode, setDeveloperMode] = useState(() => localStorage.getItem('themebot-developer-mode') === '1');
@@ -267,8 +267,8 @@ export default function App() {
 
       <main className="glass-main">
         <header className="glass-topbar">
-          <span className={`glass-status is-${healthState}`} role="status">
-            <i />{healthState === 'online' ? 'All systems normal' : healthState === 'offline' ? 'Could not reach ThemeBot' : 'Checking…'}
+          <span className={`glass-status is-${cloudOffline ? 'offline' : healthState}`} role="status" title={cloudOffline ? 'New builds start again as soon as ThemeBot is back online.' : undefined}>
+            <i />{cloudOffline ? 'Can’t reach ThemeBot — check your internet' : healthState === 'online' ? 'All systems normal' : healthState === 'offline' ? 'Could not reach ThemeBot' : 'Checking…'}
           </span>
         </header>
 
@@ -342,6 +342,7 @@ export default function App() {
           workspaceName={session?.workspace?.name ?? null}
           developerMode={developerMode}
           showDeveloperTools={session?.edition !== 'customer'}
+          account={session?.cloud?.required ? { email: session.cloud.email, signedIn: session.cloud.signedIn } : null}
           onDeveloperMode={setDeveloperMode}
           onSwitchWorkspace={() => void switchWorkspace()}
           onLogoutClaude={() => void logoutClaude()}

@@ -17,6 +17,7 @@ import { attachTerminal } from './terminal';
 import { attachBrowser, browserManager } from './browser';
 import { installWsHub } from './ws-hub';
 import { resourcePath } from './runtime-paths';
+import { buildsBlockedReason, cloudStatus, handleHostMessage, onCloudChange } from './cloud-client';
 
 validateProductionConfig();
 await db.init();
@@ -54,7 +55,7 @@ app.get('/auth/shopify',beginShopifyAuth);
 app.get('/auth/shopify/callback',completeShopifyAuth);
 app.post('/auth/logout',(request,response)=>{response.clearCookie('vso_session',{path:'/'});response.status(204).end();});
 
-app.get('/api/health',(_request,response)=>response.json({ok:true,name:'ThemeBot',version:'1.0.0',database:db.persistent?'postgres':'memory',uptimeSec:Math.round(process.uptime())}));
+app.get('/api/health',(_request,response)=>{const cloud=cloudStatus();response.json({ok:true,name:'ThemeBot',version:'1.0.0',database:db.persistent?'postgres':'memory',uptimeSec:Math.round(process.uptime()),cloud:{required:cloud.required,signedIn:cloud.signedIn,offline:cloud.offline}});});
 // Setup tutorial video (rendered by Remotion into video/setup-guide/out — gitignored, may be
 // absent on fresh clones). sendFile handles Range requests, so seeking works in <video>.
 const setupVideoPath=resourcePath('video','setup-guide','out','setup-guide.mp4');
@@ -97,11 +98,14 @@ let shuttingDown=false;
 const shutdown=async()=>{
   if(shuttingDown)return;shuttingDown=true;
   server.close();
-  if(config.factory.enabled){stopAllPreviews();await factoryScheduler.shutdown();flushFactoryState();}
+  if(config.factory.enabled){await stopAllPreviews();await factoryScheduler.shutdown();flushFactoryState();}
   await browserManager.close().catch(()=>{});
   await db.close();process.exit(0);
 };
 process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);
 // Windows has no SIGTERM for child processes, so the desktop host asks over the IPC channel.
-process.on('message',(message)=>{if((message as {type?:string})?.type==='shutdown')void shutdown();});
+// The same channel carries ThemeBot Cloud passes from the desktop app's sign-in (cloud-client.ts).
+process.on('message',(message)=>{if((message as {type?:string})?.type==='shutdown'){void shutdown();return;}handleHostMessage(message);});
+// A fresh pass (back online / signed in) lets builds that waited in the queue start.
+onCloudChange(()=>{if(config.factory.enabled&&!buildsBlockedReason())void factoryScheduler.tick();});
 process.on('disconnect',()=>void shutdown()); // host gone (crashed or killed) — don't linger

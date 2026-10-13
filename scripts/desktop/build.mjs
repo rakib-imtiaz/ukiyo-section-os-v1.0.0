@@ -15,10 +15,26 @@ import { build } from 'esbuild';
 import { fetchNodeRuntime } from './fetch-node-runtime.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const out = path.join(root, 'build');
+// THEMEBOT_BUILD_DIR: stage somewhere else (a dry run that must not touch build/). pack.mjs reads build/.
+const out = path.resolve(process.env.THEMEBOT_BUILD_DIR?.trim() || path.join(root, 'build'));
 const args = new Set(process.argv.slice(2));
 const step = (message) => console.log(`\n▸ ${message}`);
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
+
+// ThemeBot Cloud: with an address, the app requires signing in to a ThemeBot account and only builds
+// with a valid pass. The pass-signing public key is pinned here (the Cloud prints it at startup and
+// serves it at /v1/public-key). Unset = no account needed (dev, internal builds). Checked first, so
+// a bad value fails before anything is built.
+const cloudUrl = (process.env.THEMEBOT_CLOUD_URL || '').trim().replace(/\/+$/, '');
+const cloudKey = (process.env.THEMEBOT_CLOUD_PUBKEY || '').trim();
+if (cloudUrl) {
+  const { protocol, hostname } = new URL(cloudUrl);
+  const local = hostname === '127.0.0.1' || hostname === 'localhost';
+  if (protocol !== 'https:' && !(protocol === 'http:' && local)) throw new Error('THEMEBOT_CLOUD_URL must use https:// (http:// only for 127.0.0.1/localhost).');
+  if (Buffer.from(cloudKey, 'base64').length !== 32) throw new Error('THEMEBOT_CLOUD_PUBKEY must be the Cloud\'s Ed25519 public key (base64, 32 bytes) — see GET <cloud>/v1/public-key.');
+} else if (cloudKey) {
+  throw new Error('THEMEBOT_CLOUD_PUBKEY is set without THEMEBOT_CLOUD_URL.');
+}
 
 // 1. UI ----------------------------------------------------------------------------------------
 if (!args.has('--skip-ui')) {
@@ -47,10 +63,38 @@ await build({
   logLevel: 'warning',
 });
 
+// ThemeBot Engine (engine/): its own process, started by the runner when a build opts into it
+// (server/factory/runner.ts engineLaunch looks for resources/engine/engine.mjs).
+step('Bundling ThemeBot Engine');
+await build({
+  entryPoints: [path.join(root, 'engine/src/cli.ts')],
+  outfile: path.join(resources, 'engine/engine.mjs'),
+  bundle: true,
+  platform: 'node',
+  format: 'esm',
+  target: 'node22',
+  banner: { js: "import { createRequire as __tbCreateRequire } from 'node:module'; const require = __tbCreateRequire(import.meta.url);" },
+  minify: true,
+  legalComments: 'none',
+  logLevel: 'warning',
+});
+
 // 3. Resources the server reads at runtime -----------------------------------------------------
 step('Staging resources');
 await cp(path.join(root, 'dist'), path.join(resources, 'dist'), { recursive: true });
-await cp(path.join(root, 'templates'), path.join(resources, 'templates'), { recursive: true });
+// With ThemeBot Cloud the build recipe and the QA scoring live in the Cloud and are served one step
+// at a time — they must not ship: the /clone-theme command, the fix-session prompt, the builder
+// conventions and the local QA scoring scripts. Kept: the generic workspace plumbing
+// (templates/factory/workspace/*) and the QA capture scripts (templates/factory/qa-capture/**).
+// Internal / no-Cloud builds keep everything (they run the local recipe).
+const RECIPE_ONLY = ['factory/commands', 'factory/prompts', 'factory/workspace/seed/CONVENTIONS.md', 'factory/qa'];
+const isRecipe = (relative) => RECIPE_ONLY.some((entry) => relative === entry || relative.startsWith(`${entry}/`));
+const templatesSrc = path.join(root, 'templates');
+await cp(templatesSrc, path.join(resources, 'templates'), {
+  recursive: true,
+  filter: (source) => !cloudUrl || !isRecipe(path.relative(templatesSrc, source).split(path.sep).join('/')),
+});
+if (cloudUrl) console.log(`  recipe left out (served by ThemeBot Cloud): ${RECIPE_ONLY.map((entry) => `templates/${entry}`).join(', ')}`);
 await cp(path.join(root, 'migrations'), path.join(resources, 'migrations'), { recursive: true });
 const video = path.join(root, 'video/setup-guide/out/setup-guide.mp4');
 if (existsSync(video)) await cp(video, path.join(resources, 'video/setup-guide/out/setup-guide.mp4'));
@@ -83,10 +127,7 @@ const electronCommon = { bundle: true, platform: 'node', format: 'cjs', target: 
 await build({ ...electronCommon, entryPoints: [path.join(root, 'desktop/main.ts')], outfile: path.join(appDir, 'main.cjs') });
 await build({ ...electronCommon, entryPoints: [path.join(root, 'desktop/preload.ts')], outfile: path.join(appDir, 'preload.cjs') });
 await cp(path.join(root, 'desktop/loading.html'), path.join(appDir, 'loading.html'));
-await cp(path.join(root, 'desktop/licence.html'), path.join(appDir, 'licence.html'));
-// Licence keys (Lemon Squeezy): which store/products may unlock this build. Unset = no licence needed.
-const storeId = Number(process.env.THEMEBOT_LS_STORE_ID) || undefined;
-const productIds = (process.env.THEMEBOT_LS_PRODUCT_IDS || '').split(',').map(Number).filter(Boolean);
+await cp(path.join(root, 'desktop/signin.html'), path.join(appDir, 'signin.html'));
 await writeFile(path.join(appDir, 'package.json'), JSON.stringify({
   name: 'themebot-desktop',
   productName: 'ThemeBot',
@@ -96,7 +137,7 @@ await writeFile(path.join(appDir, 'package.json'), JSON.stringify({
   main: 'main.cjs',
   themebot: {
     edition: process.env.THEMEBOT_EDITION === 'internal' ? 'internal' : 'customer',
-    ...(storeId ? { licence: { storeId, productIds } } : {}),
+    ...(cloudUrl ? { cloud: { url: cloudUrl, publicKey: cloudKey } } : {}),
     ...(process.env.THEMEBOT_UPDATE_URL ? { updateUrl: process.env.THEMEBOT_UPDATE_URL.trim() } : {}),
   },
 }, null, 2));
@@ -107,5 +148,18 @@ if (!args.has('--skip-runtime')) {
   await fetchNodeRuntime({ root, version: process.env.THEMEBOT_NODE_VERSION || process.versions.node });
 }
 
+// 6. Cloud builds: prove the recipe stayed out (template files, and nothing of cloud/recipe or the
+//    Cloud's step engine bundled into the server by an accidental import).
+if (cloudUrl) {
+  const leaked = RECIPE_ONLY.filter((entry) => existsSync(path.join(resources, 'templates', ...entry.split('/'))));
+  const bundle = await readFile(path.join(resources, 'server/server.mjs'), 'utf8');
+  if (/tbr-canary-[0-9a-f]{12}/.test(bundle) || bundle.includes('INTO recipe_versions')) leaked.push('server/server.mjs (Cloud recipe or step engine bundled)');
+  // …nor the Cloud's QA scoring, watermarking or security code (types-only imports are fine).
+  for (const [marker, what] of [['qa-plan:v1:', 'QA click-plan signing'], ['CREATE TABLE IF NOT EXISTS qa_rounds', 'QA scoring store'], ['watermark_sends', 'prompt watermarks'], ['security_events', 'security events']]) {
+    if (bundle.includes(marker)) leaked.push(`server/server.mjs (Cloud ${what} bundled)`);
+  }
+  if (leaked.length) throw new Error(`The build recipe must not ship with a Cloud build, but these are in build/resources: ${leaked.join(', ')}`);
+}
+
 const listed = readdirSync(resources);
-console.log(`\n✓ Desktop build ready in build/ (resources: ${listed.join(', ')})`);
+console.log(`\n✓ Desktop build ready in ${path.relative(root, out) || '.'}/ (resources: ${listed.join(', ')})`);

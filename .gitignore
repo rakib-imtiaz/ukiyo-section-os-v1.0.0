@@ -6,3 +6,4 @@ dist/
 coverage/
 build/
 release/
+cloud/.data/

@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Activity, Bot, Sparkles, Camera, CheckCircle2, ChevronDown, Chrome, ExternalLink, Globe, LogOut, Store, UserMinus, UserPlus, UserRound, Clock3, Cpu, Eraser, FlaskConical, FolderCog, Gauge, Hammer, Hourglass, KeyRound, LayoutList, Layers, ListPlus, MousePointerClick, OctagonPause, PauseCircle, RefreshCw, Repeat2, Save, ScanSearch, ShieldCheck, SlidersHorizontal, Target, TimerReset, TrendingUp, TriangleAlert, Type, Wrench, XCircle } from 'lucide-react';
+import { Activity, Bot, Sparkles, Camera, CheckCircle2, ChevronDown, Chrome, Columns3, ExternalLink, Globe, LogOut, Store, UserMinus, UserPlus, UserRound, Clock3, Cpu, Eraser, FlaskConical, FolderCog, Gauge, Hammer, Hourglass, KeyRound, LayoutList, Layers, ListPlus, MousePointerClick, OctagonPause, PauseCircle, RefreshCw, Repeat2, Save, ScanSearch, ShieldCheck, SlidersHorizontal, Target, TimerReset, TrendingUp, TriangleAlert, Type, Wrench, XCircle } from 'lucide-react';
 import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle, ConfirmDialog, Field, Separator, Slider, Spinner, Switch, Tabs, useToast } from './ui';
 import { api } from './api';
 import { animationsEnabled, setAnimationsEnabled, systemReducedMotion } from '../motion';
@@ -328,6 +328,9 @@ export function SettingsPanel({ jobs, refreshFleet }: { jobs: Job[]; refreshFlee
           <Field icon={<Layers />} label="Stores built at the same time" help={lockNote('concurrency') ?? '2 is a good balance. More than 3 uses up your AI plan quickly.'}>
             <Slider value={draft.concurrency} onValueChange={(value) => set('concurrency', value)} min={1} max={5} disabled={locked.concurrency} />
           </Field>
+          <Field icon={<Columns3 />} label="Pages built at once" help="Inside one store, how many pages the AI works on side by side. 2 is a good balance; more finishes a big site sooner but uses up your AI plan faster.">
+            <Slider value={draft.pageConcurrency ?? 2} onValueChange={(value) => set('pageConcurrency', value)} min={1} max={4} />
+          </Field>
           <Field icon={<Hourglass />} label="Wait between starting builds" help={lockNote('launchStaggerSec') ?? 'Spaces out new builds so they don’t all start at the same moment.'}>
             <Slider value={draft.launchStaggerSec} onValueChange={(value) => set('launchStaggerSec', value)} min={0} max={600} step={10} format={(value) => `${value}s`} disabled={locked.launchStaggerSec} />
           </Field>
@@ -484,7 +487,7 @@ export function SettingsPanel({ jobs, refreshFleet }: { jobs: Job[]; refreshFlee
         onCancel={() => setDanger(null)}
         onConfirm={async () => {
           setDanger(null);
-          const defaults: Partial<FactorySettings> = { cloneModel: 'opus', collectorModel: 'opus', concurrency: 2, launchStaggerSec: 90, inactivityTimeoutMin: 20, cloneTimeoutMin: 240, fixTimeoutMin: 60, qaTimeoutMin: 30, defaultMaxIterations: 5, defaultScoreThreshold: 0.92, scoreWeights: { presence: 0.5, text: 0.3, interaction: 0.2 }, noProgressEpsilon: 0.01, earlyStopOnNoProgress: true, pauseQueueOnUsageLimit: true, keepIterations: 3, secretScrub: true, extraAllow: [] };
+          const defaults: Partial<FactorySettings> = { cloneModel: 'opus', collectorModel: 'opus', concurrency: 2, pageConcurrency: 2, launchStaggerSec: 90, inactivityTimeoutMin: 20, cloneTimeoutMin: 240, fixTimeoutMin: 60, qaTimeoutMin: 30, defaultMaxIterations: 5, defaultScoreThreshold: 0.92, scoreWeights: { presence: 0.5, text: 0.3, interaction: 0.2 }, noProgressEpsilon: 0.01, earlyStopOnNoProgress: true, pauseQueueOnUsageLimit: true, keepIterations: 3, secretScrub: true, extraAllow: [] };
           const saved = await api.saveSettings(defaults);
           setResponse((current) => current ? { ...current, settings: saved.settings } : current);
           setDraft(saved.settings);

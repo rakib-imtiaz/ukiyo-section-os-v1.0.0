@@ -9,7 +9,7 @@ import { BuildProgressCard } from './BuildProgressCard';
 import { CheckPanel } from './CheckPanel';
 import {
   STATUS_META, TERMINAL, issueKindMeta,
-  type InteractionsReport, type Iteration, type Job, type QaIssue, type QaSubscores, type SectionsReport, plainDetail, plainRoundStatus, isDeveloperMode } from './types';
+  type InteractionsReport, type Iteration, type Job, type QaIssue, type QaSubscores, type SectionsReport, blockedHint, plainDetail, plainRoundStatus, isDeveloperMode } from './types';
 import { openTerminalSession } from '../TerminalPane';
 import { openBrowserCompare } from '../BrowserPane';
 
@@ -523,7 +523,7 @@ export function JobDetail({ jobId, onClose, onNavigate }: { jobId: string | null
           {['failed', 'blocked', 'aborted'].includes(job.status) && (
             <div className={`rounded-xl border p-4 text-[13.5px] font-semibold leading-6 ${job.status === 'blocked' ? 'border-warning/40 bg-warning/10 text-warning' : 'border-destructive/40 bg-destructive/10 text-destructive'}`}>
               <p>{plainDetail(job.status_detail) || 'The build stopped.'}</p>
-              <p className="mt-1 font-medium text-muted-foreground">{job.status === 'blocked' ? 'Your store and its connection are fine. Press Resume to carry on from where it stopped.' : 'Press Retry to try again. Anything already built on the draft theme is kept.'}</p>
+              <p className="mt-1 font-medium text-muted-foreground">{job.status === 'blocked' ? blockedHint(job.status_detail) : 'Press Retry to try again. Anything already built on the draft theme is kept.'}</p>
             </div>
           )}
 

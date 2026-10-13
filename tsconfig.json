@@ -29,6 +29,8 @@
     "server",
     "tests",
     "desktop",
+    "cloud",
+    "engine",
     "vite.config.ts"
   ]
 }

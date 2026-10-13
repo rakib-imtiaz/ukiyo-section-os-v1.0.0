@@ -7,6 +7,7 @@ import { shopifyGraphql, shopifyStatus } from './shopify';
 import { currentShop, requireSession } from './security';
 import { getClaudeStatusQuick } from './claude-connect';
 import { getWorkspaceState } from './workspace';
+import { cloudStatus } from './cloud-client';
 
 type AsyncHandler = (request:Request,response:Response,next:NextFunction)=>Promise<unknown>;
 const handle=(handler:AsyncHandler)=>(request:Request,response:Response,next:NextFunction)=>handler(request,response,next).catch(next);
@@ -36,7 +37,8 @@ export function createApiRouter(){
       const ws=await getWorkspaceState().catch(()=>null);
       workspace={path:ws?.path??null,name:ws?.name??null,ready:Boolean(ws?.ready),projectCount:ws?.projects.length??0};
     }
-    response.json({authenticated:Boolean(record),shop:domain,persistent:db.persistent,shopify:shopifyStatus(),billing,claude,workspace,edition:config.edition,desktop:config.desktop});
+    // cloud: the ThemeBot account, for desktop builds that require sign-in ({required:false} otherwise).
+    response.json({authenticated:Boolean(record),shop:domain,persistent:db.persistent,shopify:shopifyStatus(),billing,claude,workspace,edition:config.edition,desktop:config.desktop,cloud:cloudStatus()});
   }));
   router.get('/shopify/status',(_request,response)=>response.json(shopifyStatus()));
   router.use(requireSession);

@@ -1,0 +1,14 @@
+# Runs themebot-cloud-backup.service every night (server time; Hostinger VPSes default to UTC).
+# Installed and enabled by setup-server.sh. Check it:  systemctl list-timers themebot-cloud-backup
+
+[Unit]
+Description=Nightly ThemeBot Cloud database backup
+
+[Timer]
+OnCalendar=*-*-* 03:17:00
+RandomizedDelaySec=10min
+# Catch up after the server was off at backup time.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -13,7 +13,9 @@ import { config } from '../config';
 import { db } from '../db';
 import { decrypt, encrypt } from '../security';
 
-export type EngineId = 'claude' | 'openrouter' | 'openai' | 'gemini' | 'kimi' | 'glm' | 'meta' | 'deepseek' | 'qwen' | 'mistral';
+// 'themebot' = ThemeBot Engine (engine/), our own agent on the Claude API. It is chosen per build by the
+// factory setting `buildEngine` (not by setActiveEngine) and appears here only as a usage label.
+export type EngineId = 'claude' | 'themebot' | 'openrouter' | 'openai' | 'gemini' | 'kimi' | 'glm' | 'meta' | 'deepseek' | 'qwen' | 'mistral';
 
 export interface EngineInfo {
   id: EngineId;
@@ -66,6 +68,9 @@ export const KEY_SPECS: Record<KeyProvider, KeySpec> = {
 export interface KeyStatus { provider: KeyProvider; name: string; engine: EngineId; hint: string; hasKey: boolean; last4: string | null; verified: boolean | null; note: string | null; usageUsd?: number | null; limitUsd?: number | null; freeTier?: boolean | null }
 const keySetting = (provider: KeyProvider) => `factory_key_${provider}`;
 const keyCache = new Map<KeyProvider, { at: number; status: KeyStatus }>();
+
+/** A provider key saved in Settings → AI engines (decrypted), or null. */
+export function providerKey(provider: KeyProvider): Promise<string | null> { return storedKey(provider); }
 
 async function storedKey(provider: KeyProvider): Promise<string | null> {
   // OpenRouter keys saved by the earlier single-key form live under the old name.
@@ -247,7 +252,7 @@ async function append(entry: UsageEntry) {
 }
 
 /** Called by the runner (and the store-setup bot) with a session's final stream-json "result" message. */
-export async function recordUsage(message: Record<string, unknown>, tag: { jobId?: string; jobName?: string; kind?: string; model?: string }) {
+export async function recordUsage(message: Record<string, unknown>, tag: { jobId?: string; jobName?: string; kind?: string; model?: string; engine?: EngineId }) {
   const usage = (message.usage ?? {}) as Record<string, number>;
   // A session that finished fine proves the limit is over — stop showing "paused".
   if (!message.is_error) void clearLimit();
@@ -264,7 +269,7 @@ export async function recordUsage(message: Record<string, unknown>, tag: { jobId
   const tokens = modelList.length ? { input: sumOf('input'), output: sumOf('output'), cacheRead: sumOf('cacheRead'), cacheWrite: sumOf('cacheWrite') } : totals;
   const estimates = modelList.map((m) => m.estUsd).filter((value): value is number => value != null);
   await append({
-    v: 2, type: 'session', at: Date.now(), engine: 'claude', kind: tag.kind ?? 'session', modelSetting: tag.model ?? null,
+    v: 2, type: 'session', at: Date.now(), engine: tag.engine ?? 'claude', kind: tag.kind ?? 'session', modelSetting: tag.model ?? null,
     jobId: tag.jobId ?? null, jobName: tag.jobName ?? null, sessionId: typeof message.session_id === 'string' ? message.session_id : null,
     inputTokens: tokens.input, outputTokens: tokens.output, cacheReadTokens: tokens.cacheRead, cacheWriteTokens: tokens.cacheWrite,
     models,

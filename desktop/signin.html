@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>ThemeBot — Sign in</title>
+<style>
+  :root { --bg: #f4f6fb; --card: #fff; --ink: #0f1b3d; --muted: #6b7690; --line: #dfe5f0; --accent: #2f6bff; --bad: #b42318; --bad-bg: rgba(180, 35, 24, .06); --info-bg: rgba(47, 107, 255, .07); }
+  @media (prefers-color-scheme: dark) { :root { --bg: #0d1220; --card: #151c2e; --ink: #e8ecf6; --muted: #8b95ad; --line: #26304a; --bad: #f97066; --bad-bg: rgba(249, 112, 102, .08); --info-bg: rgba(47, 107, 255, .12); } }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; display: grid; place-items: center; }
+  main { width: min(440px, calc(100vw - 48px)); background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 28px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 20px 50px -30px rgba(15, 27, 61, .35); }
+  form, section { display: flex; flex-direction: column; gap: 14px; margin: 0; }
+  .logo { width: 44px; height: 44px; border-radius: 13px; background: linear-gradient(140deg, #5a86ff, #2a55d0); display: grid; place-items: center; }
+  .logo .mark { width: 58%; height: 58%; }
+  h1 { margin: 0; font-size: 20px; }
+  p { margin: 0; color: var(--muted); }
+  label { font-weight: 600; font-size: 13px; }
+  input { font: 15px system-ui, -apple-system, "Segoe UI", sans-serif; padding: 11px 12px; border-radius: 10px; border: 1px solid var(--line); background: transparent; color: var(--ink); outline: none; }
+  input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(47, 107, 255, .2); }
+  input.code { font: 600 24px ui-monospace, "Cascadia Code", Menlo, monospace; letter-spacing: 10px; text-align: center; padding-left: 22px; }
+  button { font: 600 15px system-ui, sans-serif; padding: 11px; border-radius: 10px; border: 0; background: var(--accent); color: #fff; cursor: pointer; }
+  button:disabled { opacity: .6; cursor: default; }
+  button.secondary { background: transparent; color: var(--accent); border: 1px solid var(--line); }
+  button.link { background: none; color: var(--accent); padding: 0; font-size: 13px; }
+  .links { display: flex; justify-content: space-between; gap: 12px; }
+  .notice { border-radius: 10px; padding: 10px 12px; background: var(--info-bg); color: var(--ink); }
+  .notice.bad { background: var(--bad-bg); }
+  .notice ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
+  .error { color: var(--bad); min-height: 1.5em; }
+  .small { font-size: 12.5px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+  <main>
+    <div class="logo"><svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z" fill="#fff"/><path d="M20 3v4M22 5h-4M4 17v2M5 18H3" stroke="#fff" stroke-width="2" stroke-linecap="round" fill="none"/></svg></div>
+    <h1 id="title">Sign in to ThemeBot</h1>
+    <div class="notice" id="notice" role="status" hidden><span id="notice-text"></span><ul id="devices" hidden></ul></div>
+
+    <form id="email-step">
+      <p>Enter the email address you bought ThemeBot with. We'll email you a 6-digit code.</p>
+      <label for="email">Email</label>
+      <input id="email" type="email" autocomplete="email" spellcheck="false" placeholder="you@agency.com" required>
+      <button id="send" type="submit">Send code</button>
+    </form>
+
+    <form id="code-step" hidden>
+      <p id="sent-to">Check your email for a 6-digit code.</p>
+      <label for="code">Code</label>
+      <input id="code" class="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" spellcheck="false" placeholder="••••••" required>
+      <button id="verify" type="submit">Sign in</button>
+      <div class="links">
+        <button type="button" class="link" id="other-email">Use a different email</button>
+        <button type="button" class="link" id="resend">Send a new code</button>
+      </div>
+    </form>
+
+    <section id="update-step" hidden>
+      <p id="update-text"></p>
+      <button id="update" type="button">Download the update</button>
+    </section>
+
+    <div class="error" id="error" role="alert"></div>
+    <button type="button" class="secondary" id="retry" hidden>Try again</button>
+    <p class="small" id="help">Need an account or more seats? Contact the person or agency that sold you ThemeBot.</p>
+  </main>
+<script>
+  const params = new URLSearchParams(location.search);
+  const $ = (id) => document.getElementById(id);
+  const bridge = window.themebotDesktop;
+  const error = $('error');
+  const PLATFORMS = { win32: 'Windows', darwin: 'Mac', linux: 'Linux' };
+
+  function ago(iso) {
+    const minutes = iso ? Math.round((Date.now() - Date.parse(iso)) / 60000) : NaN;
+    if (!Number.isFinite(minutes)) return 'a while ago';
+    if (minutes < 1) return 'just now';
+    if (minutes < 60) return minutes === 1 ? '1 minute ago' : minutes + ' minutes ago';
+    const hours = Math.round(minutes / 60);
+    return hours === 1 ? '1 hour ago' : hours + ' hours ago';
+  }
+
+  /** The banner above the form; for SEATS_FULL it lists where else the account is signed in. */
+  function notice(text, devices, bad) {
+    $('notice').hidden = !text;
+    $('notice').classList.toggle('bad', Boolean(bad));
+    $('notice-text').textContent = text || '';
+    const list = $('devices');
+    list.replaceChildren();
+    for (const device of devices || []) {
+      const item = document.createElement('li');
+      item.textContent = (device.name || 'A computer') + ' (' + (PLATFORMS[device.platform] || device.platform || 'unknown') + ') — last active ' + ago(device.lastSeen);
+      list.append(item);
+    }
+    list.hidden = !(devices && devices.length);
+  }
+
+  function busy(button, label) {
+    const idle = button.textContent;
+    button.disabled = true; button.textContent = label; error.textContent = '';
+    return () => { button.disabled = false; button.textContent = idle; };
+  }
+
+  function showStep(step) {
+    $('email-step').hidden = step !== 'email';
+    $('code-step').hidden = step !== 'code';
+    (step === 'email' ? $('email') : $('code')).focus();
+  }
+
+  let email = params.get('email') || '';
+
+  async function sendCode(button) {
+    const done = busy(button, 'Sending…');
+    const result = await bridge.signinStart(email);
+    done();
+    if (!result.ok) { error.textContent = result.message; return false; }
+    $('sent-to').textContent = 'We sent a 6-digit code to ' + email + '. It works for 10 minutes — check spam if you don’t see it.';
+    $('code').value = '';
+    showStep('code');
+    return true;
+  }
+
+  $('email-step').addEventListener('submit', (event) => {
+    event.preventDefault();
+    email = $('email').value.trim();
+    void sendCode($('send'));
+  });
+
+  $('code-step').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const code = $('code').value.replace(/\D/g, '');
+    if (code.length !== 6) { error.textContent = 'The code is the 6 digits from the email.'; return; }
+    const done = busy($('verify'), 'Signing in…');
+    const result = await bridge.signinVerify(email, code);
+    if (result.ok) { $('verify').textContent = 'Opening ThemeBot…'; return; } // the window moves on by itself
+    done();
+    if (result.code === 'SEATS_FULL') { notice(result.message, result.devices, true); error.textContent = ''; return; }
+    error.textContent = result.message;
+  });
+
+  // Typing or pasting the 6th digit signs in straight away.
+  $('code').addEventListener('input', () => {
+    const digits = $('code').value.replace(/\D/g, '').slice(0, 6);
+    $('code').value = digits;
+    if (digits.length === 6 && !$('verify').disabled) $('code-step').requestSubmit();
+  });
+
+  $('other-email').addEventListener('click', () => { error.textContent = ''; showStep('email'); });
+  $('resend').addEventListener('click', () => void sendCode($('resend')));
+
+  $('retry').addEventListener('click', async () => {
+    busy($('retry'), 'Checking…');
+    await bridge.signinRetry(); // on success the window moves on; otherwise this page reloads with the reason
+  });
+
+  if (params.get('mode') === 'update') {
+    $('title').textContent = 'Update required';
+    $('email-step').hidden = true;
+    $('help').hidden = true;
+    $('update-step').hidden = false;
+    const min = params.get('min');
+    $('update-text').textContent = (params.get('reason') || 'This version of ThemeBot is too old to use.') + (min ? ' You have ' + (params.get('current') || 'an older version') + '; ThemeBot now needs ' + min + ' or newer.' : '');
+    const downloading = () => { $('update').disabled = true; $('update').textContent = 'Downloading…'; notice('ThemeBot is downloading the update and will ask to restart when it’s ready.'); };
+    if (params.get('downloading')) downloading();
+    $('update').addEventListener('click', async () => {
+      if (await bridge.checkForUpdates()) downloading();
+      else error.textContent = 'This copy of ThemeBot can’t update itself. Download the latest version from wherever you got ThemeBot, install it, then open ThemeBot again.';
+    });
+    $('retry').textContent = 'I’ve updated — try again';
+    $('retry').hidden = false;
+  } else {
+    let devices = [];
+    try { devices = JSON.parse(params.get('devices') || '[]'); } catch { devices = []; }
+    if (params.get('reason')) notice(params.get('reason'), devices, Boolean(params.get('code')));
+    $('retry').hidden = !params.get('retry');
+    $('email').value = email;
+    showStep('email');
+  }
+</script>
+</body>
+</html>

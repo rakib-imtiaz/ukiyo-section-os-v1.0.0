@@ -108,6 +108,37 @@ describe('scaffoldWorkspace', () => {
     expect(apiTxt).toContain('b'.repeat(32));
   });
 
+  it('places no recipe in the workspace when the recipe comes from ThemeBot Cloud', async () => {
+    const workspace = path.join(root, 'ws-cloud');
+    await scaffoldWorkspace({ job: job(workspace), clientId: 'a'.repeat(32), clientSecret: 'shpss_x', reactFilesPath: reactSource, recipe: 'cloud' });
+    // Generic plumbing is there…
+    for (const file of ['push.mjs', 'pull.mjs', 'preflight.mjs', 'qa/lib.mjs', 'qa/bootstrap-theme.mjs', 'qa/snapshot.mjs', '.claude/settings.json', 'job.json', 'TARGET_SITE_INFO.txt', 'API.txt']) {
+      expect(await exists(path.join(workspace, file)), file).toBe(true);
+    }
+    expect(await exists(path.join(workspace, 'factory/steps'))).toBe(true);
+    // …the recipe is not: no /clone-theme command, no conventions, no scoring scripts.
+    for (const file of ['.claude/commands/clone-theme.md', '.claude/commands', 'seed/CONVENTIONS.md', 'qa/factory']) {
+      expect(await exists(path.join(workspace, file)), file).toBe(false);
+    }
+  });
+
+  it('removes the recipe an older local scaffold left in an adopted workspace (but not the user\'s own files)', async () => {
+    const workspace = path.join(root, 'ws-adopted');
+    await scaffoldWorkspace({ job: job(workspace), clientId: 'a'.repeat(32), clientSecret: 'shpss_x', recipe: 'local' });
+    expect(await exists(path.join(workspace, '.claude/commands/clone-theme.md'))).toBe(true);
+    expect(await exists(path.join(workspace, 'seed/CONVENTIONS.md'))).toBe(true);
+    await writeFile(path.join(workspace, 'qa/factory/my-notes.mjs'), '// mine');
+    await scaffoldWorkspace({ job: job(workspace), clientId: 'a'.repeat(32), clientSecret: 'shpss_x', recipe: 'cloud' });
+    for (const file of ['.claude/commands/clone-theme.md', 'seed/CONVENTIONS.md', 'qa/factory/section-compare.mjs', 'qa/factory/qa-shared.mjs']) {
+      expect(await exists(path.join(workspace, file)), file).toBe(false);
+    }
+    expect(await readFile(path.join(workspace, 'qa/factory/my-notes.mjs'), 'utf8')).toBe('// mine');
+    // A conventions file the user wrote themselves stays.
+    await writeFile(path.join(workspace, 'seed/CONVENTIONS.md'), '# My own notes\n');
+    await scaffoldWorkspace({ job: job(workspace), clientId: 'a'.repeat(32), clientSecret: 'shpss_x', recipe: 'cloud' });
+    expect(await readFile(path.join(workspace, 'seed/CONVENTIONS.md'), 'utf8')).toBe('# My own notes\n');
+  });
+
   it('fails clearly when the react_files source is missing', async () => {
     const workspace = path.join(root, 'ws2');
     await expect(scaffoldWorkspace({ job: job(workspace), clientId: 'a'.repeat(32), clientSecret: 'shpss_x', reactFilesPath: path.join(root, 'nope') })).rejects.toThrow(/not found/i);

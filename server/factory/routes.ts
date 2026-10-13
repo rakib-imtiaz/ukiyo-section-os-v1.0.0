@@ -16,11 +16,13 @@ import { claudeEnv } from '../claude-connect';
 import { TERMINAL_STATUSES, type CollectionMethod, type JobIntake } from './types';
 import { checkStoreAccess, runScriptedCollector, listChromeProfiles, type ScriptedHandle, type StoreAccess } from './scripted-collector';
 import { fetchAppSecretViaPartnerApi } from './partner-api';
-import { pageProgress, writeAlreadyBuilt } from './progress';
+import { pageProgress, stepProgressSummary, writeAlreadyBuilt } from './progress';
 import { syncStatus, uploadToDraft } from './theme-sync';
 import { KEY_SPECS, accountStatuses, activeEngine, clearLimit, keyStatuses, linkAccount, listEngines, readUsage, recordUsage, removeProviderKey, setActiveEngine, setProviderKey, usageSummary, type AccountProvider, type EngineId, type KeyProvider } from './engines';
 import { awaitPreview, checkShopifyLogin, forgetLoginStatus, getPreview, ingestUpload, inspectProject, openShopifySignIn, publicPreview, startPreview, stopPreview } from './intake';
 import { killTree, ownProcessGroup } from '../platform/proc';
+import { buildsBlockedReason, cloudRequired } from '../cloud-client';
+import { runSelftestViaCloud } from './qa-cloud';
 
 type AsyncHandler = (request: Request, response: Response, next: NextFunction) => Promise<unknown>;
 const handle = (handler: AsyncHandler) => (request: Request, response: Response, next: NextFunction) => handler(request, response, next).catch(next);
@@ -221,8 +223,16 @@ export function createFactoryRouter() {
   // Customer builds need the "I own this site / have permission" confirmation, kept as a record.
   const rightsMissing = (body: { rightsConfirmed?: unknown } | undefined) => config.edition === 'customer' && body?.rightsConfirmed !== true;
   const recordRights = (site: string, store: string) => db.audit(null, 'build.rights_confirmed', 'user', { site, store, at: new Date().toISOString() }).catch(() => {});
+  // Desktop builds that require a ThemeBot account start builds only with a valid pass (see
+  // cloud-client.ts): signed out, or offline for 15+ minutes, is refused with the reason.
+  const passMissing = (response: Response) => {
+    const reason = buildsBlockedReason();
+    if (reason) response.status(403).json({ error: reason, code: 'THEMEBOT_SIGNIN_REQUIRED' });
+    return reason != null;
+  };
 
   router.post('/jobs', handle(async (request, response) => {
+    if (passMissing(response)) return;
     if (rightsMissing(request.body)) { response.status(422).json({ error: "Confirm that you own this website or have the owner's permission before building." }); return; }
     void recordRights(String(request.body?.reactUrl ?? request.body?.reactFilesPath ?? ''), String(request.body?.storeUrl ?? ''));
     const result = await intakeJob(request.body as JobIntake);
@@ -285,6 +295,7 @@ export function createFactoryRouter() {
   }));
 
   router.post('/jobs/:id/rebuild', handle(async (request, response) => {
+    if (passMissing(response)) return;
     const target = await db.getFactoryJob(String(request.params.id));
     // Pages already built in an earlier run are listed for the AI so it doesn't pay to write them again.
     const skipped = target ? await writeAlreadyBuilt(target) : { done: 0, total: 0 };
@@ -296,11 +307,13 @@ export function createFactoryRouter() {
   // Hand-started runs from the build panel: one check (free — scripted comparison, no AI), or
   // fix rounds (AI), each followed by a check.
   router.post('/jobs/:id/check', handle(async (request, response) => {
+    if (passMissing(response)) return;
     try { await factoryScheduler.runMode(String(request.params.id), { kind: 'check' }); }
     catch (error) { response.status(409).json({ error: error instanceof Error ? error.message : 'Could not start the check.' }); return; }
     response.json({ job: publicJob((await db.getFactoryJob(String(request.params.id)))!) });
   }));
   router.post('/jobs/:id/fix', handle(async (request, response) => {
+    if (passMissing(response)) return;
     const rounds = Math.min(10, Math.max(1, Math.round(Number(request.body?.rounds ?? 1)) || 1));
     try { await factoryScheduler.runMode(String(request.params.id), { kind: 'fix', rounds }); }
     catch (error) { response.status(409).json({ error: error instanceof Error ? error.message : 'Could not start fixing.' }); return; }
@@ -322,12 +335,14 @@ export function createFactoryRouter() {
   }));
 
   router.post('/jobs/:id/retry', handle(async (request, response) => {
+    if (passMissing(response)) return;
     await factoryScheduler.retry(String(request.params.id));
     response.json({ job: publicJob((await db.getFactoryJob(String(request.params.id)))!) });
   }));
 
   // Queue a job that has never run (draft) — the JobDetail Start button's target.
   router.post('/jobs/:id/start', handle(async (request, response) => {
+    if (passMissing(response)) return;
     const job = await db.getFactoryJob(String(request.params.id));
     if (!job) { response.status(404).json({ error: 'Job not found.' }); return; }
     if (job.status !== 'draft' && job.status !== 'paused') { response.status(409).json({ error: 'Only draft or paused jobs can be started — use Retry for blocked/failed jobs.' }); return; }
@@ -385,8 +400,10 @@ export function createFactoryRouter() {
 
   /** Build progress for the panel: the plan (qa/state/inventory.json — every page and how many
    *  sections it needs) against what exists on disk (each page's template and the section files it
-   *  uses), the current step (from the build's own log), and a time estimate from the pace so far. */
-  const STEP_LABELS: Record<string, string> = { '0': 'Getting ready', '1': 'Planning the pages', '2': 'Building the pages', '3': 'Building the pages', '4': 'Finishing touches', '5': 'Checking against your website', '6': 'Wrapping up' };
+   *  uses), the current step, and a time estimate from the pace so far. ThemeBot Cloud builds report
+   *  their real steps (factory/steps/progress.json, written as the Cloud hands them out); builds on
+   *  the local /clone-theme command name the newest "Phase N" their log mentions. */
+  const STEP_LABELS: Record<string, string> = { '0': 'Getting ready', '1': 'Planning the pages', '2': 'Setting up the theme', '3': 'Setting up the store', '4': 'Building the pages', '5': 'Checking each page', '6': 'Wrapping up' };
   router.get('/jobs/:id/progress', handle(async (request, response) => {
     const job = await db.getFactoryJob(String(request.params.id));
     if (!job) { response.status(404).json({ error: 'Job not found.' }); return; }
@@ -400,18 +417,26 @@ export function createFactoryRouter() {
     // Pace = sections written this run per ms; only trusted once a few have landed.
     const etaMs = remaining > 0 && changedThisRun >= 3 && elapsedMs > 0 ? Math.round(remaining / (changedThisRun / elapsedMs)) : remaining === 0 && sectionsPlanned > 0 ? 0 : null;
 
-    // Current step: the newest "Phase N" the build's log mentions.
+    // Current step: a Cloud build's own step list, else the newest "Phase N" the build's log mentions.
     let step: { n: string; label: string } | null = null;
-    try {
-      const events = await tailFile(path.join(job.workspace_path, 'factory', 'logs', 'clone-0.events.jsonl'), 600);
-      const matches = [...events.matchAll(/Phase (\d)(?:\.\d+)?/g)];
-      const n = matches.length ? matches[matches.length - 1][1] : null;
-      if (n) step = { n, label: STEP_LABELS[n] ?? `Phase ${n}` };
-    } catch { /* no log yet */ }
-    if (['qa_running', 'fixing'].includes(job.status)) step = { n: '5', label: job.status === 'fixing' ? 'Fixing differences' : 'Checking against your website' };
+    const cloudSteps = await stepProgressSummary(job.workspace_path);
+    if (cloudSteps) {
+      step = job.status === 'cloning' ? cloudSteps.step : null;
+    } else {
+      try {
+        const events = await tailFile(path.join(job.workspace_path, 'factory', 'logs', 'clone-0.events.jsonl'), 600);
+        const matches = [...events.matchAll(/Phase (\d)(?:\.\d+)?/g)];
+        const n = matches.length ? matches[matches.length - 1][1] : null;
+        if (n) step = { n, label: STEP_LABELS[n] ?? `Phase ${n}` };
+      } catch { /* no log yet */ }
+    }
+    if (['qa_running', 'fixing'].includes(job.status)) step = { n: cloudSteps ? 'qa' : '5', label: job.status === 'fixing' ? 'Fixing differences' : 'Checking against your website' };
 
     response.json({
       step, planned, pages: pages.map(({ sections: _sections, template: _template, ...page }) => page),
+      // A build that isn't building right now (paused, blocked, crashed mid-step) runs no step, whatever
+      // the last saved list says.
+      ...(cloudSteps ? { steps: job.status === 'cloning' ? cloudSteps.steps : cloudSteps.steps.map((entry) => (entry.status === 'running' ? { ...entry, status: 'pending' as const } : entry)), stepTotals: { done: cloudSteps.done, total: cloudSteps.total } } : {}),
       totals: { pagesPlanned: pages.length, pagesStarted: pages.filter((page) => page.hasTemplate).length, pagesDone: pages.filter((page) => page.built >= page.planned).length, sectionsPlanned, sectionsBuilt, changedThisRun },
       files, startedAt, elapsedMs, etaMs,
     });
@@ -1140,9 +1165,18 @@ export function createFactoryRouter() {
   // Sanity-check the QA scoring pipeline (Playwright + segmentation + alignment + scoring)
   // against a known-good pair BEFORE trusting job scores. Localhost-only like mint-token:
   // it spawns a local browser process, which has no business being reachable off-box.
+  // With ThemeBot Cloud the scoring lives there: capture the fixture pair locally, the Cloud scores
+  // it (needs a valid pass, like any Cloud call). Without it: the local calibrate.mjs.
   router.post('/qa-selftest', handle(async (request, response) => {
     if (!isLoopback(request)) { response.status(403).json({ error: 'The QA self-test is available on localhost only.' }); return; }
     if (qaSelftestRunning) { response.status(409).json({ error: 'A QA self-test is already running — wait for it to finish.' }); return; }
+    if (cloudRequired) {
+      const reason = buildsBlockedReason();
+      if (reason) { response.status(403).json({ error: reason, code: 'THEMEBOT_SIGNIN_REQUIRED' }); return; }
+      qaSelftestRunning = true;
+      try { response.json(await runSelftestViaCloud()); } finally { qaSelftestRunning = false; }
+      return;
+    }
     const script = path.join(TEMPLATES_ROOT, 'qa', 'calibrate.mjs');
     if (!(await fileExists(script))) { response.status(500).json({ error: `Calibration script not found: ${script}` }); return; }
     qaSelftestRunning = true;
@@ -1510,6 +1544,7 @@ export function createFactoryRouter() {
 
   // --- Easy-mode run ---
   router.post('/easy/start', handle(async (request, response) => {
+    if (passMissing(response)) return;
     if (easy && easy.phase === 'running') { response.status(409).json({ error: 'A setup is already running — wait for it to finish or cancel it first.' }); return; }
     if (collect.status === 'working') { response.status(409).json({ error: 'The key collector is busy — stop it in the wizard first.' }); return; }
     const storeName = String(request.body?.storeName ?? '').trim();
@@ -1542,6 +1577,7 @@ export function createFactoryRouter() {
   router.get('/easy/status', handle(async (_request, response) => { response.json(publicEasy(easy)); }));
   /** After the user signs in: re-run the same inputs from the top (finished steps are cheap to redo). */
   router.post('/easy/resume', handle(async (request, response) => {
+    if (passMissing(response)) return;
     if (!easy || (easy.phase !== 'needs_login' && easy.phase !== 'failed' && easy.phase !== 'canceled')) { response.status(409).json({ error: 'Nothing is waiting to be continued.' }); return; }
     if (collect.status === 'working') { response.status(409).json({ error: 'The setup bot is still running.' }); return; }
     forgetLoginStatus();

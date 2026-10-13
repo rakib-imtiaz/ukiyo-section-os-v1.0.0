@@ -1566,16 +1566,14 @@ body {
 
 /* Flip-clock numbers on the Builds stat tiles */
 .flipn { display: inline-flex; gap: 4px; perspective: 400px; }
-.flipd { position: relative; display: inline-grid; place-items: center; min-width: .78em; padding: 4px 6px 5px; border-radius: 9px; background: linear-gradient(180deg, rgba(15, 27, 61, .06) 0 50%, rgba(15, 27, 61, .09) 50% 100%); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .6), 0 3px 8px -4px rgba(20, 50, 120, .3); transform-style: preserve-3d; font-variant-numeric: tabular-nums; }
-.flipd::after { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 1px; background: rgba(15, 27, 61, .12); }
+.flipd { position: relative; display: inline-grid; place-items: center; min-width: .9em; padding: 5px 9px 6px; border-radius: 10px; background: rgba(15, 27, 61, .055); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .6), 0 3px 8px -5px rgba(20, 50, 120, .25); transform-style: preserve-3d; font-variant-numeric: tabular-nums; }
 .flipd__sizer { visibility: hidden; }
 .flipd__in, .flipd__out { position: absolute; inset: 0; display: grid; place-items: center; backface-visibility: hidden; }
 .flipd__in.is-flipping { animation: flipIn .55s cubic-bezier(.3, 1.4, .5, 1) both; transform-origin: 50% 50%; }
 .flipd__out { animation: flipOut .3s ease-in both; transform-origin: 50% 50%; }
 @keyframes flipIn { from { transform: rotateX(90deg); opacity: .2; } to { transform: rotateX(0); opacity: 1; } }
 @keyframes flipOut { from { transform: rotateX(0); opacity: 1; } to { transform: rotateX(-90deg); opacity: 0; } }
-:root[data-app-theme='dark'] .flipd { background: linear-gradient(180deg, rgba(255, 255, 255, .06) 0 50%, rgba(255, 255, 255, .09) 50% 100%); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08), 0 3px 8px -4px rgba(0, 0, 0, .5); }
-:root[data-app-theme='dark'] .flipd::after { background: rgba(0, 0, 0, .35); }
+:root[data-app-theme='dark'] .flipd { background: rgba(255, 255, 255, .07); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08), 0 3px 8px -5px rgba(0, 0, 0, .5); }
 @media (prefers-reduced-motion: reduce) { .flipd__in, .flipd__out { animation: none !important; } .flipd__out { display: none; } }
 /* fixes: the stage-row "span" rule must not reach the 3D block; tighter cube corners so faces meet */
 .hs-term__stages .sblock { display: block; flex: none; gap: 0; width: var(--b); height: var(--b); font-size: 0; }
@@ -2283,6 +2281,12 @@ body:has([role='dialog'][aria-modal='true']) .glass-status { opacity: 0; pointer
 .bp-pages__bar i { display: block; height: 100%; border-radius: inherit; background: #2f6bff; }
 .bp-pages li.is-done .bp-pages__bar i { background: rgb(22, 163, 74); }
 .bp-pages__count { color: var(--muted-foreground, #5a6b88); font-size: 12px; font-weight: 600; text-align: right; }
+.bp-steps li { grid-template-columns: 16px minmax(0, 1fr) auto; }
+.bp-steps li.is-running .bp-pages__dot { background: #2f6bff; box-shadow: 0 0 0 3px rgba(47, 107, 255, .18); }
+.bp-steps li.is-running .bp-pages__name { color: #2f6bff; }
+.bp-steps li.is-skipped .bp-pages__name, .bp-steps li.is-pending .bp-pages__name { color: var(--muted-foreground, #5a6b88); font-weight: 500; }
+.bp-steps__warn { color: rgb(217, 119, 6); }
+.bp-steps__muted { color: var(--muted-foreground, #5a6b88); }
 @media (max-width: 560px) { .bp-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 /* AI engine card: compact usage + "View all" */
